@@ -33,6 +33,7 @@ class MaintenanceTests(unittest.TestCase):
                 "messages",
                 "familiarity",
                 "events",
+                "important_events",
                 "user_facts",
                 "summaries",
                 "self_facts",

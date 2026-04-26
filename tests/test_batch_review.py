@@ -98,18 +98,42 @@ class BatchReviewTests(unittest.TestCase):
     def test_parse_batch_review_result_handles_fences_and_trailing_commas(self):
         raw = """```json
 {
-  "summary": "聊了电影",
-  "familiarity_events": [{"delta": 2, "reason": "气氛不错"},],
-  "user_facts": {"喜欢的类型": "奇幻",},
-  "self_facts": {}
+  "summary": "talked about movies",
+  "familiarity_events": [{"delta": 2, "reason": "warm mood"},],
+  "user_facts": {"favorite_genre": "fantasy",},
+  "self_facts": {},
+  "important_events": [{
+    "source_event_key": "birthday-2026-04-27",
+    "title": "user birthday tomorrow",
+    "kind": "birthday",
+    "event_time": "2026-04-27",
+    "time_text": "tomorrow",
+    "details": "user said birthday tomorrow",
+    "followup_hint": "wish happy birthday",
+    "confidence": 0.9
+  },],
+  "task_drafts": [{
+    "source_event_key": "birthday-2026-04-27",
+    "should_create": true,
+    "title": "birthday wish",
+    "instruction": "wish happy birthday",
+    "run_at": "2026-04-27T09:00:00",
+    "repeat": "once",
+    "interval_seconds": null
+  },]
 }
 ```"""
 
         parsed = _parse_batch_review_result(raw)
 
-        self.assertEqual(parsed["summary"], "聊了电影")
+        self.assertEqual(parsed["summary"], "talked about movies")
         self.assertEqual(parsed["familiarity_events"][0]["delta"], 2)
-        self.assertEqual(parsed["user_facts"]["喜欢的类型"], "奇幻")
+        self.assertEqual(parsed["user_facts"]["favorite_genre"], "fantasy")
+        self.assertEqual(
+            parsed["important_events"][0]["source_event_key"],
+            "birthday-2026-04-27",
+        )
+        self.assertTrue(parsed["task_drafts"][0]["should_create"])
 
 
 if __name__ == "__main__":

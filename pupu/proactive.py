@@ -7,8 +7,10 @@ from datetime import datetime, timedelta
 from .llm import JUDGE_MODEL, MODEL, collect_reason_hint, get_client, join_text_blocks
 from .tools import PROACTIVE_TOOL_DEFINITIONS, execute_tool
 from .familiarity import get_proactive_freq, score_to_level, PROACTIVE_THRESHOLD
+from .important_event_context import format_important_events_section
 from .memory import (
     get_familiarity,
+    get_important_events,
     get_last_message_time,
     get_recent_messages,
     get_self_facts,
@@ -118,7 +120,7 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
     """
     try:
         client = get_client()
-        recent = get_recent_messages(6, OWNER_SESSION)
+        recent = get_recent_messages(4, OWNER_SESSION)
         if recent:
             recent_text = "\n".join(
                 f"{'用户' if m['role'] == 'user' else '你'}: {m['content'][:60]}"
@@ -169,8 +171,9 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
     level_desc = FAMILIARITY_PROMPTS[level]
 
     self_facts = get_self_facts(OWNER_SESSION)
+    important_events = get_important_events(OWNER_SESSION, limit=4)
     user_facts = get_user_facts(OWNER_SESSION)
-    recent = get_recent_messages(5, OWNER_SESSION)
+    recent = get_recent_messages(4, OWNER_SESSION)
 
     sf_section = ""
     if self_facts:
@@ -194,7 +197,7 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
 
     topic = random.choice(period["topics"])
 
-    return PROACTIVE_PROMPT.format(
+    prompt = PROACTIVE_PROMPT.format(
         persona_level=level_desc,
         self_facts_section=sf_section,
         user_facts_section=uf_section,
@@ -203,6 +206,17 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
         topic_hint=topic,
         recent_context=recent_ctx,
     )
+    important_events_section = format_important_events_section(
+        important_events,
+        heading="## 你最近会自然记着的事",
+    )
+    if important_events_section:
+        prompt += (
+            "\n\n"
+            + important_events_section
+            + "\n如果其中有临近的事、刚说好的事、或你已经设过提醒但还想自然关心一下，可以顺着当前情境轻轻提一句。"
+        )
+    return prompt
 
 
 PROACTIVE_TOOLS = [

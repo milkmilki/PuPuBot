@@ -1,8 +1,13 @@
 """Prompt assembly helpers for persona-aware chat."""
 
 from ..familiarity import score_to_level
+from ..important_event_context import format_important_events_section
 from .core import CORE_PERSONA
 from .familiarity_prompts import FAMILIARITY_PROMPTS
+
+
+def _format_facts(facts: dict[str, str]) -> str:
+    return "\n".join(f"- {key}: {value}" for key, value in facts.items())
 
 
 def build_system_prompt(
@@ -11,52 +16,44 @@ def build_system_prompt(
     user_facts: dict[str, str] = None,
     summaries: list[dict] = None,
     self_facts: dict[str, str] = None,
+    important_events: list[dict] = None,
     reply_speed_hint: str = None,
 ) -> str:
     level = score_to_level(familiarity_score)
     prompt = CORE_PERSONA + "\n" + FAMILIARITY_PROMPTS[level]
 
     if self_facts:
-        prompt += "\n\n## 关于你自己（你之前说过的设定）\n"
-        for key, value in self_facts.items():
-            prompt += f"- {key}：{value}\n"
-        prompt += "\n这些是你之前告诉对方的，要保持一致，不要自相矛盾。"
-        prompt += "\n聊天时可以自然地从自己的爱好出发找话题、接话、延伸。"
+        prompt += "\n\n## 你自己的设定\n" + _format_facts(self_facts)
+        prompt += "\n保持一致，不要自相矛盾。"
 
     if user_facts:
-        prompt += "\n\n## 你对这个人的了解\n"
-        for key, value in user_facts.items():
-            prompt += f"- {key}：{value}\n"
+        prompt += "\n\n## 你对对方的了解\n" + _format_facts(user_facts)
         if level in ("认识", "熟悉"):
-            prompt += "\n你知道这些但不会主动提，除非对方先聊到相关内容。"
+            prompt += "\n除非对方先提，不主动拿这些信息起话头。"
         else:
-            prompt += "\n你已经挺熟了，可以主动用这些信息找话题、接话、关心对方。"
-            prompt += "\n比如知道对方在哪就可以聊当地天气，知道对方喜欢什么就可以分享相关东西。"
-            prompt += "\n不用每次都用，自然就好，像真的记得朋友说过的事一样。"
+            prompt += "\n可自然引用，但不要每次都提。"
 
     if summaries:
-        prompt += "\n\n## 之前聊过的内容（摘要）\n"
-        for summary in summaries:
-            prompt += f"- {summary['summary']}\n"
+        prompt += "\n\n## 之前聊过\n"
+        prompt += "\n".join(f"- {item['summary']}" for item in summaries)
 
     if event_log:
-        prompt += "\n\n## 你们一起经历过的事（你的记忆）\n"
-        for event in event_log[-10:]:
-            prompt += f"- {event['description']}\n"
-        prompt += "\n用这些记忆来让对话更自然，偶尔可以提到之前的事。"
+        prompt += "\n\n## 共同经历\n"
+        prompt += "\n".join(f"- {item['description']}" for item in event_log[-6:])
+        prompt += "\n顺手接住即可。"
+
+    important_events_section = format_important_events_section(important_events)
+    if important_events_section:
+        prompt += "\n\n" + important_events_section
 
     if reply_speed_hint:
-        prompt += (
-            f"\n\n## 用户回复速度\n{reply_speed_hint}\n"
-            "根据这个信息自然地调整你的反应，不要直接说出来。"
-        )
+        prompt += f"\n\n## 回复节奏\n{reply_speed_hint}\n自然调整，不要直接说出来。"
 
     prompt += (
-        "\n\n## 工具使用硬规则（定时任务）\n"
-        "- 用户明确表达提醒、记得、到时候叫我、生日祝福、定时等意图时，优先调用对应的日程工具。\n"
-        "- 没拿到工具返回的成功结果前，不要说“已设置”“已创建”“我记住了到时提醒你”。\n"
-        "- 若缺少关键信息，比如日期或时间，先追问，不要自己编一个时间。\n"
-        "- repeat 支持 once、daily、weekly、monthly、yearly、interval；用户说每年、每月、每周、每天时，可直接按对应周期创建。\n"
+        "\n\n## 定时任务规则\n"
+        "- 用户明确表达提醒、记得、到时候叫我、生日祝福、定时等意图时，优先调用日程工具。\n"
+        "- 没拿到工具成功结果前，不要说“已设置”“已创建”“我记住了到时提醒你”。\n"
+        "- 缺日期或时间就先追问，不要自己编。\n"
+        "- repeat 只用 once、daily、weekly、monthly、yearly、interval。"
     )
-
     return prompt

@@ -63,12 +63,75 @@ def list_scheduled_tasks(session_id: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def find_matching_scheduled_task(
+    session_id: str,
+    title: str,
+    instruction: str,
+    run_at: str,
+    repeat_kind: str,
+    interval_seconds: int | None,
+) -> dict | None:
+    conn = get_conn()
+    try:
+        if interval_seconds is None:
+            row = conn.execute(
+                """
+                SELECT id, title, instruction, run_at, repeat_kind, interval_seconds, created_at
+                FROM scheduled_tasks
+                WHERE session_id = ?
+                  AND enabled = 1
+                  AND title = ?
+                  AND instruction = ?
+                  AND run_at = ?
+                  AND repeat_kind = ?
+                  AND interval_seconds IS NULL
+                LIMIT 1
+                """,
+                (session_id, title, instruction, run_at, repeat_kind),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT id, title, instruction, run_at, repeat_kind, interval_seconds, created_at
+                FROM scheduled_tasks
+                WHERE session_id = ?
+                  AND enabled = 1
+                  AND title = ?
+                  AND instruction = ?
+                  AND run_at = ?
+                  AND repeat_kind = ?
+                  AND interval_seconds = ?
+                LIMIT 1
+                """,
+                (
+                    session_id,
+                    title,
+                    instruction,
+                    run_at,
+                    repeat_kind,
+                    int(interval_seconds),
+                ),
+            ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def cancel_scheduled_task(session_id: str, task_id: int) -> bool:
     conn = get_conn()
     cursor = conn.execute(
         "UPDATE scheduled_tasks SET enabled = 0 WHERE id = ? AND session_id = ? AND enabled = 1",
         (task_id, session_id),
     )
+    if cursor.rowcount > 0:
+        conn.execute(
+            """
+            UPDATE important_events
+            SET status = 'cancelled', linked_task_id = NULL
+            WHERE session_id = ? AND linked_task_id = ?
+            """,
+            (session_id, task_id),
+        )
     conn.commit()
     changed = cursor.rowcount
     conn.close()
@@ -106,6 +169,15 @@ def finalize_scheduled_task(
             "DELETE FROM scheduled_tasks WHERE id = ? AND run_at = ?",
             (task_id, old_run_at),
         )
+        if cursor.rowcount > 0:
+            conn.execute(
+                """
+                UPDATE important_events
+                SET status = 'completed', linked_task_id = NULL
+                WHERE linked_task_id = ?
+                """,
+                (task_id,),
+            )
     else:
         cursor = conn.execute(
             "UPDATE scheduled_tasks SET run_at = ? WHERE id = ? AND run_at = ?",

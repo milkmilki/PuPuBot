@@ -10,6 +10,7 @@ from .memory import (
     count_pending_review_turns,
     get_event_log,
     get_familiarity,
+    get_important_events,
     get_oldest_unsummarized_msg_id,
     get_recent_messages,
     get_review_candidate_batch,
@@ -23,10 +24,21 @@ from .memory import (
     upsert_user_facts,
 )
 from .persona import BATCH_REVIEW_PROMPT, build_system_prompt
+from .review_followups import (
+    apply_review_task_drafts,
+    normalize_review_important_events,
+    normalize_review_task_drafts,
+    save_review_important_events,
+)
 from .tools import TOOL_DEFINITIONS, execute_tool, is_admin_tool
 
 REVIEW_INTERVAL = 8
 REVIEW_SOURCE = "chat"
+CHAT_HISTORY_LIMIT = 30
+PROMPT_EVENT_LOG_LIMIT = 8
+PROMPT_SUMMARY_LIMIT = 3
+PROMPT_IMPORTANT_EVENT_LIMIT = 6
+BATCH_REVIEW_MAX_TOKENS = 768
 _get_client = get_client
 
 
@@ -85,6 +97,8 @@ def _normalize_batch_review_result(value) -> dict:
             "familiarity_events": [],
             "user_facts": {},
             "self_facts": {},
+            "important_events": [],
+            "task_drafts": [],
         }
 
     return {
@@ -94,6 +108,10 @@ def _normalize_batch_review_result(value) -> dict:
         ),
         "user_facts": _normalize_fact_map(value.get("user_facts", {})),
         "self_facts": _normalize_fact_map(value.get("self_facts", {})),
+        "important_events": normalize_review_important_events(
+            value.get("important_events", [])
+        ),
+        "task_drafts": normalize_review_task_drafts(value.get("task_drafts", [])),
     }
 
 
@@ -173,18 +191,20 @@ def chat(
 
     save_message("user", display_text, session_id, source=message_source)
 
-    history = get_recent_messages(50, session_id)
+    history = get_recent_messages(CHAT_HISTORY_LIMIT, session_id)
     score = get_familiarity(session_id)
-    events = get_event_log(20, session_id)
+    events = get_event_log(PROMPT_EVENT_LOG_LIMIT, session_id)
     user_facts = get_user_facts(session_id)
     self_facts = get_self_facts(session_id)
-    summaries = get_summaries(session_id, limit=5)
+    summaries = get_summaries(session_id, limit=PROMPT_SUMMARY_LIMIT)
+    important_events = get_important_events(session_id, limit=PROMPT_IMPORTANT_EVENT_LIMIT)
     system_prompt = build_system_prompt(
         score,
         events,
         user_facts,
         summaries,
         self_facts,
+        important_events,
         reply_speed_hint,
     )
 
@@ -290,6 +310,10 @@ def _maybe_batch_review(client, session_id: str = "default"):
             f"{'User' if item['role'] == 'user' else 'Pupu'}: {item['content']}"
             for item in batch
         )
+        conversation_text = (
+            f"Current local time: {datetime.now().isoformat(timespec='seconds')}\n\n"
+            + conversation_text
+        )
         print(
             "[pupu] batch review request: "
             f"model={JUDGE_MODEL}, input_chars={len(conversation_text)}"
@@ -297,7 +321,7 @@ def _maybe_batch_review(client, session_id: str = "default"):
 
         response = client.messages.create(
             model=JUDGE_MODEL,
-            max_tokens=1024,
+            max_tokens=BATCH_REVIEW_MAX_TOKENS,
             system=BATCH_REVIEW_PROMPT,
             messages=[{"role": "user", "content": conversation_text}],
         )
@@ -326,6 +350,8 @@ def _maybe_batch_review(client, session_id: str = "default"):
                 "familiarity_events": [],
                 "user_facts": {},
                 "self_facts": {},
+                "important_events": [],
+                "task_drafts": [],
             }
             print("[pupu] batch review fallback summary enabled")
 
@@ -368,10 +394,51 @@ def _maybe_batch_review(client, session_id: str = "default"):
         else:
             print("[pupu] batch review self_facts empty")
 
+        important_events = result.get("important_events", [])
+        saved_event_rows = {}
+        if important_events:
+            saved_event_rows = save_review_important_events(session_id, important_events)
+            print(
+                "[pupu] batch review important_events saved: "
+                f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"
+            )
+        else:
+            print("[pupu] batch review important_events empty")
+
+        task_drafts = result.get("task_drafts", [])
+        if task_drafts:
+            task_results = apply_review_task_drafts(
+                session_id,
+                task_drafts,
+                saved_event_rows,
+            )
+            created_count = sum(1 for item in task_results if item["status"] == "created")
+            linked_count = sum(
+                1 for item in task_results if item["status"] == "linked_existing"
+            )
+            skipped_count = sum(1 for item in task_results if item["status"] == "skipped")
+            print(
+                "[pupu] batch review task_drafts processed: "
+                f"input={len(task_drafts)}, created={created_count}, "
+                f"linked={linked_count}, skipped={skipped_count}"
+            )
+            for item in task_results[:6]:
+                print(
+                    "[pupu] batch review task_draft result: "
+                    f"key={item.get('source_event_key')} "
+                    f"status={item.get('status')} "
+                    f"task_id={item.get('task_id')} "
+                    f"reason={item.get('reason', '')}"
+                )
+        else:
+            print("[pupu] batch review task_drafts empty")
+
         print(
             "[pupu] batch review done: "
             f"turns={batch_turns}, summary_chars={len(summary)}, "
-            f"events={len(familiarity_events)}"
+            f"events={len(familiarity_events)}, "
+            f"important_events={len(important_events)}, "
+            f"task_drafts={len(task_drafts)}"
         )
     except Exception as exc:
         print(f"[pupu] batch review failed: {exc}")

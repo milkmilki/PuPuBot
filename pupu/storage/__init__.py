@@ -21,12 +21,20 @@ from .messages import (
     get_summary_trigger_progress,
     save_message,
 )
+from .important_events import (
+    derive_source_event_key,
+    get_important_event_by_key,
+    get_important_events,
+    link_important_event_task,
+    upsert_important_events,
+)
 from .scheduled_tasks import (
     MAX_SCHEDULED_TASKS_PER_SESSION,
     cancel_scheduled_task,
     count_scheduled_tasks,
     create_scheduled_task,
     finalize_scheduled_task,
+    find_matching_scheduled_task,
     get_due_scheduled_tasks,
     list_scheduled_tasks,
 )
@@ -40,8 +48,10 @@ __all__ = [
     "count_pending_review_turns",
     "count_scheduled_tasks",
     "create_scheduled_task",
+    "derive_source_event_key",
     "ensure_familiarity",
     "finalize_scheduled_task",
+    "find_matching_scheduled_task",
     "get_conn",
     "get_data_dir",
     "get_db_path",
@@ -49,6 +59,8 @@ __all__ = [
     "get_event_log",
     "get_familiarity",
     "get_familiarity_info",
+    "get_important_event_by_key",
+    "get_important_events",
     "get_last_message_time",
     "get_last_user_message_time",
     "get_messages_in_range",
@@ -60,6 +72,7 @@ __all__ = [
     "get_summary_trigger_progress",
     "get_user_facts",
     "init_db",
+    "link_important_event_task",
     "list_scheduled_tasks",
     "reset_session",
     "save_message",
@@ -67,6 +80,7 @@ __all__ = [
     "set_familiarity",
     "table_columns",
     "update_familiarity",
+    "upsert_important_events",
     "upsert_self_facts",
     "upsert_user_facts",
 ]

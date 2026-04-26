@@ -11,6 +11,7 @@ def reset_session(session_id: str):
         "messages",
         "familiarity",
         "events",
+        "important_events",
         "user_facts",
         "summaries",
         "self_facts",

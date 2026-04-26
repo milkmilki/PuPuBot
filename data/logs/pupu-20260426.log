@@ -55,3 +55,67 @@ D:\ProjectICreate\PuPuBot\pupu_20260425_105129\data\logs\pupu-20260426.log
 - 模型合并摘要：0
 - 模型备注：
   owner: 无摘要和事件，无需整理
+[pupu] logging to D:\ProjectICreate\PuPuBot\pupu_20260425_105129\data\logs\pupu-20260426.log
+========================================
+  仆仆启动器
+========================================
+
+  [1] 终端聊天
+  [2] QQ 机器人 - NapCat
+  [3] QQ 机器人 - 官方
+
+[仆仆QQ] 模式: NapCat (OneBot v11)
+
+  仆仆已启动，正在等待 NapCat 连接...
+  请确保 NapCat 已配置反向 WebSocket 地址:
+    ws://127.0.0.1:8081/onebot/v11/ws
+
+  如果还没启动 NapCat，现在启动它。
+  连接成功后会显示提示。
+
+[pupu] maintenance loop started
+
+========================================
+  NapCat connected!
+  Bot QQ: 3853876778
+  Nickname: 仆仆
+========================================
+
+[pupu] scheduled tasks loop started
+[pupu] proactive messaging enabled (familiarity: 50)
+[pupu] proactive messaging started
+[pupu] 延迟回复: 9.6秒 (好感度50)
+[13:41:06] <<< 收到 | 私聊 | 钮钴禄·大家大宁 | 仆仆，好久不见呀
+这是我们第三次见面
+但是这次
+会是永远～
+[pupu] batch review check: session=owner, interval=8
+[pupu] batch review context: last_reviewed_id=0, pending_turns=1
+[pupu] batch review skip: need=8, got=1
+[13:41:12] >>> 发送 | 私聊 | 钮钴禄·大家大宁 | 等等
+
+"永远"是什么意思
+
+你在说什么呢
+[13:43:01] <<< 收到 | 私聊 | 钮钴禄·大家大宁 | 就是字面意思～
+我们会永远在一起
+[pupu] batch review check: session=owner, interval=8
+[pupu] batch review context: last_reviewed_id=0, pending_turns=2
+[pupu] batch review skip: need=8, got=2
+[13:43:04] >>> 发送 | 私聊 | 钮钴禄·大家大宁 | 哦
+
+吓我一跳，以为你在说什么奇怪的事
+
+"永远在一起"这话说得也太肉麻了吧
+[13:44:23] <<< 收到 | 私聊 | 钮钴禄·大家大宁 | 哎哟
+当一辈子的朋友
+[pupu] batch review check: session=owner, interval=8
+[pupu] batch review context: last_reviewed_id=0, pending_turns=3
+[pupu] batch review skip: need=8, got=3
+[13:44:27] >>> 发送 | 私聊 | 钮钴禄·大家大宁 | 啊这样啊
+
+行吧，我也没说不愿意
+
+就是你说话方式太吓人了，搞得我以为发生什么事
+[pupu] NapCat disconnected (bot: 3853876778)
+[pupu] proactive messaging stopped
