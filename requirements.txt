@@ -1,0 +1,9 @@
+anthropic
+rich
+duckduckgo-search
+httpx
+beautifulsoup4
+python-dotenv
+nonebot2[fastapi]
+nonebot-adapter-onebot
+nonebot-adapter-qq

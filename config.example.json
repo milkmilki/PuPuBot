@@ -1,0 +1,15 @@
+{
+  "mode": "work",
+  "persona_enabled": false,
+  "qq_mode": "official",
+  "qq_app_id": "",
+  "qq_app_secret": "",
+  "owner_ids": [],
+  "tool_servers": {
+    "web": { "enabled": true },
+    "filesystem": { "enabled": true },
+    "system": { "enabled": true },
+    "media": { "enabled": true },
+    "scheduler": { "enabled": true }
+  }
+}

@@ -1,0 +1,207 @@
+"""Scheduler/reminder tool server."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+from ..base import BuiltinToolServer, ToolContext, ToolSpec
+
+
+def _normalize_run_at_iso(value: str) -> tuple[str | None, str | None]:
+    value = (value or "").strip()
+    if not value:
+        return None, "run_at 不能为空"
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt.isoformat(timespec="seconds"), None
+    except Exception:
+        return None, (
+            f"无法解析 run_at：{value!r}，请用 ISO 格式，例如 2026-04-26T15:30:00"
+        )
+
+
+def _parse_local_run_at(run_at_str: str):
+    try:
+        dt = datetime.fromisoformat(str(run_at_str).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
+    from ...memory import (
+        MAX_SCHEDULED_TASKS_PER_SESSION,
+        cancel_scheduled_task,
+        count_scheduled_tasks,
+        create_scheduled_task,
+        list_scheduled_tasks,
+    )
+
+    action = (tool_input.get("action") or "").strip().lower()
+    if action == "list":
+        rows = list_scheduled_tasks(session_id)
+        if not rows:
+            return "当前没有待执行的定时任务"
+
+        lines = []
+        for row in rows:
+            title = row.get("title") or "提醒"
+            run_at = _parse_local_run_at(str(row["run_at"]))
+            overdue = ""
+            if run_at is not None and run_at < datetime.now():
+                overdue = " ⚠️ 这个时间早于当前时间，会被立刻触发；如果年份填错了请先取消再重建"
+            interval = (
+                f" interval={row['interval_seconds']}"
+                if row.get("interval_seconds")
+                else ""
+            )
+            lines.append(
+                f"- id={row['id']} | {row['run_at']} | repeat={row['repeat_kind']}{interval} | 《{title}》{overdue}\n"
+                f"  说明：{(row.get('instruction') or '')[:120]}"
+            )
+        return "定时任务列表：\n" + "\n".join(lines)
+
+    if action == "cancel":
+        task_id = tool_input.get("task_id")
+        if task_id is None:
+            return "cancel 需要 task_id，可以先用 action=list 查看"
+        try:
+            task_id = int(task_id)
+        except (TypeError, ValueError):
+            return "task_id 必须是整数"
+        if cancel_scheduled_task(session_id, task_id):
+            return f"已取消定时任务 id={task_id}"
+        return f"没有找到 id={task_id} 的任务，或者它不属于当前会话、已被取消"
+
+    if action == "create":
+        instruction = (tool_input.get("instruction") or "").strip()
+        if not instruction:
+            return "create 需要 instruction：到点时你要对用户说什么或提醒什么"
+        if len(instruction) > 2000:
+            return "instruction 太长（上限 2000 字），请缩短"
+
+        run_raw = tool_input.get("run_at")
+        if not run_raw:
+            return "create 需要 run_at（本地时间 ISO 字符串）"
+        run_norm, error = _normalize_run_at_iso(str(run_raw))
+        if error:
+            return error
+
+        run_dt = _parse_local_run_at(run_norm)
+        if run_dt is not None and run_dt < datetime.now() - timedelta(seconds=90):
+            now_str = datetime.now().isoformat(timespec="seconds")
+            return (
+                "拒绝创建：run_at 相对本机当前时间已经是过去时间，任务会马上被当成到期并触发。"
+                f" 你填的是 {run_norm}，当前约 {now_str}。"
+                " 如果本意是今天下午三点之类的，请检查年份是否写错。"
+            )
+
+        repeat = (tool_input.get("repeat") or "once").strip().lower()
+        repeat_alias = {
+            "每天": "daily",
+            "每日": "daily",
+            "每周": "weekly",
+            "每月": "monthly",
+            "每年": "yearly",
+            "everyday": "daily",
+        }
+        repeat = repeat_alias.get(repeat, repeat)
+        if repeat not in ("once", "daily", "weekly", "monthly", "yearly", "interval"):
+            return f"不支持的 repeat：{repeat}，请用 once / daily / weekly / monthly / yearly / interval"
+
+        interval_seconds = tool_input.get("interval_seconds")
+        if repeat == "interval":
+            try:
+                interval_seconds = int(interval_seconds)
+            except (TypeError, ValueError):
+                return "repeat 为 interval 时必须提供正整数 interval_seconds（秒）"
+            if interval_seconds < 60:
+                return "interval_seconds 最少 60 秒"
+            if interval_seconds > 86400 * 7:
+                return "interval_seconds 最多 7 天（604800 秒）"
+        else:
+            interval_seconds = None
+
+        if count_scheduled_tasks(session_id) >= MAX_SCHEDULED_TASKS_PER_SESSION:
+            return (
+                f"当前会话定时任务已达上限（{MAX_SCHEDULED_TASKS_PER_SESSION} 条），"
+                "请先 list 再 cancel 掉几条"
+            )
+
+        title = (tool_input.get("title") or "提醒").strip()[:80] or "提醒"
+        task_id = create_scheduled_task(
+            session_id,
+            title,
+            instruction,
+            run_norm,
+            repeat,
+            interval_seconds,
+        )
+        interval_text = f"，间隔 {interval_seconds} 秒" if repeat == "interval" else ""
+        return (
+            f"已创建定时任务 id={task_id}，将在 {run_norm} 首次触发（repeat={repeat}{interval_text}）"
+        )
+
+    return "未知 action，请用 create、list 或 cancel"
+
+
+def _handle_manage_scheduled_task(tool_input: dict, context: ToolContext) -> str:
+    return manage_scheduled_task(context.session_id, tool_input)
+
+
+SCHEDULER_SERVER = BuiltinToolServer(
+    name="scheduler",
+    description="Reminder and scheduled task tools.",
+    tools=(
+        ToolSpec(
+            server="scheduler",
+            name="manage_scheduled_task",
+            description=(
+                "为当前会话创建、列出或取消定时任务。到点后系统会再以你的身份跑一轮对话："
+                "你会收到一条以“定时任务”开头的系统提示，像平时一样自然回复用户，回复会真的发给对方。"
+                "run_at 请使用本地时间 ISO 8601，例如 2026-04-26T15:30:00。"
+                "repeat 支持 once、daily、weekly、monthly、yearly、interval。"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "description": "create | list | cancel",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "create 时可选的短标题，默认是“提醒”",
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": "create 时必填：到点后要说什么、提醒什么、或做什么",
+                    },
+                    "run_at": {
+                        "type": "string",
+                        "description": "create 时必填：首次触发的本地时间 ISO 字符串",
+                    },
+                    "repeat": {
+                        "type": "string",
+                        "description": "once | daily | weekly | monthly | yearly | interval",
+                    },
+                    "interval_seconds": {
+                        "type": "integer",
+                        "description": "repeat 为 interval 时必填，两次触发之间的秒数",
+                    },
+                    "task_id": {
+                        "type": "integer",
+                        "description": "cancel 时必填，要取消的任务 id",
+                    },
+                },
+                "required": ["action"],
+            },
+            handler=_handle_manage_scheduled_task,
+            legacy_names=("manage_scheduled_task",),
+        ),
+    ),
+)
