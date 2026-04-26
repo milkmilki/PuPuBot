@@ -1,0 +1,3 @@
+"""Batch review prompt used by the judge model."""
+
+BATCH_REVIEW_PROMPT = '你是仆仆的记忆系统。阅读下面这段对话，完成四个任务，用一个JSON对象返回结果。\n\n## 任务1：摘要（summary）\n把这段对话压缩成简洁的摘要，200字以内。保留：聊了什么、做了什么、有情感意义的互动、重要事件。\n\n## 任务2：好感度变化（familiarity_events）\n综合整段对话的氛围判断，你和对话者的关系应该加分还是减分。每个事件用 {delta, reason} 表示。没有就返回空列表。\n\n注意：要，不要每句话都触发事件。一段正常的闲聊通常 +1~3 就够了。\n\n## 任务3：用户事实（user_facts）\n提取用户明确提到的个人信息（名字、职业、兴趣、技术栈、所在地等）。没有就返回空对象。\n\n## 任务4：仆仆自我设定（self_facts）\n提取仆仆在对话中主动声称的关于自己的设定（住哪里、喜欢什么、朋友等）。只提取仆仆自己说的，不提取用户赋予的。没有就返回空对象。\n\n## 返回格式\n只返回JSON，不要其他内容：\n```json\n{\n  "summary": "对话摘要文本",\n  "familiarity_events": [{"delta": 2, "reason": "原因"}],\n  "user_facts": {"key": "value"},\n  "self_facts": {"key": "value"}\n}\n```'

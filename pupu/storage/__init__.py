@@ -1,53 +1,40 @@
-"""Compatibility facade for storage helpers.
+"""Structured storage submodules for database-backed state."""
 
-This module keeps the old import surface stable while the implementation
-now lives in ``pupu.storage`` submodules.
-"""
-
-from __future__ import annotations
-
-from .storage import (
-    MAX_SCHEDULED_TASKS_PER_SESSION,
-    cancel_scheduled_task,
-    count_messages,
-    count_pending_review_turns,
-    count_scheduled_tasks,
-    create_scheduled_task,
+from .db import get_conn, get_data_dir, get_db_path, init_db, table_columns
+from .facts import get_self_facts, get_user_facts, upsert_self_facts, upsert_user_facts
+from .familiarity_store import (
     ensure_familiarity,
-    finalize_scheduled_task,
-    get_conn as _get_conn,
-    get_data_dir,
-    get_db_path,
-    get_due_scheduled_tasks,
     get_event_log,
     get_familiarity,
     get_familiarity_info,
+    set_familiarity,
+    update_familiarity,
+)
+from .messages import (
+    count_messages,
+    count_pending_review_turns,
     get_last_message_time,
     get_last_user_message_time,
     get_messages_in_range,
-    get_oldest_unsummarized_msg_id,
     get_recent_messages,
     get_review_candidate_batch,
-    get_self_facts,
-    get_summaries,
     get_summary_trigger_progress,
-    get_user_facts,
-    init_db,
-    list_scheduled_tasks,
-    reset_session,
     save_message,
-    save_summary,
-    set_familiarity,
-    table_columns as _table_columns,
-    update_familiarity,
-    upsert_self_facts,
-    upsert_user_facts,
 )
+from .scheduled_tasks import (
+    MAX_SCHEDULED_TASKS_PER_SESSION,
+    cancel_scheduled_task,
+    count_scheduled_tasks,
+    create_scheduled_task,
+    finalize_scheduled_task,
+    get_due_scheduled_tasks,
+    list_scheduled_tasks,
+)
+from .sessions import reset_session
+from .summaries import get_oldest_unsummarized_msg_id, get_summaries, save_summary
 
 __all__ = [
     "MAX_SCHEDULED_TASKS_PER_SESSION",
-    "_get_conn",
-    "_table_columns",
     "cancel_scheduled_task",
     "count_messages",
     "count_pending_review_turns",
@@ -55,6 +42,7 @@ __all__ = [
     "create_scheduled_task",
     "ensure_familiarity",
     "finalize_scheduled_task",
+    "get_conn",
     "get_data_dir",
     "get_db_path",
     "get_due_scheduled_tasks",
@@ -77,6 +65,7 @@ __all__ = [
     "save_message",
     "save_summary",
     "set_familiarity",
+    "table_columns",
     "update_familiarity",
     "upsert_self_facts",
     "upsert_user_facts",

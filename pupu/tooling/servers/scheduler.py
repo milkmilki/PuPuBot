@@ -38,14 +38,26 @@ def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
         cancel_scheduled_task,
         count_scheduled_tasks,
         create_scheduled_task,
+        get_summary_trigger_progress,
         list_scheduled_tasks,
     )
 
     action = (tool_input.get("action") or "").strip().lower()
     if action == "list":
+        try:
+            from ...agent import REVIEW_INTERVAL as review_interval
+        except Exception:
+            review_interval = 8
+        progress = get_summary_trigger_progress(session_id, review_interval)
+        summary_line = (
+            "总结进度："
+            f"{progress['pending']}/{progress['interval']}，"
+            f"还差 {progress['remaining']} 轮触发自动总结"
+        )
+
         rows = list_scheduled_tasks(session_id)
         if not rows:
-            return "当前没有待执行的定时任务"
+            return f"{summary_line}\n当前没有待执行的定时任务"
 
         lines = []
         for row in rows:
@@ -63,7 +75,7 @@ def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
                 f"- id={row['id']} | {row['run_at']} | repeat={row['repeat_kind']}{interval} | 《{title}》{overdue}\n"
                 f"  说明：{(row.get('instruction') or '')[:120]}"
             )
-        return "定时任务列表：\n" + "\n".join(lines)
+        return summary_line + "\n定时任务列表：\n" + "\n".join(lines)
 
     if action == "cancel":
         task_id = tool_input.get("task_id")

@@ -1,4 +1,11 @@
+import os
+from pathlib import Path
 import unittest
+
+TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
+TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
+os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from pupu.memory import init_db, reset_session
 from pupu.tools import (
@@ -46,7 +53,8 @@ class ToolingRegistryTests(unittest.TestCase):
             {"action": "list"},
             session_id="test_tooling_registry",
         )
-        self.assertEqual(result, "当前没有待执行的定时任务")
+        self.assertIn("当前没有待执行的定时任务", result)
+        self.assertIn("总结进度：0/8，还差 8 轮触发自动总结", result)
 
     def test_server_descriptions_expose_builtin_servers(self):
         names = {server["name"] for server in describe_tool_servers()}

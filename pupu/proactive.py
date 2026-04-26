@@ -4,7 +4,7 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 
-from .agent import _get_client, MODEL, JUDGE_MODEL
+from .llm import JUDGE_MODEL, MODEL, collect_reason_hint, get_client, join_text_blocks
 from .tools import PROACTIVE_TOOL_DEFINITIONS, execute_tool
 from .familiarity import get_proactive_freq, score_to_level, PROACTIVE_THRESHOLD
 from .memory import (
@@ -117,7 +117,7 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
     The model must answer with one word: SEND or WAIT.
     """
     try:
-        client = _get_client()
+        client = get_client()
         recent = get_recent_messages(6, OWNER_SESSION)
         if recent:
             recent_text = "\n".join(
@@ -234,7 +234,7 @@ PROACTIVE_TOOLS = [
 def generate_proactive_message(score: int, period: dict) -> str | None:
     """Generate a proactive message using Claude API with web search capability."""
     try:
-        client = _get_client()
+        client = get_client()
         prompt = _build_proactive_prompt(score, period)
         messages = [{"role": "user", "content": "（主动给用户发一条消息。如果话题需要具体内容，可以先搜索一下再聊。）"}]
 
@@ -251,9 +251,15 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
         while response.stop_reason == "tool_use" and rounds < 3:
             rounds += 1
             tool_results = []
+            reason_hint = collect_reason_hint(response.content)
             for block in response.content:
                 if block.type == "tool_use":
-                    result = execute_tool(block.name, block.input, session_id=OWNER_SESSION)
+                    result = execute_tool(
+                        block.name,
+                        block.input,
+                        session_id=OWNER_SESSION,
+                        reason_hint=reason_hint or None,
+                    )
                     if isinstance(result, str) and len(result) > 2000:
                         result = result[:2000] + "...(截断)"
                     tool_results.append({
@@ -273,14 +279,10 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
                 tools=PROACTIVE_TOOL_DEFINITIONS,
             )
 
-        text = ""
-        for block in response.content:
-            if block.type == "text":
-                text += block.text
-        text = text.strip()
+        text = join_text_blocks(response.content).strip()
 
         if text:
-            save_message("assistant", text, OWNER_SESSION)
+            save_message("assistant", text, OWNER_SESSION, source="proactive")
         return text
     except Exception as e:
         print(f"[pupu] proactive message generation failed: {e}")

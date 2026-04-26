@@ -8,6 +8,9 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from .agent import chat
+from .backup import maybe_run_daily_backup
+from .logging_utils import setup_runtime_logging
+from .maintenance import maybe_run_daily_maintenance, run_memory_maintenance
 from .memory import get_event_log, get_familiarity_info, get_recent_messages, init_db, reset_session
 from .tools import manage_scheduled_task
 
@@ -23,6 +26,12 @@ def _cli_scheduler_loop():
         time.sleep(45)
         try:
             cli_scheduled_tasks_tick()
+            backup_report = maybe_run_daily_backup()
+            if backup_report:
+                print(f"[pupu] auto backup\n{backup_report}")
+            report = maybe_run_daily_maintenance()
+            if report:
+                print(f"[pupu] auto maintenance\n{report}")
         except Exception as e:
             print(f"[pupu] cli scheduler: {e}")
 
@@ -32,7 +41,7 @@ def print_banner():
     console.print(
         Panel(
             f"[bold]仆仆[/bold] — 好感度: Lv.{score_info['level']}\n"
-            f"输入消息开始聊天 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务",
+            f"输入消息开始聊天 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /tidy 整理记忆",
             style="cyan",
         )
     )
@@ -75,6 +84,11 @@ def handle_command(cmd: str) -> bool:
     elif cmd in ("/tasks", "/定时任务"):
         console.print(manage_scheduled_task(OWNER_SESSION, {"action": "list"}))
         return False
+    elif cmd in ("/tidy", "/cleanup", "/整理记忆", "/整理"):
+        with console.status("[cyan]仆仆在整理记忆和定时任务...[/cyan]"):
+            report = run_memory_maintenance(trigger="manual", include_model=True)
+        console.print(report)
+        return False
     elif cmd == "/reset":
         confirm = console.input("[bold red]确认重置仆仆？所有记忆、好感度、聊天记录都会清空 (y/N): [/bold red]").strip().lower()
         if confirm == "y":
@@ -88,6 +102,7 @@ def handle_command(cmd: str) -> bool:
 
 
 def main():
+    setup_runtime_logging()
     init_db()
     print_banner()
     threading.Thread(target=_cli_scheduler_loop, daemon=True).start()

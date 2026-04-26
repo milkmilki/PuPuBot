@@ -1,0 +1,57 @@
+[pupu] logging to D:\ProjectICreate\PuPuBot\pupu_20260425_105129\data\logs\pupu-20260426.log
+log smoke test
+D:\ProjectICreate\PuPuBot\pupu_20260425_105129\data\logs\pupu-20260426.log
+[pupu] logging to D:\ProjectICreate\PuPuBot\pupu_20260425_105129\data\logs\pupu-20260426.log
+========================================
+  仆仆启动器
+========================================
+
+  [1] 终端聊天
+  [2] QQ 机器人 - NapCat
+  [3] QQ 机器人 - 官方
+
+[仆仆QQ] 模式: NapCat (OneBot v11)
+
+  仆仆已启动，正在等待 NapCat 连接...
+  请确保 NapCat 已配置反向 WebSocket 地址:
+    ws://127.0.0.1:8081/onebot/v11/ws
+
+  如果还没启动 NapCat，现在启动它。
+  连接成功后会显示提示。
+
+[pupu] maintenance loop started
+
+========================================
+  NapCat connected!
+  Bot QQ: 3853876778
+  Nickname: 仆仆
+========================================
+
+[pupu] scheduled tasks loop started
+[pupu] proactive messaging disabled (familiarity: 0 < 36)
+[pupu] auto maintenance
+记忆整理完成（auto）
+- 会话数：2
+- 去重摘要：0
+- 去重事件：0
+- 去重定时任务：0
+- 清理旧聊天消息：0
+- 清理旧内部消息：0
+- 模型删除摘要：0
+- 模型删除事件：0
+- 模型合并摘要：0
+- 模型备注：
+  owner: 无摘要和事件，无需整理
+[pupu] auto maintenance
+记忆整理完成（auto）
+- 会话数：1
+- 去重摘要：0
+- 去重事件：0
+- 去重定时任务：0
+- 清理旧聊天消息：0
+- 清理旧内部消息：0
+- 模型删除摘要：0
+- 模型删除事件：0
+- 模型合并摘要：0
+- 模型备注：
+  owner: 无摘要和事件，无需整理

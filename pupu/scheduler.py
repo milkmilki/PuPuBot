@@ -1,28 +1,16 @@
 """Poll and run due scheduled tasks (DB + chat + optional OneBot send)."""
 
-import json
 import threading
 from datetime import datetime
-from pathlib import Path
 
+from .config import load_first_numeric_owner_id
 from .memory import finalize_scheduled_task, get_due_scheduled_tasks
 
 _scheduler_lock = threading.Lock()
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
-
 
 def _load_first_numeric_owner_qq() -> int | None:
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            cfg = json.load(f)
-        for x in cfg.get("owner_ids", []):
-            s = str(x)
-            if s.isdigit():
-                return int(s)
-    except Exception:
-        pass
-    return None
+    return load_first_numeric_owner_id()
 
 
 def _scheduled_user_message(task: dict) -> str:
@@ -74,12 +62,13 @@ async def onebot_scheduled_tasks_loop(bot) -> None:
             try:
                 reply = await asyncio.to_thread(
                     chat,
-                    synthetic,
-                    sid,
-                    sid == "owner",
-                    None,
-                    hint,
-                )
+                synthetic,
+                sid,
+                sid == "owner",
+                None,
+                hint,
+                "scheduled",
+            )
             except Exception as e:
                 print(f"[pupu] scheduled task #{tid} chat failed: {e}")
                 continue
@@ -120,6 +109,7 @@ def cli_scheduled_tasks_tick() -> None:
                 is_admin=(sid == "owner"),
                 image_urls=None,
                 reply_speed_hint=hint,
+                message_source="scheduled",
             )
         except Exception as e:
             print(f"[pupu] scheduled task #{tid} chat failed: {e}")

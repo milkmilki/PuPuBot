@@ -1,19 +1,11 @@
 """Unified entry point for pupu — CLI chat or QQ bot."""
 
-import json
 import sys
 
-CONFIG_PATH = "config.json"
+from pupu.config import load_config, save_config
+from pupu.logging_utils import setup_runtime_logging
 
-
-def load_config():
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_config(config):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
+setup_runtime_logging()
 
 
 def select_mode():
