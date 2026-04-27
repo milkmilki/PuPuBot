@@ -7,11 +7,13 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from .agent import chat
+from .agent import chat, run_due_batch_reviews
 from .backup import maybe_run_daily_backup
+from .important_event_report import format_important_events_report
+from .llm import preflight_model_providers
 from .logging_utils import setup_runtime_logging
 from .maintenance import maybe_run_daily_maintenance, run_memory_maintenance
-from .memory import get_event_log, get_familiarity_info, get_recent_messages, init_db, reset_session
+from .memory import get_familiarity_info, get_recent_messages, init_db, reset_session
 from .tools import manage_scheduled_task
 
 console = Console()
@@ -26,6 +28,7 @@ def _cli_scheduler_loop():
         time.sleep(45)
         try:
             cli_scheduled_tasks_tick()
+            run_due_batch_reviews()
             backup_report = maybe_run_daily_backup()
             if backup_report:
                 print(f"[pupu] auto backup\n{backup_report}")
@@ -41,7 +44,7 @@ def print_banner():
     console.print(
         Panel(
             f"[bold]仆仆[/bold] — 好感度: Lv.{score_info['level']}\n"
-            f"输入消息开始聊天 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /tidy 整理记忆",
+            f"输入消息开始聊天 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /tidy 整理记忆",
             style="cyan",
         )
     )
@@ -54,7 +57,6 @@ def handle_command(cmd: str) -> bool:
         return True
     elif cmd == "/score":
         info = get_familiarity_info(OWNER_SESSION)
-        events = get_event_log(10, OWNER_SESSION)
         console.print(
             Panel(
                 f"好感度: [bold]{info['score']}[/bold] / 100\n"
@@ -64,11 +66,6 @@ def handle_command(cmd: str) -> bool:
                 style="yellow",
             )
         )
-        if events:
-            console.print("[yellow]最近事件:[/yellow]")
-            for e in events:
-                sign = "+" if e["delta"] > 0 else ""
-                console.print(f"  {e['date'][:10]} [{sign}{e['delta']}] {e['description']}")
         return False
     elif cmd == "/history":
         messages = get_recent_messages(20, OWNER_SESSION)
@@ -83,6 +80,9 @@ def handle_command(cmd: str) -> bool:
         return False
     elif cmd in ("/tasks", "/定时任务"):
         console.print(manage_scheduled_task(OWNER_SESSION, {"action": "list"}))
+        return False
+    elif cmd in ("/important", "/events", "/important_events", "/重要事件", "/记忆事件"):
+        console.print(format_important_events_report(OWNER_SESSION))
         return False
     elif cmd in ("/tidy", "/cleanup", "/整理记忆", "/整理"):
         with console.status("[cyan]仆仆在整理记忆和定时任务...[/cyan]"):
@@ -104,6 +104,7 @@ def handle_command(cmd: str) -> bool:
 def main():
     setup_runtime_logging()
     init_db()
+    preflight_model_providers()
     print_banner()
     threading.Thread(target=_cli_scheduler_loop, daemon=True).start()
 

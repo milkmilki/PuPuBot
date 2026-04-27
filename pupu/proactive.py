@@ -4,7 +4,7 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 
-from .llm import JUDGE_MODEL, MODEL, collect_reason_hint, get_client, join_text_blocks
+from .llm import JUDGE_MODEL, MODEL, chat_complete
 from .tools import PROACTIVE_TOOL_DEFINITIONS, execute_tool
 from .familiarity import get_proactive_freq, score_to_level, PROACTIVE_THRESHOLD
 from .important_event_context import format_important_events_section
@@ -119,7 +119,6 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
     The model must answer with one word: SEND or WAIT.
     """
     try:
-        client = get_client()
         recent = get_recent_messages(4, OWNER_SESSION)
         if recent:
             recent_text = "\n".join(
@@ -148,17 +147,13 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
             "现在是否要主动找用户？只输出 SEND 或 WAIT。"
         )
 
-        response = client.messages.create(
+        text = chat_complete(
+            role="judge",
             model=JUDGE_MODEL,
-            max_tokens=16,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
+            max_tokens=16,
         )
-
-        text = ""
-        for block in response.content:
-            if block.type == "text":
-                text += block.text
         decision = text.strip().upper()
         return decision.startswith("SEND")
     except Exception as e:
@@ -248,52 +243,32 @@ PROACTIVE_TOOLS = [
 def generate_proactive_message(score: int, period: dict) -> str | None:
     """Generate a proactive message using Claude API with web search capability."""
     try:
-        client = get_client()
         prompt = _build_proactive_prompt(score, period)
         messages = [{"role": "user", "content": "（主动给用户发一条消息。如果话题需要具体内容，可以先搜索一下再聊。）"}]
 
-        response = client.messages.create(
+        def _tool_handler(tool_name: str, tool_input: dict, reason_hint: str | None = None):
+            result = execute_tool(
+                tool_name,
+                tool_input,
+                session_id=OWNER_SESSION,
+                reason_hint=reason_hint or None,
+            )
+            if isinstance(result, str) and len(result) > 2000:
+                return result[:2000] + "...(截断)"
+            return result
+
+        text = chat_complete(
+            role="proactive",
             model=MODEL,
-            max_tokens=512,
             system=prompt,
             messages=messages,
+            max_tokens=512,
             tools=PROACTIVE_TOOL_DEFINITIONS,
+            tool_handler=_tool_handler,
+            session_id=OWNER_SESSION,
+            is_admin=False,
+            tool_exposure="proactive",
         )
-
-        # Handle tool use loop (max 3 rounds to avoid infinite loops)
-        rounds = 0
-        while response.stop_reason == "tool_use" and rounds < 3:
-            rounds += 1
-            tool_results = []
-            reason_hint = collect_reason_hint(response.content)
-            for block in response.content:
-                if block.type == "tool_use":
-                    result = execute_tool(
-                        block.name,
-                        block.input,
-                        session_id=OWNER_SESSION,
-                        reason_hint=reason_hint or None,
-                    )
-                    if isinstance(result, str) and len(result) > 2000:
-                        result = result[:2000] + "...(截断)"
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result if isinstance(result, str) else "OK",
-                    })
-
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": tool_results})
-
-            response = client.messages.create(
-                model=MODEL,
-                max_tokens=512,
-                system=prompt,
-                messages=messages,
-                tools=PROACTIVE_TOOL_DEFINITIONS,
-            )
-
-        text = join_text_blocks(response.content).strip()
 
         if text:
             save_message("assistant", text, OWNER_SESSION, source="proactive")

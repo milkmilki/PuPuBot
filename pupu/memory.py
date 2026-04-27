@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .storage import (
     MAX_SCHEDULED_TASKS_PER_SESSION,
+    cancel_matching_scheduled_tasks,
     cancel_scheduled_task,
     count_messages,
     count_pending_review_turns,
@@ -30,6 +31,7 @@ from .storage import (
     get_last_user_message_time,
     get_messages_in_range,
     get_oldest_unsummarized_msg_id,
+    get_pending_review_last_message_time,
     get_recent_messages,
     get_review_candidate_batch,
     get_self_facts,
@@ -38,7 +40,9 @@ from .storage import (
     get_user_facts,
     init_db,
     link_important_event_task,
+    list_pending_review_sessions,
     list_scheduled_tasks,
+    reschedule_matching_scheduled_tasks,
     reset_session,
     save_message,
     save_summary,
@@ -52,6 +56,7 @@ from .storage import (
 
 __all__ = [
     "MAX_SCHEDULED_TASKS_PER_SESSION",
+    "cancel_matching_scheduled_tasks",
     "_get_conn",
     "_table_columns",
     "cancel_scheduled_task",
@@ -75,6 +80,7 @@ __all__ = [
     "get_last_user_message_time",
     "get_messages_in_range",
     "get_oldest_unsummarized_msg_id",
+    "get_pending_review_last_message_time",
     "get_recent_messages",
     "get_review_candidate_batch",
     "get_self_facts",
@@ -83,7 +89,9 @@ __all__ = [
     "get_user_facts",
     "init_db",
     "link_important_event_task",
+    "list_pending_review_sessions",
     "list_scheduled_tasks",
+    "reschedule_matching_scheduled_tasks",
     "reset_session",
     "save_message",
     "save_summary",

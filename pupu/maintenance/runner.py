@@ -6,10 +6,19 @@ from datetime import datetime
 
 from ..storage.db import get_conn, init_db
 from .constants import BUSY_REPORT_PREFIX
-from .dedupe import _dedupe_events, _dedupe_scheduled_tasks, _dedupe_summaries
+from .dedupe import (
+    _dedupe_events,
+    _dedupe_important_events,
+    _dedupe_scheduled_tasks,
+    _dedupe_summaries,
+)
 from .history import _list_all_session_ids, _record_maintenance_run
 from .model_compaction import _run_model_compaction
-from .prune import _prune_old_chat_messages, _prune_old_internal_messages
+from .prune import (
+    _prune_old_chat_messages,
+    _prune_old_disabled_scheduled_tasks,
+    _prune_old_internal_messages,
+)
 from .snapshot import _build_session_snapshot
 
 _maintenance_lock = threading.Lock()
@@ -21,7 +30,7 @@ def run_memory_maintenance(
     now: datetime | None = None,
 ) -> str:
     if not _maintenance_lock.acquire(blocking=False):
-        return f"{BUSY_REPORT_PREFIX}，等它收尾一个"
+        return f"{BUSY_REPORT_PREFIX}，等它收尾一个。"
 
     run_at = now or datetime.now()
     run_date = run_at.date().isoformat()
@@ -35,12 +44,18 @@ def run_memory_maintenance(
                 "sessions": len(session_ids),
                 "deduped_summaries": _dedupe_summaries(conn),
                 "deduped_events": _dedupe_events(conn),
+                "deduped_important_events": _dedupe_important_events(conn),
                 "deduped_tasks": _dedupe_scheduled_tasks(conn),
                 "deleted_chat_messages": 0,
                 "deleted_internal_messages": 0,
+                "deleted_disabled_tasks": _prune_old_disabled_scheduled_tasks(
+                    conn,
+                    run_at,
+                ),
                 "model_dropped_summaries": 0,
-                "model_dropped_events": 0,
                 "model_merged_summaries": 0,
+                "model_dropped_important_events": 0,
+                "model_updated_important_events": 0,
                 "model_notes": [],
             }
 
@@ -64,8 +79,13 @@ def run_memory_maintenance(
                         )
                         continue
                     report["model_dropped_summaries"] += session_result["dropped_summaries"]
-                    report["model_dropped_events"] += session_result["dropped_events"]
                     report["model_merged_summaries"] += session_result["merged_summaries"]
+                    report["model_dropped_important_events"] += session_result[
+                        "dropped_important_events"
+                    ]
+                    report["model_updated_important_events"] += session_result[
+                        "updated_important_events"
+                    ]
                     if session_result["note"]:
                         report["model_notes"].append(
                             f"{session_id}: {session_result['note']}"
@@ -75,17 +95,20 @@ def run_memory_maintenance(
                 f"记忆整理完成（{trigger}）",
                 f"- 会话数：{report['sessions']}",
                 f"- 去重摘要：{report['deduped_summaries']}",
-                f"- 去重事件：{report['deduped_events']}",
+                f"- 去重旧好感度记录：{report['deduped_events']}",
+                f"- 去重重要事件：{report['deduped_important_events']}",
                 f"- 去重定时任务：{report['deduped_tasks']}",
                 f"- 清理旧聊天消息：{report['deleted_chat_messages']}",
                 f"- 清理旧内部消息：{report['deleted_internal_messages']}",
+                f"- 清理旧取消定时任务：{report['deleted_disabled_tasks']}",
             ]
             if include_model:
                 summary_lines.extend(
                     [
                         f"- 模型删除摘要：{report['model_dropped_summaries']}",
-                        f"- 模型删除事件：{report['model_dropped_events']}",
                         f"- 模型合并摘要：{report['model_merged_summaries']}",
+                        f"- 模型删除重要事件：{report['model_dropped_important_events']}",
+                        f"- 模型重排重要事件：{report['model_updated_important_events']}",
                     ]
                 )
                 if report["model_notes"]:

@@ -37,11 +37,6 @@ def build_system_prompt(
         prompt += "\n\n## 之前聊过\n"
         prompt += "\n".join(f"- {item['summary']}" for item in summaries)
 
-    if event_log:
-        prompt += "\n\n## 共同经历\n"
-        prompt += "\n".join(f"- {item['description']}" for item in event_log[-6:])
-        prompt += "\n顺手接住即可。"
-
     important_events_section = format_important_events_section(important_events)
     if important_events_section:
         prompt += "\n\n" + important_events_section

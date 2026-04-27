@@ -70,8 +70,10 @@ def get_review_candidate_batch(
     session_id: str = "default",
     review_interval: int = 8,
     source: str = "chat",
+    min_turns: int | None = None,
 ) -> list[dict]:
     interval = max(1, int(review_interval or 1))
+    minimum = interval if min_turns is None else max(1, int(min_turns or 1))
     after_msg_id = get_oldest_unsummarized_msg_id(session_id)
 
     conn = get_conn()
@@ -87,7 +89,7 @@ def get_review_candidate_batch(
         (session_id, source, after_msg_id, interval),
     ).fetchall()
 
-    if len(assistant_rows) < interval:
+    if len(assistant_rows) < minimum:
         conn.close()
         return []
 
@@ -104,6 +106,47 @@ def get_review_candidate_batch(
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_pending_review_last_message_time(
+    session_id: str = "default",
+    after_msg_id: int = 0,
+    source: str = "chat",
+) -> str | None:
+    conn = get_conn()
+    row = conn.execute(
+        """SELECT timestamp
+           FROM messages
+           WHERE session_id = ?
+             AND source = ?
+             AND id > ?
+           ORDER BY id DESC
+           LIMIT 1""",
+        (session_id, source, after_msg_id),
+    ).fetchone()
+    conn.close()
+    return row["timestamp"] if row else None
+
+
+def list_pending_review_sessions(source: str = "chat") -> list[str]:
+    conn = get_conn()
+    rows = conn.execute(
+        """SELECT m.session_id
+           FROM messages m
+           LEFT JOIN (
+             SELECT session_id, MAX(end_msg_id) AS last_reviewed_id
+             FROM summaries
+             GROUP BY session_id
+           ) s ON s.session_id = m.session_id
+           WHERE m.source = ?
+             AND m.role = 'assistant'
+             AND m.id > COALESCE(s.last_reviewed_id, 0)
+           GROUP BY m.session_id
+           ORDER BY m.session_id ASC""",
+        (source,),
+    ).fetchall()
+    conn.close()
+    return [str(row["session_id"]) for row in rows]
 
 
 def get_summary_trigger_progress(

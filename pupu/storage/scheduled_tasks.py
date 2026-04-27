@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import re
 from datetime import datetime
 
 from .db import get_conn
@@ -61,6 +62,99 @@ def list_scheduled_tasks(session_id: str) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def cancel_matching_scheduled_tasks(session_id: str, query: str) -> list[dict]:
+    query_text = str(query or "").strip()
+    if not query_text:
+        return []
+
+    rows = list_scheduled_tasks(session_id)
+    matches = [row for row in rows if _scheduled_task_matches_query(row, query_text)]
+    if not matches:
+        return []
+
+    conn = get_conn()
+    cancelled = []
+    try:
+        for row in matches:
+            task_id = int(row["id"])
+            cursor = conn.execute(
+                "UPDATE scheduled_tasks SET enabled = 0 WHERE id = ? AND session_id = ? AND enabled = 1",
+                (task_id, session_id),
+            )
+            if cursor.rowcount <= 0:
+                continue
+            conn.execute(
+                """
+                UPDATE important_events
+                SET status = 'cancelled', linked_task_id = NULL
+                WHERE session_id = ? AND linked_task_id = ?
+                """,
+                (session_id, task_id),
+            )
+            cancelled.append(dict(row))
+        conn.commit()
+    finally:
+        conn.close()
+    return cancelled
+
+
+def reschedule_matching_scheduled_tasks(
+    session_id: str,
+    query: str,
+    run_at: str,
+    repeat_kind: str | None = None,
+    interval_seconds: int | None = None,
+) -> list[dict]:
+    query_text = str(query or "").strip()
+    run_at_text = str(run_at or "").strip()
+    if not query_text or not run_at_text:
+        return []
+
+    rows = list_scheduled_tasks(session_id)
+    matches = [row for row in rows if _scheduled_task_matches_query(row, query_text)]
+    if not matches:
+        return []
+
+    conn = get_conn()
+    updated = []
+    try:
+        for row in matches:
+            task_id = int(row["id"])
+            if repeat_kind:
+                cursor = conn.execute(
+                    """UPDATE scheduled_tasks
+                       SET run_at = ?, repeat_kind = ?, interval_seconds = ?
+                       WHERE id = ? AND session_id = ? AND enabled = 1""",
+                    (
+                        run_at_text,
+                        repeat_kind,
+                        interval_seconds,
+                        task_id,
+                        session_id,
+                    ),
+                )
+            else:
+                cursor = conn.execute(
+                    """UPDATE scheduled_tasks
+                       SET run_at = ?
+                       WHERE id = ? AND session_id = ? AND enabled = 1""",
+                    (run_at_text, task_id, session_id),
+                )
+            if cursor.rowcount <= 0:
+                continue
+            updated_row = dict(row)
+            updated_row["old_run_at"] = row.get("run_at")
+            updated_row["run_at"] = run_at_text
+            if repeat_kind:
+                updated_row["repeat_kind"] = repeat_kind
+                updated_row["interval_seconds"] = interval_seconds
+            updated.append(updated_row)
+        conn.commit()
+    finally:
+        conn.close()
+    return updated
 
 
 def find_matching_scheduled_task(
@@ -136,6 +230,46 @@ def cancel_scheduled_task(session_id: str, task_id: int) -> bool:
     changed = cursor.rowcount
     conn.close()
     return changed > 0
+
+
+def _scheduled_task_matches_query(row: dict, query: str) -> bool:
+    haystack = _normalize_match_text(
+        " ".join(
+            [
+                str(row.get("title") or ""),
+                str(row.get("instruction") or ""),
+                str(row.get("repeat_kind") or ""),
+            ]
+        )
+    )
+    needle = _normalize_match_text(query)
+    if not needle:
+        return False
+    if needle in haystack:
+        return True
+
+    tokens = _match_tokens(needle)
+    if tokens and any(token in haystack for token in tokens):
+        return True
+
+    chars = [
+        ch
+        for ch in needle
+        if not ch.isspace() and ch not in "提醒任务定时闹钟待办用户一下一个"
+    ]
+    if not chars:
+        chars = [ch for ch in needle if not ch.isspace()]
+    if len(chars) <= 1:
+        return needle in haystack
+    return sum(1 for ch in set(chars) if ch in haystack) >= min(2, len(set(chars)))
+
+
+def _normalize_match_text(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "").lower())
+
+
+def _match_tokens(value: str) -> list[str]:
+    return [token for token in re.split(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", value) if len(token) >= 2]
 
 
 def get_due_scheduled_tasks(before_iso: str, limit: int = 10) -> list[dict]:

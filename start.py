@@ -3,9 +3,11 @@
 import sys
 
 from pupu.config import load_config, save_config
+from pupu.llm import preflight_model_providers
 from pupu.logging_utils import setup_runtime_logging
 
 setup_runtime_logging()
+preflight_model_providers()
 
 
 def select_mode():

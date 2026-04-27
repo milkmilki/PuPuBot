@@ -6,6 +6,7 @@ import asyncio
 
 from nonebot import get_driver
 
+from pupu.agent import run_due_batch_reviews
 from pupu.backup import maybe_run_daily_backup
 from pupu.maintenance import maybe_run_daily_maintenance
 
@@ -21,6 +22,7 @@ async def maintenance_loop():
             maintenance_report = await asyncio.to_thread(maybe_run_daily_maintenance)
             if maintenance_report:
                 print(f"[pupu] auto maintenance\n{maintenance_report}")
+            await asyncio.to_thread(run_due_batch_reviews)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

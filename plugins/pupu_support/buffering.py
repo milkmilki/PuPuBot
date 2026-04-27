@@ -176,3 +176,5 @@ async def debounce_flush(sid: str):
             pass
     finally:
         state.session_phase.pop(sid, None)
+        if sid in state.msg_buffers and sid not in state.debounce_tasks:
+            state.debounce_tasks[sid] = asyncio.create_task(debounce_flush(sid))

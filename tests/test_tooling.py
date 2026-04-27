@@ -7,7 +7,13 @@ TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
-from pupu.memory import init_db, reset_session
+from pupu.memory import (
+    cancel_scheduled_task,
+    create_scheduled_task,
+    init_db,
+    list_scheduled_tasks,
+    reset_session,
+)
 from pupu.tools import (
     PROACTIVE_TOOL_DEFINITIONS,
     TOOL_DEFINITIONS,
@@ -55,6 +61,141 @@ class ToolingRegistryTests(unittest.TestCase):
         )
         self.assertIn("当前没有待执行的定时任务", result)
         self.assertIn("总结进度：0/8，还差 8 轮触发自动总结", result)
+
+    def test_scheduled_task_list_uses_display_indices(self):
+        first_id = create_scheduled_task(
+            "test_tooling_registry",
+            "first",
+            "first instruction",
+            "2026-05-01T10:00:00",
+            "once",
+            None,
+        )
+        second_id = create_scheduled_task(
+            "test_tooling_registry",
+            "second",
+            "second instruction",
+            "2026-05-01T11:00:00",
+            "once",
+            None,
+        )
+        cancel_scheduled_task("test_tooling_registry", first_id)
+
+        result = execute_tool(
+            "manage_scheduled_task",
+            {"action": "list"},
+            session_id="test_tooling_registry",
+        )
+
+        self.assertIn(f"#1 id={second_id}", result)
+        self.assertNotIn("#2", result)
+
+    def test_scheduled_task_cancel_supports_display_index(self):
+        first_id = create_scheduled_task(
+            "test_tooling_registry",
+            "first",
+            "first instruction",
+            "2026-05-01T09:00:00",
+            "once",
+            None,
+        )
+        second_id = create_scheduled_task(
+            "test_tooling_registry",
+            "second",
+            "second instruction",
+            "2026-05-01T10:00:00",
+            "once",
+            None,
+        )
+
+        result = execute_tool(
+            "manage_scheduled_task",
+            {"action": "cancel", "task_index": 1},
+            session_id="test_tooling_registry",
+        )
+        remaining = list_scheduled_tasks("test_tooling_registry")
+
+        self.assertIn(f"#1 id={first_id}", result)
+        self.assertEqual([row["id"] for row in remaining], [second_id])
+
+    def test_scheduled_task_cancel_prefers_task_id_over_index(self):
+        first_id = create_scheduled_task(
+            "test_tooling_registry",
+            "first",
+            "first instruction",
+            "2026-05-01T09:00:00",
+            "once",
+            None,
+        )
+        second_id = create_scheduled_task(
+            "test_tooling_registry",
+            "second",
+            "second instruction",
+            "2026-05-01T10:00:00",
+            "once",
+            None,
+        )
+
+        execute_tool(
+            "manage_scheduled_task",
+            {"action": "cancel", "task_id": second_id, "task_index": 1},
+            session_id="test_tooling_registry",
+        )
+        remaining = list_scheduled_tasks("test_tooling_registry")
+
+        self.assertEqual([row["id"] for row in remaining], [first_id])
+
+    def test_scheduled_task_cancel_matching_cancels_by_query(self):
+        sleep_id = create_scheduled_task(
+            "test_tooling_registry",
+            "睡觉提醒",
+            "提醒用户睡觉",
+            "2026-05-01T23:00:00",
+            "once",
+            None,
+        )
+        food_id = create_scheduled_task(
+            "test_tooling_registry",
+            "吃饭提醒",
+            "提醒用户吃饭",
+            "2026-05-01T18:00:00",
+            "once",
+            None,
+        )
+
+        result = execute_tool(
+            "manage_scheduled_task",
+            {"action": "cancel_matching", "query": "睡觉提醒"},
+            session_id="test_tooling_registry",
+        )
+        remaining = list_scheduled_tasks("test_tooling_registry")
+
+        self.assertIn(f"id={sleep_id}", result)
+        self.assertEqual([row["id"] for row in remaining], [food_id])
+
+    def test_scheduled_task_reschedule_matching_updates_by_query(self):
+        task_id = create_scheduled_task(
+            "test_tooling_registry",
+            "早起提醒",
+            "提醒用户起床",
+            "2026-05-01T06:00:00",
+            "once",
+            None,
+        )
+
+        result = execute_tool(
+            "manage_scheduled_task",
+            {
+                "action": "reschedule_matching",
+                "query": "早起提醒",
+                "run_at": "2026-05-01T09:00:00",
+            },
+            session_id="test_tooling_registry",
+        )
+        remaining = list_scheduled_tasks("test_tooling_registry")
+
+        self.assertIn(f"id={task_id}", result)
+        self.assertEqual(remaining[0]["run_at"], "2026-05-01T09:00:00")
 
     def test_server_descriptions_expose_builtin_servers(self):
         names = {server["name"] for server in describe_tool_servers()}

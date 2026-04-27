@@ -1,4 +1,4 @@
-"""Persistence helpers for familiarity score and event history."""
+"""Persistence helpers for familiarity score and legacy event history."""
 
 from __future__ import annotations
 
@@ -32,7 +32,12 @@ def get_familiarity(session_id: str = "default") -> int:
     return row["score"] if row else 0
 
 
-def update_familiarity(delta: int, reason: str, session_id: str = "default"):
+def update_familiarity(
+    delta: int,
+    reason: str | None = None,
+    session_id: str = "default",
+    record_event: bool = False,
+):
     conn = get_conn()
     ensure_familiarity(conn, session_id)
     row = conn.execute(
@@ -40,17 +45,18 @@ def update_familiarity(delta: int, reason: str, session_id: str = "default"):
         (session_id,),
     ).fetchone()
     old_score = row["score"] if row else 0
-    new_score = max(0, min(100, old_score + delta))
+    new_score = max(0, min(100, old_score + int(delta)))
     new_level = score_to_level(new_score)
     now = datetime.now().isoformat()
     conn.execute(
         "UPDATE familiarity SET score = ?, level = ?, updated_at = ? WHERE session_id = ?",
         (new_score, new_level, now, session_id),
     )
-    conn.execute(
-        "INSERT INTO events (session_id, date, delta, description) VALUES (?, ?, ?, ?)",
-        (session_id, now, delta, reason),
-    )
+    if record_event and reason:
+        conn.execute(
+            "INSERT INTO events (session_id, date, delta, description) VALUES (?, ?, ?, ?)",
+            (session_id, now, int(delta), str(reason).strip()),
+        )
     conn.commit()
     conn.close()
 

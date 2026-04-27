@@ -7,8 +7,8 @@ import asyncio
 from nonebot import on_command
 from nonebot.adapters import Event
 
+from pupu.important_event_report import format_important_events_report
 from pupu.memory import (
-    get_event_log,
     get_familiarity_info,
     get_recent_messages,
     reset_session,
@@ -20,6 +20,12 @@ from .common import is_owner, resolve_session
 
 score_cmd = on_command("score", priority=5, block=True)
 tasks_cmd = on_command("tasks", aliases={"定时任务"}, priority=5, block=True)
+important_cmd = on_command(
+    "important",
+    aliases={"events", "important_events", "重要事件", "记忆事件"},
+    priority=5,
+    block=True,
+)
 history_cmd = on_command("history", priority=5, block=True)
 reset_cmd = on_command("reset", priority=5, block=True)
 tidy_cmd = on_command(
@@ -34,16 +40,7 @@ tidy_cmd = on_command(
 async def handle_score(event: Event):
     sid = resolve_session(event)
     info = get_familiarity_info(sid)
-    events = get_event_log(5, sid)
     text = f"好感度: {info['score']}/100\n等级: {info['level']}"
-    if events:
-        text += "\n\n最近事件:"
-        for item in events:
-            sign = "+" if item["delta"] > 0 else ""
-            text += (
-                f"\n{item['date'][:10]} [{sign}{item['delta']}] "
-                f"{item['description']}"
-            )
     await score_cmd.finish(text)
 
 
@@ -51,6 +48,12 @@ async def handle_score(event: Event):
 async def handle_tasks(event: Event):
     sid = resolve_session(event)
     await tasks_cmd.finish(manage_scheduled_task(sid, {"action": "list"}))
+
+
+@important_cmd.handle()
+async def handle_important(event: Event):
+    sid = resolve_session(event)
+    await important_cmd.finish(format_important_events_report(sid))
 
 
 @history_cmd.handle()

@@ -2,13 +2,14 @@
 
 BATCH_REVIEW_PROMPT = """你是仆仆的记忆整理器。阅读下面这段对话，只返回一个 JSON 对象，包含：
 - summary: 120字内摘要，只保留聊了什么、做了什么、重要情绪和重要事件
-- familiarity_events: 关系分数变化，元素是 {delta, reason}；没有就返回 []
+- familiarity_delta: 这 8 轮对关系分数的总变化，整数；没有明显变化就给 0
 - user_facts: 用户明确说过的稳定事实；没有就返回 {}
 - self_facts: 仆仆自己主动说过的设定；没有就返回 {}
 - important_events: 值得长期记住、以后可能自然跟进的事；没有就返回 []
-- task_drafts: 如果你判断应该自动创建提醒或定时跟进，就输出；否则返回 []
+- task_updates: 对定时任务的统一更新；没有就返回 []
 
-关系分数不要太碎：普通愉快闲聊通常 +1 到 +3 就够。
+关系分数不要太碎：普通愉快闲聊通常 +1 到 +3 就够；特别明确的关系里程碑可以更高一点。
+不要再额外解释分数变化理由，摘要本身已经承担这个作用。
 
 important_events 只保留真正重要的事，例如：
 - 生日、纪念日、考试、出行、面试、deadline
@@ -25,21 +26,27 @@ important_events 只保留真正重要的事，例如：
 - followup_hint
 - confidence: 0 到 1 之间的小数
 
-task_drafts 只输出你真心认为值得自动创建的任务。
-每条 task_draft 字段：
-- source_event_key: 必须引用对应 important_event
-- should_create: true 或 false
-- title
-- instruction: 到点后仆仆要说什么、提醒什么、或做什么
-- run_at: 本地时间 ISO 字符串；如果不该自动建，可以留空字符串
+task_updates 用来创建、取消或改时间，不再输出 task_drafts。
+输入里可能包含“当前已有定时任务”，它只帮助你判断 cancel_matching / reschedule_matching。
+不要在输出里添加或使用 task_id/id；匹配已有任务时，只填能匹配标题或内容的 query。
+每条 task_update 字段：
+- action: create / cancel_matching / reschedule_matching
+- query: 匹配已有任务时必填，例如 睡觉提醒、早起提醒；create 时可留空
+- source_event_key: create 时尽量引用对应 important_event
+- title: create 时必填
+- instruction: create 时必填，到点后仆仆要说什么、提醒什么、或做什么
+- run_at: create 和 reschedule_matching 时必填，本地时间 ISO 字符串
 - repeat: once / daily / weekly / monthly / yearly / interval
-- interval_seconds: 只有 interval 时填整数，否则填 null
+- interval_seconds: 仅当 repeat 为 interval 时提供
 - kind: 可选
+- reason: 为什么要这样更新任务
 
-补充规则：
-- 语义判断由你来做，不要过度保守，也不要过度热心
-- 普通闲聊、模糊计划、没有后续价值的内容，不要产出 task_draft
-- 对生日、纪念日这类只有日期没有时分的事件，可以直接给当天 09:00
-- 其他类型如果时间不明确，通常只保留 important_event，不要输出 task_draft
+task_updates 规则：
+- 用户提出明确时间和提醒/跟进意图时，用 create
+- 用户明确表示某个提醒不用了、已经完成、或现在就去做了时，用 cancel_matching
+- 用户把已有提醒的时间从一个点改成另一个点时，用 reschedule_matching，不要重复 create
+- 普通闲聊、模糊计划、没有后续价值的内容，不要产出 task_update
+- 对生日、纪念日这类只有日期没有时分的事件，可以 create 到当天 09:00
+- 其他类型如果时间不明确，通常只保留 important_event，不要输出 task_update
 
 只返回 JSON，不要解释，不要 markdown。"""

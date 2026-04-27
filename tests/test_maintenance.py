@@ -18,6 +18,7 @@ from pupu.memory import (
     save_message,
     save_summary,
 )
+from pupu.maintenance.model_compaction import _call_model_json
 
 
 class MaintenanceTests(unittest.TestCase):
@@ -78,6 +79,48 @@ class MaintenanceTests(unittest.TestCase):
                    VALUES (?, ?, ?, ?)""",
                 (self.session_id, "2026-04-26T00:00:00", 2, "same event"),
             )
+            conn.execute(
+                """INSERT INTO important_events
+                   (session_id, source_event_key, title, kind, event_time, time_text,
+                    details, followup_hint, confidence, status, linked_task_id, last_seen_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    self.session_id,
+                    "event-a",
+                    "一起看电影",
+                    "promise",
+                    "2026-05-01",
+                    "五一",
+                    "约好一起看电影",
+                    "之后可以提起这件事",
+                    0.8,
+                    "active",
+                    None,
+                    "2026-04-26T00:00:00",
+                    "2026-04-26T00:00:00",
+                ),
+            )
+            conn.execute(
+                """INSERT INTO important_events
+                   (session_id, source_event_key, title, kind, event_time, time_text,
+                    details, followup_hint, confidence, status, linked_task_id, last_seen_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    self.session_id,
+                    "event-b",
+                    "一起看电影",
+                    "promise",
+                    "2026-05-01",
+                    "五一",
+                    "约好一起看电影",
+                    "之后可以提起这件事",
+                    0.7,
+                    "active",
+                    None,
+                    "2026-04-26T00:00:00",
+                    "2026-04-26T00:00:00",
+                ),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -107,7 +150,8 @@ class MaintenanceTests(unittest.TestCase):
 
         self.assertIn("记忆整理完成（manual）", report)
         self.assertIn("- 去重摘要：1", report)
-        self.assertIn("- 去重事件：1", report)
+        self.assertIn("- 去重旧好感度记录：1", report)
+        self.assertIn("- 去重重要事件：1", report)
         self.assertIn("- 去重定时任务：1", report)
         self.assertIn("- 清理旧聊天消息：4", report)
         self.assertIn("- 清理旧内部消息：5", report)
@@ -120,6 +164,10 @@ class MaintenanceTests(unittest.TestCase):
             ).fetchone()["c"]
             enabled_task_count = conn.execute(
                 "SELECT COUNT(*) AS c FROM scheduled_tasks WHERE session_id = ? AND enabled = 1",
+                (self.session_id,),
+            ).fetchone()["c"]
+            important_event_count = conn.execute(
+                "SELECT COUNT(*) AS c FROM important_events WHERE session_id = ?",
                 (self.session_id,),
             ).fetchone()["c"]
             proactive_count = conn.execute(
@@ -144,6 +192,7 @@ class MaintenanceTests(unittest.TestCase):
 
         self.assertEqual(summary_count, 1)
         self.assertEqual(enabled_task_count, 1)
+        self.assertEqual(important_event_count, 1)
         self.assertEqual(proactive_count, 20)
         self.assertEqual(chat_count, 24)
         self.assertEqual(maintenance_count, 1)
@@ -178,6 +227,83 @@ class MaintenanceTests(unittest.TestCase):
         with patch("pupu.maintenance.run_memory_maintenance", return_value="should-not-run") as mock_run:
             self.assertIsNone(maybe_run_daily_maintenance(datetime(2026, 4, 26, 8, 0, 0)))
             mock_run.assert_not_called()
+
+    def test_maintenance_prunes_old_disabled_scheduled_tasks(self):
+        old_disabled_id = create_scheduled_task(
+            self.session_id,
+            "old disabled",
+            "old disabled instruction",
+            "2026-05-01T09:00:00",
+            "once",
+            None,
+        )
+        recent_disabled_id = create_scheduled_task(
+            self.session_id,
+            "recent disabled",
+            "recent disabled instruction",
+            "2026-05-01T10:00:00",
+            "once",
+            None,
+        )
+        active_old_id = create_scheduled_task(
+            self.session_id,
+            "active old",
+            "active old instruction",
+            "2026-05-01T11:00:00",
+            "once",
+            None,
+        )
+
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "UPDATE scheduled_tasks SET enabled = 0, created_at = ? WHERE id = ?",
+                ("2026-03-01T00:00:00", old_disabled_id),
+            )
+            conn.execute(
+                "UPDATE scheduled_tasks SET enabled = 0, created_at = ? WHERE id = ?",
+                ("2026-04-20T00:00:00", recent_disabled_id),
+            )
+            conn.execute(
+                "UPDATE scheduled_tasks SET created_at = ? WHERE id = ?",
+                ("2026-03-01T00:00:00", active_old_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        run_memory_maintenance(
+            trigger="manual",
+            include_model=False,
+            now=datetime(2026, 4, 26, 3, 0, 0),
+        )
+
+        conn = _get_conn()
+        try:
+            ids = {
+                row["id"]
+                for row in conn.execute(
+                    "SELECT id FROM scheduled_tasks WHERE session_id = ?",
+                    (self.session_id,),
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+
+        self.assertNotIn(old_disabled_id, ids)
+        self.assertIn(recent_disabled_id, ids)
+        self.assertIn(active_old_id, ids)
+
+    def test_model_compaction_json_tasks_route_to_maintenance_provider(self):
+        with patch(
+            "pupu.maintenance.model_compaction.json_task",
+            return_value='{"drop_summary_ids":[],"merged_summary":"","notes":""}',
+        ) as mock_json_task:
+            result = _call_model_json("system prompt", {"x": 1}, task_name="unit")
+
+        self.assertEqual(result["drop_summary_ids"], [])
+        self.assertEqual(mock_json_task.call_args.kwargs["role"], "maintenance")
+        self.assertEqual(mock_json_task.call_args.kwargs["task_name"], "unit")
 
 
 if __name__ == "__main__":

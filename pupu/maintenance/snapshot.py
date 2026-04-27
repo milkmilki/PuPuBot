@@ -12,16 +12,6 @@ def _build_session_snapshot(conn, session_id: str) -> dict:
             (session_id,),
         ).fetchall()
     ]
-    events = [
-        dict(row)
-        for row in conn.execute(
-            """SELECT id, date, delta, description
-               FROM events
-               WHERE session_id = ?
-               ORDER BY id ASC""",
-            (session_id,),
-        ).fetchall()
-    ]
     user_facts = {
         row["fact_key"]: row["fact_value"]
         for row in conn.execute(
@@ -52,13 +42,25 @@ def _build_session_snapshot(conn, session_id: str) -> dict:
             (session_id,),
         ).fetchall()
     ]
+    important_events = [
+        dict(row)
+        for row in conn.execute(
+            """SELECT id, source_event_key, title, kind, event_time, time_text,
+                      details, followup_hint, confidence, status, linked_task_id,
+                      last_seen_at, created_at
+               FROM important_events
+               WHERE session_id = ?
+               ORDER BY created_at ASC, id ASC""",
+            (session_id,),
+        ).fetchall()
+    ]
     return {
         "session_id": session_id,
         "summaries": summaries,
-        "events": events,
         "user_facts": user_facts,
         "self_facts": self_facts,
         "tasks": tasks,
+        "important_events": important_events,
     }
 
 
@@ -79,7 +81,7 @@ def _normalize_int_list(values, allowed_ids: set[int]) -> list[int]:
 def _should_run_model_compaction(snapshot: dict) -> bool:
     return bool(
         snapshot["summaries"]
-        or snapshot["events"]
+        or snapshot["important_events"]
         or snapshot["tasks"]
         or snapshot["user_facts"]
         or snapshot["self_facts"]

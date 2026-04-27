@@ -1,5 +1,7 @@
 """Old-message pruning helpers."""
 
+from datetime import datetime, timedelta
+
 from .constants import KEEP_RECENT_CHAT_TURNS, KEEP_RECENT_INTERNAL_MESSAGES
 
 
@@ -74,5 +76,20 @@ def _prune_old_internal_messages(conn, session_id: str, source: str) -> int:
              AND source = ?
              AND id < ?""",
         (session_id, source, oldest_keep_id),
+    )
+    return cur.rowcount
+
+
+def _prune_old_disabled_scheduled_tasks(
+    conn,
+    now: datetime | None = None,
+    days: int = 30,
+) -> int:
+    cutoff = (now or datetime.now()) - timedelta(days=max(1, int(days or 1)))
+    cur = conn.execute(
+        """DELETE FROM scheduled_tasks
+           WHERE enabled = 0
+             AND created_at < ?""",
+        (cutoff.isoformat(timespec="seconds"),),
     )
     return cur.rowcount

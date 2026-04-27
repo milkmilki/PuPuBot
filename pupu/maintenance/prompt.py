@@ -1,18 +1,60 @@
-"""Prompt template for model-assisted maintenance."""
+"""Prompt templates for model-assisted maintenance."""
 
-MAINTENANCE_PROMPT = """浣犲湪甯竴涓暱鏈熼櫔浼村瀷鑱婂ぉ浣撴暣鐞嗚蹇嗐€?
-浣犱細鐪嬪埌鏌愪釜浼氳瘽褰撳墠鐨勯暱鏈熻蹇嗘憳瑕併€佸ソ鎰熷害浜嬩欢銆佺敤鎴蜂簨瀹炪€佽鑹茶嚜杩颁簨瀹炪€佷互鍙婁粛鍦ㄧ瓑寰呯殑瀹氭椂浠诲姟銆?
-璇蜂繚瀹堝鐞嗭紝鍙仛涓嬮潰涓や欢浜嬶細
-1. 鎵惧嚭鏄庢樉閲嶅銆佷綆淇℃伅閲忋€佹垨鑰呰鍒殑鎽樿瀹屾暣瑕嗙洊鐨?summaries
-2. 鎵惧嚭鏄庢樉閲嶅銆佷綆淇℃伅閲忋€佹垨鑰呰繃浜庣悙纰庣殑 familiarity events
+SUMMARY_MAINTENANCE_PROMPT = """你在帮一个长期陪伴型聊天体整理长期摘要。
 
-缁濆涓嶈鍒犻櫎浠嶇劧鏈夋墽琛屼环鍊肩殑瀹氭椂浠诲姟锛屼篃涓嶈缂栭€犳柊浜嬪疄銆?濡傛灉鍙槸涓€浜涙甯镐笖鏈夌敤鐨勮蹇嗭紝灏变笉瑕佸垹銆?
-鍙繑鍥?JSON锛屼笉瑕佽В閲婏細
+目标：
+1. 找出明显重复、冗余、可被合并的 summaries
+2. 如果适合，把多条摘要合成一条更紧凑的新摘要
+3. 不要碰用户 facts、自我设定、important_events、tasks
+
+规则：
+- 只处理 summaries
+- 只有在两条及以上摘要明显重叠时，才输出 drop_summary_ids
+- 只有在确实能合并得更紧凑时，才输出 merged_summary
+- 如果不需要改动，就返回空数组和空字符串
+
+只返回 JSON：
 ```json
 {
   "drop_summary_ids": [1, 2],
-  "drop_event_ids": [3],
-  "merged_summary": "濡傛灉浣犲垹鎺変簡澶氭潯閲嶈鎽樿锛屽彲浠ョ粰涓€涓悎骞跺悗鐨勬柊鎽樿锛涘惁鍒欑暀绌哄瓧绗︿覆",
-  "notes": "涓€鍙ュ緢鐭殑璇濊鏄庤繖娆℃暣鐞嗙殑鍒ゆ柇锛屾病鏈変篃鍙互鐣欑┖"
+  "merged_summary": "合并后的摘要",
+  "notes": "简短说明"
+}
+```"""
+
+
+IMPORTANT_EVENT_MAINTENANCE_PROMPT = """你在帮一个长期陪伴型聊天体整理 important_events。
+
+目标：
+1. 删除明显重复、价值很低、或已经过时且不值得长期记住的 important_events
+2. 重新给保留事件分配 confidence，用来排序
+3. 允许轻微润色 title/details/followup_hint，让它们更紧凑清晰
+
+规则：
+- 不要凭空创造新事件
+- 不要修改 source_event_key
+- 不要删除 linked_task_id 不为空的事件
+- 不要删除 status 为 scheduled 的事件
+- confidence 用 0 到 1 之间的小数；越值得长期记住、越适合未来自然跟进，分数越高
+- 如果某条事件只是当前这一小批里语义重复，请保留更完整、更清楚的一条，删除其余重复项
+- 如果不需要改动，就返回空 drop_ids，并把 updates 原样给回去或只更新你想改的项
+
+只返回 JSON：
+```json
+{
+  "drop_ids": [3],
+  "updates": [
+    {
+      "id": 1,
+      "title": "整理后的标题",
+      "kind": "promise",
+      "event_time": "2026-04-26",
+      "time_text": "今天",
+      "details": "更紧凑的描述",
+      "followup_hint": "更自然的跟进方式",
+      "confidence": 0.92
+    }
+  ],
+  "notes": "简短说明"
 }
 ```"""

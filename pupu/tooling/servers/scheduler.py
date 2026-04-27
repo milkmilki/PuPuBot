@@ -35,11 +35,13 @@ def _parse_local_run_at(run_at_str: str):
 def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
     from ...memory import (
         MAX_SCHEDULED_TASKS_PER_SESSION,
+        cancel_matching_scheduled_tasks,
         cancel_scheduled_task,
         count_scheduled_tasks,
         create_scheduled_task,
         get_summary_trigger_progress,
         list_scheduled_tasks,
+        reschedule_matching_scheduled_tasks,
     )
 
     action = (tool_input.get("action") or "").strip().lower()
@@ -60,7 +62,7 @@ def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
             return f"{summary_line}\n当前没有待执行的定时任务"
 
         lines = []
-        for row in rows:
+        for index, row in enumerate(rows, start=1):
             title = row.get("title") or "提醒"
             run_at = _parse_local_run_at(str(row["run_at"]))
             overdue = ""
@@ -72,21 +74,92 @@ def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
                 else ""
             )
             lines.append(
-                f"- id={row['id']} | {row['run_at']} | repeat={row['repeat_kind']}{interval} | 《{title}》{overdue}\n"
+                f"- #{index} id={row['id']} | {row['run_at']} | repeat={row['repeat_kind']}{interval} | 《{title}》{overdue}\n"
                 f"  说明：{(row.get('instruction') or '')[:120]}"
             )
         return summary_line + "\n定时任务列表：\n" + "\n".join(lines)
 
+    if action == "cancel_matching":
+        query = str(tool_input.get("query") or "").strip()
+        if not query:
+            return "cancel_matching 需要 query，用来描述要取消的提醒"
+        cancelled = cancel_matching_scheduled_tasks(session_id, query)
+        if not cancelled:
+            return f"没有找到匹配 {query!r} 的待执行定时任务"
+        ids = ", ".join(f"id={row['id']}" for row in cancelled[:8])
+        more = f" 等 {len(cancelled)} 个" if len(cancelled) > 8 else ""
+        return f"已取消匹配 {query!r} 的定时任务：{ids}{more}"
+
+    if action == "reschedule_matching":
+        query = str(tool_input.get("query") or "").strip()
+        if not query:
+            return "reschedule_matching 需要 query，用来描述要改时间的提醒"
+        run_raw = tool_input.get("run_at")
+        if not run_raw:
+            return "reschedule_matching 需要 run_at（新的本地时间 ISO 字符串）"
+        run_norm, error = _normalize_run_at_iso(str(run_raw))
+        if error:
+            return error
+
+        repeat = str(tool_input.get("repeat") or "").strip().lower()
+        repeat_alias = {
+            "每天": "daily",
+            "每日": "daily",
+            "每周": "weekly",
+            "每月": "monthly",
+            "每年": "yearly",
+            "everyday": "daily",
+        }
+        repeat = repeat_alias.get(repeat, repeat)
+        interval_seconds = None
+        if repeat:
+            if repeat not in ("once", "daily", "weekly", "monthly", "yearly", "interval"):
+                return f"不支持的 repeat：{repeat}，请用 once / daily / weekly / monthly / yearly / interval"
+            if repeat == "interval":
+                try:
+                    interval_seconds = int(tool_input.get("interval_seconds"))
+                except (TypeError, ValueError):
+                    return "repeat 为 interval 时必须提供正整数 interval_seconds（秒）"
+                if interval_seconds < 60:
+                    return "interval_seconds 最少 60 秒"
+                if interval_seconds > 86400 * 7:
+                    return "interval_seconds 最多 7 天（604800 秒）"
+
+        updated = reschedule_matching_scheduled_tasks(
+            session_id,
+            query,
+            run_norm,
+            repeat or None,
+            interval_seconds,
+        )
+        if not updated:
+            return f"没有找到匹配 {query!r} 的待执行定时任务"
+        ids = ", ".join(f"id={row['id']} {row.get('old_run_at')}->{row['run_at']}" for row in updated[:8])
+        more = f" 等 {len(updated)} 个" if len(updated) > 8 else ""
+        return f"已更新匹配 {query!r} 的定时任务：{ids}{more}"
+
     if action == "cancel":
         task_id = tool_input.get("task_id")
+        display_index = None
         if task_id is None:
-            return "cancel 需要 task_id，可以先用 action=list 查看"
+            task_index = tool_input.get("task_index")
+            if task_index is None:
+                return "cancel 需要 task_id 或 task_index，可以先用 action=list 查看"
+            try:
+                display_index = int(task_index)
+            except (TypeError, ValueError):
+                return "task_index 必须是整数"
+            rows = list_scheduled_tasks(session_id)
+            if display_index < 1 or display_index > len(rows):
+                return f"没有找到 #{display_index} 的任务，可以先用 action=list 查看当前序号"
+            task_id = rows[display_index - 1]["id"]
         try:
             task_id = int(task_id)
         except (TypeError, ValueError):
             return "task_id 必须是整数"
         if cancel_scheduled_task(session_id, task_id):
-            return f"已取消定时任务 id={task_id}"
+            prefix = f"#{display_index} " if display_index is not None else ""
+            return f"已取消定时任务 {prefix}id={task_id}"
         return f"没有找到 id={task_id} 的任务，或者它不属于当前会话、已被取消"
 
     if action == "create":
@@ -177,13 +250,15 @@ SCHEDULER_SERVER = BuiltinToolServer(
                 "你会收到一条以“定时任务”开头的系统提示，像平时一样自然回复用户，回复会真的发给对方。"
                 "run_at 请使用本地时间 ISO 8601，例如 2026-04-26T15:30:00。"
                 "repeat 支持 once、daily、weekly、monthly、yearly、interval。"
+                "用户明确表示某个提醒不用了、已经完成、或现在就去做了时，可以用 cancel_matching 和 query 取消匹配提醒。"
+                "用户改变已有提醒时间时，用 reschedule_matching、query 和新的 run_at 更新匹配提醒，不要重复创建。"
             ),
             input_schema={
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "description": "create | list | cancel",
+                        "description": "create | list | cancel | cancel_matching | reschedule_matching",
                     },
                     "title": {
                         "type": "string",
@@ -207,7 +282,15 @@ SCHEDULER_SERVER = BuiltinToolServer(
                     },
                     "task_id": {
                         "type": "integer",
-                        "description": "cancel 时必填，要取消的任务 id",
+                        "description": "cancel 时可填，要取消的真实任务 id；优先于 task_index",
+                    },
+                    "task_index": {
+                        "type": "integer",
+                        "description": "cancel 时可填，来自 list 输出的 #序号；如果同时给 task_id，优先使用 task_id",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "cancel_matching / reschedule_matching 时必填，用自然语言描述要匹配的提醒，例如 睡觉提醒、早起提醒",
                     },
                 },
                 "required": ["action"],

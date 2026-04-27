@@ -1,5 +1,7 @@
 """Poll and run due scheduled tasks (DB + chat + optional OneBot send)."""
 
+import asyncio
+import random
 import threading
 from datetime import datetime
 
@@ -19,24 +21,64 @@ def _scheduled_user_message(task: dict) -> str:
     return f"[定时任务「{title}」]\n{inst}"
 
 
+def _split_message(text: str) -> list[str]:
+    text = str(text or "").strip()
+    if not text:
+        return [text]
+    parts = [line.strip() for line in text.split("\n") if line.strip()]
+    return parts if parts else [text]
+
+
+async def _sleep_before_next_segment(next_segment: str) -> None:
+    typing_time = min(
+        4,
+        max(0.8, len(next_segment) * random.uniform(0.05, 0.15)),
+    )
+    await asyncio.sleep(typing_time)
+
+
+async def _send_private_segments(bot, user_id: int, segments: list[str]) -> None:
+    for index, segment in enumerate(segments):
+        await bot.send_private_msg(user_id=user_id, message=segment)
+        if index < len(segments) - 1:
+            await _sleep_before_next_segment(segments[index + 1])
+
+
+async def _send_group_segments(bot, group_id: int, segments: list[str]) -> None:
+    for index, segment in enumerate(segments):
+        await bot.send_group_msg(group_id=group_id, message=segment)
+        if index < len(segments) - 1:
+            await _sleep_before_next_segment(segments[index + 1])
+
+
+def _log_scheduled_send(session_label: str, user_label: str, text: str) -> None:
+    now = datetime.now().strftime("%H:%M:%S")
+    display = text[:120] + "..." if len(text) > 120 else text
+    print(f"[{now}] >>> 发送 | {session_label} | {user_label} | {display}")
+
+
 async def _onebot_send(bot, session_id: str, text: str) -> None:
     """Send scheduled reply to the right peer (NapCat / OneBot v11)."""
+    segments = _split_message(text)
     if session_id == "owner":
         u = _load_first_numeric_owner_qq()
         if u is None:
             print("[pupu] scheduled: 未配置数字 owner QQ，无法投递 owner 会话")
             return
-        await bot.send_private_msg(user_id=u, message=text)
+        await _send_private_segments(bot, u, segments)
+        _log_scheduled_send("私聊", str(u), text)
         return
     if session_id.startswith("private_"):
         tail = session_id[8:]
         if tail.isdigit():
-            await bot.send_private_msg(user_id=int(tail), message=text)
+            await _send_private_segments(bot, int(tail), segments)
+            _log_scheduled_send("私聊", tail, text)
         return
     if session_id.startswith("group_"):
         tail = session_id[6:]
         if tail.isdigit():
-            await bot.send_group_msg(group_id=int(tail), message=text)
+            await _send_group_segments(bot, int(tail), segments)
+            _log_scheduled_send(f"群{tail}", tail, text)
         return
     print(f"[pupu] scheduled: 无法投递会话 {session_id}（仅支持 owner / private_<QQ> / group_<群号>）")
 

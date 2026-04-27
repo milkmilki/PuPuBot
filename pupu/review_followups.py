@@ -6,12 +6,14 @@ from datetime import datetime, time, timedelta
 
 from .storage import (
     MAX_SCHEDULED_TASKS_PER_SESSION,
+    cancel_matching_scheduled_tasks,
     count_scheduled_tasks,
     create_scheduled_task,
     derive_source_event_key,
     find_matching_scheduled_task,
     get_important_event_by_key,
     link_important_event_task,
+    reschedule_matching_scheduled_tasks,
     upsert_important_events,
 )
 
@@ -119,6 +121,46 @@ def normalize_review_task_drafts(value) -> list[dict]:
                 "repeat": repeat,
                 "interval_seconds": interval_seconds,
                 "kind": kind,
+            }
+        )
+    return cleaned
+
+
+def normalize_review_task_updates(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+
+    cleaned = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("action", "")).strip().lower()
+        if action not in {"create", "cancel_matching", "reschedule_matching"}:
+            continue
+        query = str(item.get("query", "")).strip()
+        if action in {"cancel_matching", "reschedule_matching"} and not query:
+            continue
+        repeat_default = "once" if action == "create" else ""
+        repeat = str(item.get("repeat", repeat_default)).strip().lower()
+        repeat = REPEAT_ALIASES.get(repeat, repeat)
+        if repeat and repeat not in VALID_REPEATS:
+            repeat = "once"
+        try:
+            interval_seconds = int(item.get("interval_seconds"))
+        except Exception:
+            interval_seconds = None
+        cleaned.append(
+            {
+                "action": action,
+                "query": query,
+                "source_event_key": str(item.get("source_event_key", "")).strip(),
+                "title": str(item.get("title", "")).strip(),
+                "instruction": str(item.get("instruction", "")).strip(),
+                "run_at": str(item.get("run_at", "")).strip(),
+                "repeat": repeat,
+                "interval_seconds": interval_seconds,
+                "kind": str(item.get("kind", "")).strip().lower(),
+                "reason": str(item.get("reason", "")).strip(),
             }
         )
     return cleaned
@@ -280,6 +322,126 @@ def apply_review_task_drafts(
             }
         )
 
+    return results
+
+
+def apply_review_task_updates(
+    session_id: str,
+    task_updates: list[dict],
+    important_event_rows: dict[str, dict] | None = None,
+    now: datetime | None = None,
+) -> list[dict]:
+    results = []
+    event_rows = dict(important_event_rows or {})
+    current = now or datetime.now()
+    for update in task_updates:
+        action = str(update.get("action", "")).strip().lower()
+        query = str(update.get("query", "")).strip()
+        if action == "create":
+            draft = {
+                "source_event_key": update.get("source_event_key"),
+                "should_create": True,
+                "title": update.get("title") or "提醒",
+                "instruction": update.get("instruction") or "",
+                "run_at": update.get("run_at") or "",
+                "repeat": update.get("repeat") or "once",
+                "interval_seconds": update.get("interval_seconds"),
+                "kind": update.get("kind") or "",
+            }
+            draft_results = apply_review_task_drafts(
+                session_id,
+                [draft],
+                event_rows,
+                current,
+            )
+            item = dict(draft_results[0] if draft_results else {})
+            item["action"] = "create"
+            item["query"] = query
+            item["reason"] = str(update.get("reason", "")).strip()
+            results.append(item)
+            continue
+
+        if action == "cancel_matching" and query:
+            cancelled = cancel_matching_scheduled_tasks(session_id, query)
+            results.append(
+                {
+                    "action": action,
+                    "query": query,
+                    "status": "cancelled" if cancelled else "no_match",
+                    "task_ids": [int(row["id"]) for row in cancelled],
+                    "reason": str(update.get("reason", "")).strip(),
+                }
+            )
+            continue
+
+        if action == "reschedule_matching" and query:
+            run_at, error = _normalize_task_run_at(update, None, current)
+            if error:
+                results.append(
+                    {
+                        "action": action,
+                        "query": query,
+                        "status": "skipped",
+                        "reason": error,
+                    }
+                )
+                continue
+
+            repeat = str(update.get("repeat") or "").strip().lower()
+            repeat = REPEAT_ALIASES.get(repeat, repeat)
+            interval_seconds = update.get("interval_seconds")
+            if repeat:
+                if repeat not in VALID_REPEATS:
+                    results.append(
+                        {
+                            "action": action,
+                            "query": query,
+                            "status": "skipped",
+                            "reason": "invalid_repeat",
+                        }
+                    )
+                    continue
+                if repeat == "interval":
+                    if interval_seconds is None or interval_seconds < 60 or interval_seconds > 604800:
+                        results.append(
+                            {
+                                "action": action,
+                                "query": query,
+                                "status": "skipped",
+                                "reason": "invalid_interval_seconds",
+                            }
+                        )
+                        continue
+                else:
+                    interval_seconds = None
+            updated = reschedule_matching_scheduled_tasks(
+                session_id,
+                query,
+                run_at,
+                repeat or None,
+                interval_seconds,
+            )
+            results.append(
+                {
+                    "action": action,
+                    "query": query,
+                    "status": "rescheduled" if updated else "no_match",
+                    "task_ids": [int(row["id"]) for row in updated],
+                    "run_at": run_at,
+                    "reason": str(update.get("reason", "")).strip(),
+                }
+            )
+            continue
+
+        if action or query:
+            results.append(
+                {
+                    "action": action or "unknown",
+                    "query": query,
+                    "status": "skipped",
+                    "reason": "unsupported_or_missing_query",
+                }
+            )
     return results
 
 
