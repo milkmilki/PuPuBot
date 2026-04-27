@@ -22,41 +22,37 @@ from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT
 OWNER_SESSION = "owner"
 
 TIME_PERIODS = [
-    {"name": "早安", "start": 7, "end": 9, "topics": [
+    {"name": "凌晨到早上", "start": 0, "end": 9, "topics": [
         "说一个你刚刚做的梦的具体内容，可以是荒诞的",
         "抱怨一个具体的起床困难原因，比如昨晚熬夜看了什么",
         "分享今天天气怎样，吐槽或者期待",
         "提一个今天想做的具体事情",
+        "说一个你深夜突然想到的具体问题或疑惑",
+        "聊一个你对今天的具体想法或期待",
     ]},
-    {"name": "午饭", "start": 11.5, "end": 13, "topics": [
+    {"name": "白天", "start": 9, "end": 19, "topics": [
         "推荐一道你最近吃到的具体好吃的菜，说为什么好吃",
         "吐槽一个具体的外卖/食堂踩雷经历",
         "说你想吃某个具体的东西但吃不到",
         "分享一个美食冷知识或者做菜小技巧",
-    ]},
-    {"name": "下午摸鱼", "start": 14, "end": 17, "topics": [
         "分享一个你刚发现的具体有趣网站/工具/App，说它能干什么",
         "说一个你刚看到的具体新闻或热搜，发表你的看法",
         "分享一个具体的技术知识点或编程冷知识",
         "说一个你最近在研究的具体东西，比如某个算法、某个框架",
         "吐槽一个你遇到的具体bug或者坑",
         "推荐一首歌或一个视频，说为什么觉得好",
-    ]},
-    {"name": "晚饭", "start": 17.5, "end": 19, "topics": [
         "说你今天具体做了什么，发生了什么事",
         "抱怨一个具体让你累的事情",
         "说一个今晚打算做的具体事情，比如看某部剧、打某个游戏",
         "问用户今天过得怎么样，顺便说说自己的",
     ]},
-    {"name": "晚上闲聊", "start": 19, "end": 23, "topics": [
+    {"name": "晚上闲聊", "start": 19, "end": 24, "topics": [
         "推荐一本你在看的具体的书，说书里某个让你印象深刻的观点或情节",
         "推荐一部具体的动漫/电影/剧，说为什么好看",
         "分享一个让你有感触的具体想法或感悟",
         "说一个你最近学到的有意思的事实或知识",
         "聊一个你感兴趣的具体话题，比如某个游戏、某个圈子的事",
         "分享一段你觉得很有意思的对话或段子",
-    ]},
-    {"name": "深夜emo", "start": 23, "end": 25, "topics": [
         "说一个你深夜突然想到的具体问题或疑惑",
         "分享一句让你有感触的歌词或台词，说为什么触动你",
         "聊一个你对未来的具体想法或期待",
@@ -69,8 +65,6 @@ TIME_PERIODS = [
 def _get_current_period() -> dict | None:
     now = datetime.now()
     hour = now.hour + now.minute / 60.0
-    if hour < 1:
-        hour += 24
     for p in TIME_PERIODS:
         if p["start"] <= hour < p["end"]:
             return p
@@ -80,10 +74,10 @@ def _get_current_period() -> dict | None:
 def _is_quiet_hours() -> bool:
     """Do not proactively message at night.
 
-    Night is defined as 23:00-09:00 local time.
+    Night is defined as 00:00-06:00 local time.
     """
     hour = datetime.now().hour
-    return hour >= 23 or hour < 9
+    return hour < 6
 
 
 def _had_recent_chat_within(minutes: int) -> bool:

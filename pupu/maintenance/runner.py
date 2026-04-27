@@ -56,6 +56,8 @@ def run_memory_maintenance(
                 "model_merged_summaries": 0,
                 "model_dropped_important_events": 0,
                 "model_updated_important_events": 0,
+                "model_deleted_facts": 0,
+                "model_updated_facts": 0,
                 "model_notes": [],
             }
 
@@ -86,6 +88,8 @@ def run_memory_maintenance(
                     report["model_updated_important_events"] += session_result[
                         "updated_important_events"
                     ]
+                    report["model_deleted_facts"] += session_result["deleted_facts"]
+                    report["model_updated_facts"] += session_result["updated_facts"]
                     if session_result["note"]:
                         report["model_notes"].append(
                             f"{session_id}: {session_result['note']}"
@@ -109,6 +113,8 @@ def run_memory_maintenance(
                         f"- 模型合并摘要：{report['model_merged_summaries']}",
                         f"- 模型删除重要事件：{report['model_dropped_important_events']}",
                         f"- 模型重排重要事件：{report['model_updated_important_events']}",
+                        f"- 模型删除事实：{report['model_deleted_facts']}",
+                        f"- 模型更新事实：{report['model_updated_facts']}",
                     ]
                 )
                 if report["model_notes"]:

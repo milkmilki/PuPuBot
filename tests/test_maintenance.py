@@ -13,10 +13,14 @@ from pupu.maintenance import maybe_run_daily_maintenance, run_memory_maintenance
 from pupu.memory import (
     _get_conn,
     create_scheduled_task,
+    get_self_facts,
+    get_user_facts,
     init_db,
     reset_session,
     save_message,
     save_summary,
+    upsert_self_facts,
+    upsert_user_facts,
 )
 from pupu.maintenance.model_compaction import _call_model_json
 
@@ -304,6 +308,56 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(result["drop_summary_ids"], [])
         self.assertEqual(mock_json_task.call_args.kwargs["role"], "maintenance")
         self.assertEqual(mock_json_task.call_args.kwargs["task_name"], "unit")
+
+    def test_model_maintenance_compacts_user_and_self_facts(self):
+        upsert_user_facts(
+            {
+                "称呼偏好": "用户称仆仆为姐姐",
+                "nickname_for_pupu": "曾称呼仆仆为“姐姐”",
+                "身份": "读研学生",
+            },
+            self.session_id,
+        )
+        upsert_self_facts(
+            {
+                "自称": "姐姐",
+                "仆仆自称": "姐姐",
+                "喜欢的游戏": "喜欢独立游戏",
+            },
+            self.session_id,
+        )
+
+        raw = """{
+          "user_updates": {
+            "称呼偏好": "用户习惯称仆仆为姐姐"
+          },
+          "user_delete_keys": ["nickname_for_pupu"],
+          "self_updates": {
+            "自称": "姐姐"
+          },
+          "self_delete_keys": ["仆仆自称"],
+          "notes": "合并重复称呼事实"
+        }"""
+
+        with patch("pupu.maintenance.model_compaction.json_task", return_value=raw) as mock_json:
+            report = run_memory_maintenance(
+                trigger="manual",
+                include_model=True,
+                now=datetime(2026, 4, 26, 3, 0, 0),
+            )
+
+        user_facts = get_user_facts(self.session_id)
+        self_facts = get_self_facts(self.session_id)
+
+        self.assertEqual(mock_json.call_args.kwargs["task_name"], "facts_maintenance")
+        self.assertEqual(user_facts["称呼偏好"], "用户习惯称仆仆为姐姐")
+        self.assertNotIn("nickname_for_pupu", user_facts)
+        self.assertEqual(user_facts["身份"], "读研学生")
+        self.assertEqual(self_facts["自称"], "姐姐")
+        self.assertNotIn("仆仆自称", self_facts)
+        self.assertEqual(self_facts["喜欢的游戏"], "喜欢独立游戏")
+        self.assertIn("- 模型删除事实：2", report)
+        self.assertIn("- 模型更新事实：1", report)
 
 
 if __name__ == "__main__":

@@ -60,8 +60,34 @@ def _build_log_path() -> Path:
     return _ensure_log_dir() / f"pupu-{stamp}.log"
 
 
+def _ensure_current_log_file():
+    global _log_file, _log_path
+    if not _initialized:
+        return _log_file
+
+    target_path = _build_log_path()
+    with _print_lock:
+        if _log_file is not None and _log_path == target_path:
+            return _log_file
+
+        old_file = _log_file
+        old_path = _log_path
+        _log_path = target_path
+        _log_file = _log_path.open("a", encoding="utf-8", buffering=1)
+        if old_file is not None:
+            try:
+                old_file.flush()
+                old_file.close()
+            except Exception:
+                pass
+        if old_path is not None and old_path != _log_path:
+            _log_file.write(f"[pupu] logging rotated to {_log_path}\n")
+            _log_file.flush()
+        return _log_file
+
+
 def _get_sink():
-    return _log_file
+    return _ensure_current_log_file()
 
 
 def _patched_print(*args, **kwargs):
@@ -85,13 +111,15 @@ def _patched_print(*args, **kwargs):
 
 
 def get_log_file_path() -> str | None:
+    if _initialized:
+        _ensure_current_log_file()
     return str(_log_path) if _log_path is not None else None
 
 
 def setup_runtime_logging() -> str:
     global _initialized, _log_file, _log_path
     if _initialized:
-        return str(_log_path)
+        return str(get_log_file_path())
 
     _log_path = _build_log_path()
     _log_file = _log_path.open("a", encoding="utf-8", buffering=1)

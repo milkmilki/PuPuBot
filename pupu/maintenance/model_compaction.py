@@ -7,7 +7,11 @@ from datetime import datetime
 
 from ..llm import MODEL, json_task
 from .parsing import _parse_json_object
-from .prompt import IMPORTANT_EVENT_MAINTENANCE_PROMPT, SUMMARY_MAINTENANCE_PROMPT
+from .prompt import (
+    FACTS_MAINTENANCE_PROMPT,
+    IMPORTANT_EVENT_MAINTENANCE_PROMPT,
+    SUMMARY_MAINTENANCE_PROMPT,
+)
 from .snapshot import _normalize_int_list, _should_run_model_compaction
 
 IMPORTANT_EVENT_CHUNK_SIZE = 12
@@ -20,18 +24,31 @@ def _run_model_compaction(conn, snapshot: dict) -> dict:
             "merged_summaries": 0,
             "dropped_important_events": 0,
             "updated_important_events": 0,
+            "deleted_facts": 0,
+            "updated_facts": 0,
             "note": "",
         }
 
     summary_result = _run_summary_compaction(conn, snapshot)
     important_event_result = _run_important_event_compaction(conn, snapshot)
+    fact_result = _run_fact_compaction(conn, snapshot)
 
-    notes = [part for part in (summary_result["note"], important_event_result["note"]) if part]
+    notes = [
+        part
+        for part in (
+            summary_result["note"],
+            important_event_result["note"],
+            fact_result["note"],
+        )
+        if part
+    ]
     return {
         "dropped_summaries": summary_result["dropped_summaries"],
         "merged_summaries": summary_result["merged_summaries"],
         "dropped_important_events": important_event_result["dropped_important_events"],
         "updated_important_events": important_event_result["updated_important_events"],
+        "deleted_facts": fact_result["deleted_facts"],
+        "updated_facts": fact_result["updated_facts"],
         "note": " | ".join(notes),
     }
 
@@ -201,6 +218,116 @@ def _run_important_event_compaction(conn, snapshot: dict) -> dict:
         "updated_important_events": updated_total,
         "note": " | ".join(notes[:4]),
     }
+
+
+def _run_fact_compaction(conn, snapshot: dict) -> dict:
+    user_facts = snapshot["user_facts"]
+    self_facts = snapshot["self_facts"]
+    if not user_facts and not self_facts:
+        return {"deleted_facts": 0, "updated_facts": 0, "note": ""}
+
+    payload = {
+        "session_id": snapshot["session_id"],
+        "user_facts": user_facts,
+        "self_facts": self_facts,
+    }
+    result = _call_model_json(
+        FACTS_MAINTENANCE_PROMPT,
+        payload,
+        max_tokens=900,
+        task_name="facts_maintenance",
+    )
+
+    user_result = _apply_fact_updates(
+        conn,
+        session_id=snapshot["session_id"],
+        table_name="user_facts",
+        existing_facts=user_facts,
+        updates=result.get("user_updates", {}),
+        delete_keys=result.get("user_delete_keys", []),
+    )
+    self_result = _apply_fact_updates(
+        conn,
+        session_id=snapshot["session_id"],
+        table_name="self_facts",
+        existing_facts=self_facts,
+        updates=result.get("self_updates", {}),
+        delete_keys=result.get("self_delete_keys", []),
+    )
+
+    return {
+        "deleted_facts": user_result["deleted"] + self_result["deleted"],
+        "updated_facts": user_result["updated"] + self_result["updated"],
+        "note": str(result.get("notes", "")).strip(),
+    }
+
+
+def _apply_fact_updates(
+    conn,
+    session_id: str,
+    table_name: str,
+    existing_facts: dict,
+    updates,
+    delete_keys,
+) -> dict:
+    allowed_keys = {str(key) for key in existing_facts.keys()}
+    normalized_updates = _normalize_fact_updates(updates, allowed_keys)
+    updated_keys = set(normalized_updates.keys())
+    normalized_delete_keys = [
+        key
+        for key in _normalize_fact_delete_keys(delete_keys, allowed_keys)
+        if key not in updated_keys
+    ]
+
+    now = datetime.now().isoformat()
+    updated = 0
+    for key, value in normalized_updates.items():
+        if value == str(existing_facts.get(key, "")).strip():
+            continue
+        cur = conn.execute(
+            f"""UPDATE {table_name}
+                SET fact_value = ?, updated_at = ?
+                WHERE session_id = ? AND fact_key = ?""",
+            (value, now, session_id, key),
+        )
+        updated += cur.rowcount
+
+    deleted = 0
+    if normalized_delete_keys:
+        placeholders = ",".join("?" for _ in normalized_delete_keys)
+        cur = conn.execute(
+            f"""DELETE FROM {table_name}
+                WHERE session_id = ? AND fact_key IN ({placeholders})""",
+            [session_id, *normalized_delete_keys],
+        )
+        deleted = cur.rowcount
+
+    return {"deleted": deleted, "updated": updated}
+
+
+def _normalize_fact_updates(values, allowed_keys: set[str]) -> dict[str, str]:
+    if not isinstance(values, dict):
+        return {}
+
+    out = {}
+    for key, value in values.items():
+        key_text = str(key).strip()
+        value_text = str(value).strip()
+        if key_text in allowed_keys and value_text:
+            out[key_text] = value_text
+    return out
+
+
+def _normalize_fact_delete_keys(values, allowed_keys: set[str]) -> list[str]:
+    if not isinstance(values, list):
+        return []
+
+    out = []
+    for value in values:
+        key_text = str(value).strip()
+        if key_text in allowed_keys and key_text not in out:
+            out.append(key_text)
+    return out
 
 
 def _normalize_important_event_updates(values, allowed_ids: set[int]) -> list[dict]:
