@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 pupu_*.zip
 .claude/
+data/tts_cache/
+*.db
+*.log

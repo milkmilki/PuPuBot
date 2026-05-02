@@ -10,8 +10,17 @@ from nonebot.adapters import Event
 
 from pupu.config import load_owner_id_set
 from pupu.memory import get_last_user_message_time
+from pupu.tts import synthesize_reply_to_file
 
 from . import state
+
+try:
+    from nonebot.adapters.onebot.v11 import MessageSegment as OBMsgSeg
+
+    HAS_ONEBOT_V11 = True
+except ImportError:
+    OBMsgSeg = None
+    HAS_ONEBOT_V11 = False
 
 
 def is_owner(user_id) -> bool:
@@ -61,6 +70,28 @@ async def send_segments(bot, event, segments: list[str], prefix=None):
                 max(0.8, len(segments[index + 1]) * random.uniform(0.05, 0.15)),
             )
             await asyncio.sleep(typing_time)
+    await maybe_send_voice_reply(bot, event, "\n".join(segments))
+
+
+def _is_onebot_v11_bot(bot) -> bool:
+    if not HAS_ONEBOT_V11:
+        return False
+    module = getattr(bot.__class__, "__module__", "")
+    return module.startswith("nonebot.adapters.onebot.v11")
+
+
+async def maybe_send_voice_reply(bot, event, text: str) -> None:
+    if not state.tts_reply_enabled:
+        return
+    if not _is_onebot_v11_bot(bot):
+        return
+    try:
+        audio_path = await asyncio.to_thread(synthesize_reply_to_file, text)
+        if not audio_path:
+            return
+        await bot.send(event, OBMsgSeg.record(audio_path))
+    except Exception as exc:
+        print(f"[pupu][tts] send failed: {exc}")
 
 
 async def send_private_segments(bot, user_id: int, segments: list[str]):

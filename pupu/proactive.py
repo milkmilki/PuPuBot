@@ -107,12 +107,23 @@ def _minutes_since_last_chat() -> int | None:
     return int(delta.total_seconds() // 60)
 
 
+def _truncate_debug(text: str, limit: int = 240) -> str:
+    text = (text or "").replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "...(truncated)"
+
+
 def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: int | None) -> bool:
     """Ask model whether to send a proactive message now.
 
     The model must answer with one word: SEND or WAIT.
     """
     try:
+        print(
+            f"[pupu][proactive] phase=judge start score={score} "
+            f"period={period['name']} idle_minutes={idle_minutes}"
+        )
         recent = get_recent_messages(4, OWNER_SESSION)
         if recent:
             recent_text = "\n".join(
@@ -146,12 +157,16 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
             model=JUDGE_MODEL,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
-            max_tokens=16,
+            max_tokens=1024,
         )
         decision = text.strip().upper()
+        print(
+            f"[pupu][proactive] phase=judge done decision={decision[:32] or 'EMPTY'} "
+            f"raw={_truncate_debug(text, 180)}"
+        )
         return decision.startswith("SEND")
     except Exception as e:
-        print(f"[pupu] proactive decision failed: {e}")
+        print(f"[pupu][proactive] phase=judge failed error={e}")
         return False
 
 
@@ -238,6 +253,10 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
     """Generate a proactive message using Claude API with web search capability."""
     try:
         prompt = _build_proactive_prompt(score, period)
+        print(
+            f"[pupu][proactive] phase=generate start score={score} "
+            f"period={period['name']} prompt={_truncate_debug(prompt, 180)}"
+        )
         messages = [{"role": "user", "content": "（主动给用户发一条消息。如果话题需要具体内容，可以先搜索一下再聊。）"}]
 
         def _tool_handler(tool_name: str, tool_input: dict, reason_hint: str | None = None):
@@ -264,11 +283,12 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
             tool_exposure="proactive",
         )
 
+        print(f"[pupu][proactive] phase=generate done text={_truncate_debug(text, 220)}")
         if text:
             save_message("assistant", text, OWNER_SESSION, source="proactive")
         return text
     except Exception as e:
-        print(f"[pupu] proactive message generation failed: {e}")
+        print(f"[pupu][proactive] phase=generate failed error={e}")
         return None
 
 
@@ -280,35 +300,52 @@ async def proactive_loop(send_func):
             score = get_familiarity(OWNER_SESSION)
             freq = get_proactive_freq(score)
 
+            print(f"[pupu][proactive] loop score={score} freq={freq}")
+
             if freq is None:
+                print("[pupu][proactive] skip=no_proactive_frequency")
                 await asyncio.sleep(300)
                 continue
 
             interval = random.uniform(freq["min_interval"], freq["max_interval"]) * 60
+            print(
+                f"[pupu][proactive] sleep seconds={int(interval)} "
+                f"window={freq['min_interval']}-{freq['max_interval']}min"
+            )
             await asyncio.sleep(interval)
 
             if _is_quiet_hours():
+                print("[pupu][proactive] skip=quiet_hours")
                 continue
 
             if _had_recent_chat_within(60):
+                print("[pupu][proactive] skip=recent_chat_within_60min")
                 continue
 
             period = _get_current_period()
             if period is None:
+                print("[pupu][proactive] skip=no_current_period")
                 continue
 
             score = get_familiarity(OWNER_SESSION)
             if score < PROACTIVE_THRESHOLD:
+                print(f"[pupu][proactive] skip=low_score score={score} threshold={PROACTIVE_THRESHOLD}")
                 continue
 
             idle_minutes = _minutes_since_last_chat()
+            print(
+                f"[pupu][proactive] phase=decision_context score={score} "
+                f"period={period['name']} idle_minutes={idle_minutes}"
+            )
             should_send = await asyncio.to_thread(
                 _model_should_proactively_reach_out,
                 score,
                 period,
                 idle_minutes,
             )
+            print(f"[pupu][proactive] phase=judge_result should_send={should_send}")
             if not should_send:
+                print("[pupu][proactive] skip=model_decided_wait")
                 continue
 
             text = await asyncio.to_thread(generate_proactive_message, score, period)
@@ -317,6 +354,8 @@ async def proactive_loop(send_func):
                     await send_func(text)
                     print(f"[pupu] proactive >>> {text[:80]}")
                 except Exception as e:
-                    print(f"[pupu] proactive send failed: {e}")
+                    print(f"[pupu][proactive] phase=send failed error={e}")
+            else:
+                print("[pupu][proactive] skip=no_generated_text")
     except asyncio.CancelledError:
         print("[pupu] proactive messaging stopped")

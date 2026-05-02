@@ -17,6 +17,13 @@ from .snapshot import _normalize_int_list, _should_run_model_compaction
 IMPORTANT_EVENT_CHUNK_SIZE = 12
 
 
+def _commit_quietly(conn) -> None:
+    try:
+        conn.commit()
+    except Exception:
+        pass
+
+
 def _run_model_compaction(conn, snapshot: dict) -> dict:
     if not _should_run_model_compaction(snapshot):
         return {
@@ -29,9 +36,28 @@ def _run_model_compaction(conn, snapshot: dict) -> dict:
             "note": "",
         }
 
+    session_id = snapshot["session_id"]
+    print(f"[pupu][maintenance] session={session_id} phase=summary start")
     summary_result = _run_summary_compaction(conn, snapshot)
+    print(
+        f"[pupu][maintenance] session={session_id} phase=summary done "
+        f"dropped={summary_result['dropped_summaries']} merged={summary_result['merged_summaries']}"
+    )
+    _commit_quietly(conn)
+    print(f"[pupu][maintenance] session={session_id} phase=important_events start")
     important_event_result = _run_important_event_compaction(conn, snapshot)
+    print(
+        f"[pupu][maintenance] session={session_id} phase=important_events done "
+        f"dropped={important_event_result['dropped_important_events']} updated={important_event_result['updated_important_events']}"
+    )
+    _commit_quietly(conn)
+    print(f"[pupu][maintenance] session={session_id} phase=facts start")
     fact_result = _run_fact_compaction(conn, snapshot)
+    print(
+        f"[pupu][maintenance] session={session_id} phase=facts done "
+        f"deleted={fact_result['deleted_facts']} updated={fact_result['updated_facts']}"
+    )
+    _commit_quietly(conn)
 
     notes = [
         part
@@ -56,7 +82,7 @@ def _run_model_compaction(conn, snapshot: dict) -> dict:
 def _call_model_json(
     system_prompt: str,
     payload: dict,
-    max_tokens: int = 1200,
+    max_tokens: int = 5000,
     task_name: str = "maintenance",
 ) -> dict:
     raw_text = json_task(
@@ -67,7 +93,13 @@ def _call_model_json(
         max_tokens=max_tokens,
         task_name=task_name,
     )
-    return _parse_json_object(raw_text)
+    try:
+        return _parse_json_object(raw_text)
+    except Exception as exc:
+        preview = (raw_text or "").strip().replace("\n", " ")[:300]
+        raise ValueError(
+            f"{task_name}: unable to parse maintenance response as JSON object; preview={preview!r}"
+        ) from exc
 
 
 def _run_summary_compaction(conn, snapshot: dict) -> dict:
@@ -163,7 +195,7 @@ def _run_important_event_compaction(conn, snapshot: dict) -> dict:
         result = _call_model_json(
             IMPORTANT_EVENT_MAINTENANCE_PROMPT,
             payload,
-            max_tokens=1000,
+            max_tokens=5000,
             task_name="important_event_maintenance",
         )
 
@@ -213,6 +245,9 @@ def _run_important_event_compaction(conn, snapshot: dict) -> dict:
             )
             updated_total += 1
 
+        if drop_ids or updates:
+            _commit_quietly(conn)
+
     return {
         "dropped_important_events": dropped_total,
         "updated_important_events": updated_total,
@@ -234,7 +269,7 @@ def _run_fact_compaction(conn, snapshot: dict) -> dict:
     result = _call_model_json(
         FACTS_MAINTENANCE_PROMPT,
         payload,
-        max_tokens=900,
+        max_tokens=5000,
         task_name="facts_maintenance",
     )
 

@@ -33,7 +33,7 @@ from .memory import (
     upsert_self_facts,
     upsert_user_facts,
 )
-from .persona import BATCH_REVIEW_PROMPT, build_system_prompt
+from .persona import build_batch_review_prompt, build_system_prompt
 from .review_followups import (
     apply_review_task_updates,
     normalize_review_important_events,
@@ -456,15 +456,23 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
             + "\n\n待整理对话：\n"
             + conversation_text
         )
+        familiarity_score = get_familiarity(session_id)
+        include_familiarity_delta = familiarity_score < 100
+        review_prompt = build_batch_review_prompt(
+            include_familiarity_delta=include_familiarity_delta
+        )
         print(
             "[pupu] batch review request: "
-            f"provider={provider_label('judge', JUDGE_MODEL)}, input_chars={len(conversation_text)}"
+            f"provider={provider_label('judge', JUDGE_MODEL)}, "
+            f"input_chars={len(conversation_text)}, "
+            f"familiarity_score={familiarity_score}, "
+            f"delta_enabled={include_familiarity_delta}"
         )
 
         raw_text = json_task(
             role="judge",
             model=JUDGE_MODEL,
-            system=BATCH_REVIEW_PROMPT,
+            system=review_prompt,
             user_content=conversation_text,
             max_tokens=BATCH_REVIEW_MAX_TOKENS,
             task_name="batch_review",
@@ -504,6 +512,12 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
         )
 
         familiarity_delta = int(result.get("familiarity_delta", 0) or 0)
+        if not include_familiarity_delta and familiarity_delta:
+            print(
+                "[pupu] batch review familiarity delta ignored: "
+                f"score already 100, model_delta={familiarity_delta}"
+            )
+            familiarity_delta = 0
         if familiarity_delta:
             update_familiarity(familiarity_delta, session_id=session_id)
             print(

@@ -9,6 +9,7 @@ from rich.panel import Panel
 
 from .agent import chat, run_due_batch_reviews
 from .backup import maybe_run_daily_backup
+from .facts_report import format_facts_report
 from .important_event_report import format_important_events_report
 from .llm import preflight_model_providers
 from .logging_utils import setup_runtime_logging
@@ -44,7 +45,7 @@ def print_banner():
     console.print(
         Panel(
             f"[bold]仆仆[/bold] — 好感度: Lv.{score_info['level']}\n"
-            f"输入消息开始聊天 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /tidy 整理记忆",
+            f"输入消息开始聊天 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /facts 长期 facts | /tidy 整理记忆",
             style="cyan",
         )
     )
@@ -83,6 +84,9 @@ def handle_command(cmd: str) -> bool:
         return False
     elif cmd in ("/important", "/events", "/important_events", "/重要事件", "/记忆事件"):
         console.print(format_important_events_report(OWNER_SESSION))
+        return False
+    elif cmd in ("/facts", "/fact", "/memory_facts", "/长期记忆", "/事实记忆"):
+        console.print(format_facts_report(OWNER_SESSION))
         return False
     elif cmd in ("/tidy", "/cleanup", "/整理记忆", "/整理"):
         with console.status("[cyan]仆仆在整理记忆和定时任务...[/cyan]"):

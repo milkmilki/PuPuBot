@@ -1,15 +1,27 @@
 """Batch review prompt used by the judge model."""
 
-BATCH_REVIEW_PROMPT = """你是仆仆的记忆整理器。阅读下面这段对话，只返回一个 JSON 对象，包含：
-- summary: 120字内摘要，只保留聊了什么、做了什么、重要情绪和重要事件
-- familiarity_delta: 这 8 轮对关系分数的总变化，整数；没有明显变化就给 0
+_BATCH_REVIEW_HEADER = """你是仆仆的记忆整理器。阅读下面这段对话，只返回一个 JSON 对象，包含：
+- summary: 120字内摘要，只保留聊了什么、做了什么、重要情绪和重要事件"""
+
+_FAMILIARITY_DELTA_INSTRUCTIONS = """
+- familiarity_delta: 这 8 轮对关系分数的总变化，整数；没有明显变化就给 0"""
+
+_BATCH_REVIEW_FIELDS = """
 - user_facts: 用户明确说过的稳定事实；没有就返回 {}
 - self_facts: 仆仆自己主动说过的设定；没有就返回 {}
 - important_events: 值得长期记住、以后可能自然跟进的事；没有就返回 []
-- task_updates: 对定时任务的统一更新；没有就返回 []
+- task_updates: 对定时任务的统一更新；没有就返回 []"""
+
+_FAMILIARITY_SCORING_RULES = """
 
 关系分数不要太碎：普通愉快闲聊通常 +1 到 +3 就够；特别明确的关系里程碑可以更高一点。
-不要再额外解释分数变化理由，摘要本身已经承担这个作用。
+不要再额外解释分数变化理由，摘要本身已经承担这个作用。"""
+
+_FULL_FAMILIARITY_RULES = """
+
+当前关系分数已经达到 100，不要评估关系分数变化，JSON 里也不要包含任何分数字段。"""
+
+_BATCH_REVIEW_BODY = """
 
 important_events 只保留真正重要的事，例如：
 - 生日、纪念日、考试、出行、面试、deadline
@@ -50,3 +62,20 @@ task_updates 规则：
 - 其他类型如果时间不明确，通常只保留 important_event，不要输出 task_update
 
 只返回 JSON，不要解释，不要 markdown。"""
+
+
+def build_batch_review_prompt(include_familiarity_delta: bool = True) -> str:
+    prompt = _BATCH_REVIEW_HEADER
+    if include_familiarity_delta:
+        prompt += _FAMILIARITY_DELTA_INSTRUCTIONS
+    prompt += _BATCH_REVIEW_FIELDS
+    prompt += (
+        _FAMILIARITY_SCORING_RULES
+        if include_familiarity_delta
+        else _FULL_FAMILIARITY_RULES
+    )
+    prompt += _BATCH_REVIEW_BODY
+    return prompt
+
+
+BATCH_REVIEW_PROMPT = build_batch_review_prompt(include_familiarity_delta=True)

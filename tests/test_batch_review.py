@@ -25,6 +25,7 @@ from pupu.memory import (
     reset_session,
     save_message,
     save_summary,
+    set_familiarity,
     update_familiarity,
 )
 
@@ -293,6 +294,34 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(summaries[-1]["summary"], "用户和仆仆聊了一个重要约定。")
         self.assertEqual(events[0]["source_event_key"], "promise-test")
         self.assertEqual(list_scheduled_tasks(self.session_id), [])
+
+    def test_batch_review_omits_familiarity_delta_after_score_reaches_100(self):
+        set_familiarity(100, session_id=self.session_id)
+        for i in range(8):
+            self._save_chat_turn(i)
+
+        raw = """{
+          "summary": "满好感后只整理记忆。",
+          "familiarity_delta": 7,
+          "user_facts": {},
+          "self_facts": {},
+          "important_events": [],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+
+        with patch("pupu.agent.json_task", return_value=raw) as mock_json_task:
+            _maybe_batch_review(self.session_id)
+
+        system_prompt = mock_json_task.call_args.kwargs["system"]
+        summaries = get_summaries(self.session_id, limit=3)
+
+        mock_json_task.assert_called_once()
+        self.assertNotIn("familiarity_delta", system_prompt)
+        self.assertIn("关系分数已经达到 100", system_prompt)
+        self.assertEqual(get_familiarity(self.session_id), 100)
+        self.assertEqual(summaries[-1]["summary"], "满好感后只整理记忆。")
 
     def test_idle_batch_review_triggers_below_interval(self):
         for i in range(3):

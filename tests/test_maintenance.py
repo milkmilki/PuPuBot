@@ -1,4 +1,5 @@
 import os
+import sqlite3
 from pathlib import Path
 import unittest
 from datetime import datetime
@@ -308,6 +309,63 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(result["drop_summary_ids"], [])
         self.assertEqual(mock_json_task.call_args.kwargs["role"], "maintenance")
         self.assertEqual(mock_json_task.call_args.kwargs["task_name"], "unit")
+
+    def test_maintenance_commits_before_model_compaction(self):
+        for i in range(8):
+            self._save_chat_turn(i)
+
+        conn = _get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM messages WHERE session_id = ? ORDER BY id ASC",
+                (self.session_id,),
+            ).fetchall()
+            start_msg_id = int(rows[0]["id"])
+            end_msg_id = int(rows[-1]["id"])
+        finally:
+            conn.close()
+
+        save_summary("duplicate-a", start_msg_id, end_msg_id, self.session_id)
+        save_summary("duplicate-b", start_msg_id, end_msg_id, self.session_id)
+
+        def _second_connection_write(conn, snapshot):
+            other = sqlite3.connect(str(TEST_DB_PATH), timeout=0.2)
+            try:
+                other.execute(
+                    """INSERT INTO messages (session_id, role, content, timestamp, source)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        self.session_id,
+                        "assistant",
+                        "write while maintenance model waits",
+                        "2026-04-26T03:00:00",
+                        "proactive",
+                    ),
+                )
+                other.commit()
+            finally:
+                other.close()
+            return {
+                "dropped_summaries": 0,
+                "merged_summaries": 0,
+                "dropped_important_events": 0,
+                "updated_important_events": 0,
+                "deleted_facts": 0,
+                "updated_facts": 0,
+                "note": "",
+            }
+
+        with patch(
+            "pupu.maintenance.runner._run_model_compaction",
+            side_effect=_second_connection_write,
+        ):
+            report = run_memory_maintenance(
+                trigger="manual",
+                include_model=True,
+                now=datetime(2026, 4, 26, 3, 0, 0),
+            )
+
+        self.assertIn("记忆整理完成（manual）", report)
 
     def test_model_maintenance_compacts_user_and_self_facts(self):
         upsert_user_facts(

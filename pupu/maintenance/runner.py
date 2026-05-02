@@ -70,6 +70,8 @@ def run_memory_maintenance(
                         source,
                     )
 
+            conn.commit()
+
             if include_model:
                 for session_id in session_ids:
                     snapshot = _build_session_snapshot(conn, session_id)
@@ -94,6 +96,7 @@ def run_memory_maintenance(
                         report["model_notes"].append(
                             f"{session_id}: {session_result['note']}"
                         )
+                    conn.commit()
 
             summary_lines = [
                 f"记忆整理完成（{trigger}）",

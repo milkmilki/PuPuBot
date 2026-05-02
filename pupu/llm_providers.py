@@ -1,4 +1,4 @@
-"""Provider adapters for Anthropic and Codex CLI model calls."""
+"""Provider adapters for Anthropic, Codex CLI, and OpenAI-compatible model calls."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import httpx
+
 
 ToolHandler = Callable[[str, dict, str | None], str | list[dict]]
 
@@ -26,12 +28,7 @@ def _default_codex_command() -> str:
     if configured:
         return configured
 
-    for command in ("codex", "codex.exe"):
-        resolved = shutil.which(command)
-        if resolved:
-            return resolved
-
-    candidates: list[Path] = []
+    candidates: list[Path | str] = []
     appdata = os.environ.get("APPDATA", "").strip()
     if appdata:
         candidates.extend(
@@ -55,9 +52,17 @@ def _default_codex_command() -> str:
         except OSError:
             pass
 
+    for command in ("codex", "codex.exe"):
+        resolved = shutil.which(command)
+        if resolved:
+            candidates.append(resolved)
+
     for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
+        if isinstance(candidate, Path):
+            if candidate.exists():
+                return str(candidate)
+        else:
+            return candidate
 
     return "codex"
 
@@ -72,6 +77,24 @@ def collect_reason_hint(content_blocks) -> str:
         for block in content_blocks
         if block.type == "text" and getattr(block, "text", "").strip()
     )
+
+
+def _codex_subprocess_env() -> dict[str, str] | None:
+    proxy = os.environ.get("PUPU_CODEX_PROXY", "").strip()
+    if not proxy:
+        return None
+
+    env = os.environ.copy()
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env[key] = proxy
+        env[key.lower()] = proxy
+
+    no_proxy = os.environ.get("PUPU_CODEX_NO_PROXY", "").strip()
+    if no_proxy:
+        env["NO_PROXY"] = no_proxy
+        env["no_proxy"] = no_proxy
+
+    return env
 
 
 @dataclass(slots=True)
@@ -130,7 +153,39 @@ class AnthropicProvider:
                 tools=tools or None,
             )
 
-        return join_text_blocks(response.content).strip()
+        text = join_text_blocks(response.content).strip()
+        if not text:
+            # fallback: some Anthropic-compatible backends (eg. DeepSeek) place
+            # internal reasoning / chain-of-thought in `reasoning_content` of
+            # the raw choices structure. Try to extract that to avoid EMPTY.
+            try:
+                raw = None
+                if hasattr(response, "to_dict"):
+                    raw = response.to_dict()
+                elif hasattr(response, "raw"):
+                    raw = response.raw
+                elif hasattr(response, "__dict__"):
+                    raw = response.__dict__
+
+                if isinstance(raw, dict):
+                    # OpenAI-like choices structure
+                    choices = raw.get("choices") or raw.get("data") or []
+                    if choices:
+                        first = choices[0]
+                        # support nested message object
+                        msg = first.get("message") if isinstance(first, dict) else None
+                        if isinstance(msg, dict):
+                            reasoning = msg.get("reasoning_content") or msg.get("content")
+                            if isinstance(reasoning, str) and reasoning.strip():
+                                return reasoning.strip()
+                        # some backends put text directly on choice
+                        text_candidate = first.get("text") or first.get("message", {}).get("content")
+                        if isinstance(text_candidate, str) and text_candidate.strip():
+                            return text_candidate.strip()
+            except Exception:
+                pass
+
+        return text
 
     def json_task(
         self,
@@ -147,7 +202,138 @@ class AnthropicProvider:
             system=system,
             messages=[{"role": "user", "content": user_content}],
         )
-        return join_text_blocks(response.content).strip()
+        text = join_text_blocks(response.content).strip()
+        if not text:
+            try:
+                if hasattr(response, "to_dict"):
+                    raw = response.to_dict()
+                else:
+                    raw = getattr(response, "__dict__", None)
+                if isinstance(raw, dict):
+                    choices = raw.get("choices") or raw.get("data") or []
+                    if choices:
+                        first = choices[0]
+                        msg = first.get("message") if isinstance(first, dict) else None
+                        if isinstance(msg, dict):
+                            reasoning = msg.get("reasoning_content") or msg.get("content")
+                            if isinstance(reasoning, str) and reasoning.strip():
+                                return reasoning.strip()
+                        text_candidate = first.get("text") or first.get("message", {}).get("content")
+                        if isinstance(text_candidate, str) and text_candidate.strip():
+                            return text_candidate.strip()
+            except Exception:
+                pass
+        return text
+
+
+@dataclass(slots=True)
+class OpenAICompatibleProvider:
+    """Call an OpenAI-compatible chat completions endpoint."""
+
+    name: str
+    endpoint: str
+    api_key: str
+    model: str
+    timeout_seconds: float = 90.0
+    temperature: float = 0.7
+    reasoning_effort: str = ""
+    thinking_enabled: bool = False
+
+    def _build_payload(self, *, system: str, messages: list[dict], max_tokens: int) -> dict:
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                *_openai_messages(messages),
+            ],
+            "max_tokens": max_tokens,
+            "temperature": self.temperature,
+            "stream": False,
+        }
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        if self.thinking_enabled:
+            payload["extra_body"] = {"thinking": {"type": "enabled"}}
+        return payload
+
+    def chat_complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        messages: list[dict],
+        max_tokens: int,
+        **_: object,
+    ) -> str:
+        self._validate_config()
+        payload = self._build_payload(system=system, messages=messages, max_tokens=max_tokens)
+        return self._post_chat_completion(payload, task_name="chat")
+
+    def json_task(
+        self,
+        *,
+        model: str,
+        system: str,
+        user_content: str,
+        max_tokens: int,
+        task_name: str = "json_task",
+        **_: object,
+    ) -> str:
+        self._validate_config()
+        payload = self._build_payload(
+            system=system,
+            messages=[{"role": "user", "content": user_content}],
+            max_tokens=max_tokens,
+        )
+        return self._post_chat_completion(payload, task_name=task_name)
+
+    def _validate_config(self) -> None:
+        if not self.endpoint:
+            raise ProviderError(f"{self.name} endpoint is not configured")
+        if not self.api_key:
+            raise ProviderError(f"{self.name} API key is not configured")
+
+    def _post_chat_completion(self, payload: dict, *, task_name: str) -> str:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        print(
+            f"[pupu][llm] provider={self.name} task={task_name} "
+            f"model={payload.get('model')} timeout={self.timeout_seconds}s"
+        )
+        try:
+            response = httpx.post(
+                self.endpoint,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            body = (exc.response.text or "").replace("\n", " ")[:500]
+            raise ProviderError(
+                f"{self.name} request failed with HTTP {exc.response.status_code}: {body}"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"{self.name} request failed: {exc}") from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            text = _extract_openai_sse_text(response.text)
+            if text:
+                return text.strip()
+            preview = (response.text or "").replace("\n", " ")[:500]
+            raise ProviderError(
+                f"{self.name} returned non-JSON response: {preview}"
+            ) from exc
+
+        text = _extract_openai_chat_text(data)
+        if not text:
+            preview = json.dumps(data, ensure_ascii=False)[:500]
+            raise ProviderError(f"{self.name} returned empty completion: {preview}")
+        return text.strip()
 
 
 @dataclass(slots=True)
@@ -350,6 +536,7 @@ class CodexCliProvider:
                 text=True,
                 capture_output=True,
                 timeout=10,
+                env=_codex_subprocess_env(),
             )
         except FileNotFoundError as exc:
             raise ProviderError(_codex_command_not_found(self.codex_command)) from exc
@@ -362,6 +549,7 @@ class CodexCliProvider:
                 text=True,
                 capture_output=True,
                 timeout=10,
+                env=_codex_subprocess_env(),
             )
         except FileNotFoundError as exc:
             raise ProviderError(_codex_command_not_found(self.codex_command)) from exc
@@ -450,6 +638,7 @@ class CodexCliProvider:
                     capture_output=True,
                     timeout=timeout_seconds,
                     cwd=str(self.workspace_root),
+                    env=_codex_subprocess_env(),
                 )
             except FileNotFoundError as exc:
                 raise ProviderError(_codex_command_not_found(self.codex_command)) from exc
@@ -576,6 +765,80 @@ def _parse_json_object(raw_text: str) -> dict | None:
                 continue
             return parsed if isinstance(parsed, dict) else None
     return None
+
+
+def _openai_messages(messages: list[dict]) -> list[dict[str, str]]:
+    converted = []
+    for message in messages:
+        role = str(message.get("role") or "user")
+        if role not in {"system", "user", "assistant"}:
+            role = "user"
+        content = message.get("content", "")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        converted.append({"role": role, "content": content})
+    return converted
+
+
+def _extract_openai_chat_text(data: object) -> str:
+    if not isinstance(data, dict):
+        return ""
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        message = first.get("message")
+        if isinstance(message, dict):
+            text = _content_to_text(message.get("content"))
+            if text:
+                return text
+        text = _content_to_text(first.get("text"))
+        if text:
+            return text
+        delta = first.get("delta")
+        if isinstance(delta, dict):
+            return _content_to_text(delta.get("content"))
+
+    for key in ("content", "text", "message"):
+        text = _content_to_text(data.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _extract_openai_sse_text(raw_text: str) -> str:
+    parts = []
+    for line in (raw_text or "").splitlines():
+        line = line.strip()
+        if not line or not line.startswith("data:"):
+            continue
+        payload = line.removeprefix("data:").strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        text = _extract_openai_chat_text(data)
+        if text:
+            parts.append(text)
+    return "".join(parts)
+
+
+def _content_to_text(content: object) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
 
 
 def _truncate_tool_result(result, limit: int = 4000) -> str:
