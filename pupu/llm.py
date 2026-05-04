@@ -231,13 +231,38 @@ def _deepseek_client():
 
 def _deepseek_provider():
     default_model = os.environ.get("PUPU_DEEPSEEK_MODEL", "deepseek-v4-pro").strip() or "deepseek-v4-pro"
-    return _DeepSeekAnthropicProvider(_deepseek_client(), default_model)
+    return _DeepSeekAnthropicProvider(
+        _deepseek_client(),
+        default_model,
+        _deepseek_request_overrides(),
+    )
+
+
+def _deepseek_request_overrides() -> dict:
+    effort = os.environ.get("PUPU_DEEPSEEK_EFFORT", "").strip().lower()
+    if not effort:
+        return {}
+
+    effort_aliases = {
+        "low": "high",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max",
+    }
+    normalized = effort_aliases.get(effort, "")
+    if not normalized:
+        print(f"[pupu][llm] ignore invalid PUPU_DEEPSEEK_EFFORT={effort!r}; expected high/max")
+        return {}
+
+    return {"output_config": {"effort": normalized}}
 
 
 class _DeepSeekAnthropicProvider:
-    def __init__(self, client: object, default_model: str):
+    def __init__(self, client: object, default_model: str, request_overrides: dict | None = None):
         self._provider = AnthropicProvider(client)
         self._default_model = default_model
+        self._request_overrides = request_overrides or {}
 
     def chat_complete(
         self,
@@ -262,6 +287,7 @@ class _DeepSeekAnthropicProvider:
             max_tokens=max_tokens,
             tools=tools,
             tool_handler=tool_handler,
+            request_overrides=self._request_overrides,
             session_id=session_id,
             image_urls=image_urls,
             is_admin=is_admin,
@@ -284,6 +310,7 @@ class _DeepSeekAnthropicProvider:
             system=system,
             user_content=user_content,
             max_tokens=max_tokens,
+            request_overrides=self._request_overrides,
             task_name=task_name,
         )
 

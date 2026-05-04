@@ -15,7 +15,7 @@ from pupu.richmsg import parse_onebot_message
 from pupu.scheduler import onebot_scheduled_tasks_loop
 
 from . import state
-from .buffering import buffer_message, owner_no_reply_followup
+from .buffering import buffer_message, register_owner_wait_followup_sender
 from .common import is_admin, is_owner, log, send_private_segments, split_message
 
 try:
@@ -96,6 +96,11 @@ if HAS_ONEBOT:
             state.scheduler_task = asyncio.create_task(onebot_scheduled_tasks_loop(bot))
             print("[pupu] scheduled tasks loop started")
 
+        try:
+            register_owner_wait_followup_sender(bot, asyncio.get_running_loop())
+        except Exception as exc:
+            print(f"[pupu] register owner wait_followup sender failed: {exc}")
+
         if state.proactive_task is not None:
             return
 
@@ -116,14 +121,6 @@ if HAS_ONEBOT:
                 segments = split_message(text)
                 await send_private_segments(bot, int(owner_qq), segments)
                 log("send", "私聊", str(owner_qq), text)
-                if (
-                    state.proactive_followup_task is not None
-                    and not state.proactive_followup_task.done()
-                ):
-                    state.proactive_followup_task.cancel()
-                state.proactive_followup_task = asyncio.create_task(
-                    owner_no_reply_followup(bot, int(owner_qq))
-                )
 
             state.proactive_task = asyncio.create_task(proactive_loop(send_to_owner))
             print(f"[pupu] proactive messaging enabled (familiarity: {score})")
@@ -144,6 +141,3 @@ if HAS_ONEBOT:
         if state.proactive_task is not None:
             state.proactive_task.cancel()
             state.proactive_task = None
-        if state.proactive_followup_task is not None:
-            state.proactive_followup_task.cancel()
-            state.proactive_followup_task = None

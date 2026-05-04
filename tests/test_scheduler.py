@@ -8,7 +8,7 @@ TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
-from pupu.scheduler import _onebot_send
+from pupu.scheduler import _is_wait_followup_task, _latest_message_is_user, _onebot_send
 
 
 async def _no_sleep(_seconds):
@@ -51,6 +51,21 @@ class SchedulerSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bot.group_messages, [(456, "第一句"), (456, "第二句")])
         printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn(">>> 发送 | 群456 | 456 | 第一句", printed)
+
+
+class SchedulerGuardTests(unittest.TestCase):
+    def test_is_wait_followup_task_detects_prefix(self):
+        self.assertTrue(_is_wait_followup_task({"title": "wait_followup:owner"}))
+        self.assertTrue(_is_wait_followup_task({"title": "WAIT_FOLLOWUP:any"}))
+        self.assertFalse(_is_wait_followup_task({"title": "提醒"}))
+
+    def test_latest_message_is_user(self):
+        with patch("pupu.scheduler.get_recent_messages", return_value=[{"role": "user"}]):
+            self.assertTrue(_latest_message_is_user("owner"))
+        with patch("pupu.scheduler.get_recent_messages", return_value=[{"role": "assistant"}]):
+            self.assertFalse(_latest_message_is_user("owner"))
+        with patch("pupu.scheduler.get_recent_messages", return_value=[]):
+            self.assertFalse(_latest_message_is_user("owner"))
 
 
 if __name__ == "__main__":

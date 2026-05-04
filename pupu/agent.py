@@ -33,6 +33,7 @@ from .memory import (
     upsert_self_facts,
     upsert_user_facts,
 )
+from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
 from .persona import build_batch_review_prompt, build_system_prompt
 from .review_followups import (
     apply_review_task_updates,
@@ -49,75 +50,10 @@ REVIEW_SOURCE = "chat"
 CHAT_HISTORY_LIMIT = 30
 PROMPT_SUMMARY_LIMIT = 3
 PROMPT_IMPORTANT_EVENT_LIMIT = 6
-BATCH_REVIEW_MAX_TOKENS = 768
+BATCH_REVIEW_MAX_TOKENS = 10000
 REVIEW_TASK_CONTEXT_LIMIT = 30
 REVIEW_TASK_FIELD_LIMIT = 120
 _batch_review_lock = threading.Lock()
-
-
-def _format_turn_timestamp() -> str:
-    """Return a compact local timestamp for each user turn."""
-    return datetime.now().strftime("%y%m%d-%H%M")
-
-
-def _strip_code_fence(raw_text: str) -> str:
-    raw = (raw_text or "").strip()
-    if not raw.startswith("```"):
-        return raw
-    lines = raw.splitlines()
-    if lines:
-        lines = lines[1:]
-    raw = "\n".join(lines)
-    if raw.endswith("```"):
-        raw = raw.rsplit("```", 1)[0]
-    return raw.strip()
-
-
-def _repair_unescaped_quotes_in_json_strings(raw_text: str) -> str:
-    """Best-effort repair for model JSON that forgot to escape quotes inside strings."""
-    if not raw_text:
-        return raw_text
-
-    chars: list[str] = []
-    in_string = False
-    escaped = False
-    length = len(raw_text)
-
-    def _next_non_ws(index: int) -> str:
-        j = index + 1
-        while j < length and raw_text[j].isspace():
-            j += 1
-        return raw_text[j] if j < length else ""
-
-    for i, ch in enumerate(raw_text):
-        if not in_string:
-            chars.append(ch)
-            if ch == '"':
-                in_string = True
-            continue
-
-        if escaped:
-            chars.append(ch)
-            escaped = False
-            continue
-
-        if ch == "\\":
-            chars.append(ch)
-            escaped = True
-            continue
-
-        if ch == '"':
-            next_ch = _next_non_ws(i)
-            if next_ch and next_ch not in {",", "}", "]", ":"}:
-                chars.append('\\"')
-                continue
-            chars.append(ch)
-            in_string = False
-            continue
-
-        chars.append(ch)
-
-    return "".join(chars)
 
 
 def _normalize_fact_map(value) -> dict[str, str]:
@@ -297,6 +233,70 @@ def _seconds_since_iso(value: str | None, now: datetime | None = None) -> int | 
     return max(0, int((current - moment).total_seconds()))
 
 
+def _format_turn_timestamp() -> str:
+    """Return a compact local timestamp for each user turn."""
+    return datetime.now().strftime("%y%m%d-%H%M")
+
+
+def _strip_code_fence(raw_text: str) -> str:
+    raw = (raw_text or "").strip()
+    if not raw.startswith("```"):
+        return raw
+    lines = raw.splitlines()
+    if lines:
+        lines = lines[1:]
+    raw = "\n".join(lines)
+    if raw.endswith("```"):
+        raw = raw.rsplit("```", 1)[0]
+    return raw.strip()
+
+
+def _repair_unescaped_quotes_in_json_strings(raw_text: str) -> str:
+    if not raw_text:
+        return raw_text
+
+    chars: list[str] = []
+    in_string = False
+    escaped = False
+    length = len(raw_text)
+
+    def _next_non_ws(index: int) -> str:
+        j = index + 1
+        while j < length and raw_text[j].isspace():
+            j += 1
+        return raw_text[j] if j < length else ""
+
+    for i, ch in enumerate(raw_text):
+        if not in_string:
+            chars.append(ch)
+            if ch == '"':
+                in_string = True
+            continue
+
+        if escaped:
+            chars.append(ch)
+            escaped = False
+            continue
+
+        if ch == "\\":
+            chars.append(ch)
+            escaped = True
+            continue
+
+        if ch == '"':
+            next_ch = _next_non_ws(i)
+            if next_ch and next_ch not in {",", "}", "]", ":"}:
+                chars.append('\\"')
+                continue
+            chars.append(ch)
+            in_string = False
+            continue
+
+        chars.append(ch)
+
+    return "".join(chars)
+
+
 def chat(
     user_input: str,
     session_id: str = "default",
@@ -306,6 +306,10 @@ def chat(
     message_source: str = REVIEW_SOURCE,
 ) -> str:
     """Process one turn of conversation. Returns the assistant's text reply."""
+    from .dialogue_loop import cancel_wait_timer, schedule_wait_timer
+
+    cancel_wait_timer(session_id)
+
     display_text = user_input
     if image_urls:
         n = len(image_urls)
@@ -345,12 +349,12 @@ def chat(
             reason_hint=reason_hint or None,
         )
 
-    final_text = chat_complete(
+    final_text_raw = chat_complete(
         role="chat",
         model=MODEL,
-        system=system_prompt,
+        system=system_prompt + DIALOGUE_OUTPUT_PROTOCOL,
         messages=messages,
-        max_tokens=2048,
+        max_tokens=10000,
         tools=TOOL_DEFINITIONS,
         tool_handler=_tool_handler,
         session_id=session_id,
@@ -358,7 +362,16 @@ def chat(
         is_admin=is_admin,
         tool_exposure="chat",
     )
+    final_text, should_wait = _parse_dialogue_output(final_text_raw)
+    print(
+        "[pupu] dialogue decision: "
+        f"session={session_id} source={message_source} should_wait={should_wait}"
+    )
+
     save_message("assistant", final_text, session_id, source=message_source)
+
+    if should_wait:
+        schedule_wait_timer(session_id)
 
     if message_source == REVIEW_SOURCE:
         _maybe_batch_review(session_id)
@@ -403,7 +416,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
         print(
             "[pupu] batch review context: "
             f"last_reviewed_id={last_reviewed}, pending_turns={pending_turns}, "
-            f"idle_seconds={idle_seconds}"
+                f"idle_seconds={idle_seconds}"
         )
 
         trigger = ""

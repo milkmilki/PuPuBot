@@ -54,7 +54,7 @@ task_updates 用来创建、取消或改时间，不再输出 task_drafts。
 - reason: 为什么要这样更新任务
 
 task_updates 规则：
-- 用户提出明确时间和提醒/跟进意图时，用 create
+- 用户或仆仆提出明确时间和提醒/跟进意图时，比如“半个小时后再回来找你”，用 create
 - 用户明确表示某个提醒不用了、已经完成、或现在就去做了时，用 cancel_matching
 - 用户把已有提醒的时间从一个点改成另一个点时，用 reschedule_matching，不要重复 create
 - 普通闲聊、模糊计划、没有后续价值的内容，不要产出 task_update

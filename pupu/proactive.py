@@ -4,6 +4,7 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 
+from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
 from .llm import JUDGE_MODEL, MODEL, chat_complete
 from .tools import PROACTIVE_TOOL_DEFINITIONS, execute_tool
 from .familiarity import get_proactive_freq, score_to_level, PROACTIVE_THRESHOLD
@@ -251,6 +252,9 @@ PROACTIVE_TOOLS = [
 
 def generate_proactive_message(score: int, period: dict) -> str | None:
     """Generate a proactive message using Claude API with web search capability."""
+    from .dialogue_loop import cancel_wait_timer, schedule_wait_timer
+
+    cancel_wait_timer(OWNER_SESSION)
     try:
         prompt = _build_proactive_prompt(score, period)
         print(
@@ -273,9 +277,9 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
         text = chat_complete(
             role="proactive",
             model=MODEL,
-            system=prompt,
+            system=prompt + DIALOGUE_OUTPUT_PROTOCOL,
             messages=messages,
-            max_tokens=512,
+            max_tokens=5000,
             tools=PROACTIVE_TOOL_DEFINITIONS,
             tool_handler=_tool_handler,
             session_id=OWNER_SESSION,
@@ -284,9 +288,12 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
         )
 
         print(f"[pupu][proactive] phase=generate done text={_truncate_debug(text, 220)}")
-        if text:
-            save_message("assistant", text, OWNER_SESSION, source="proactive")
-        return text
+        content, should_wait = _parse_dialogue_output(text or "")
+        if content:
+            save_message("assistant", content, OWNER_SESSION, source="proactive")
+        if should_wait:
+            schedule_wait_timer(OWNER_SESSION)
+        return content or None
     except Exception as e:
         print(f"[pupu][proactive] phase=generate failed error={e}")
         return None

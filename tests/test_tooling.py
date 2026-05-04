@@ -197,6 +197,34 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertIn(f"id={task_id}", result)
         self.assertEqual(remaining[0]["run_at"], "2026-05-01T09:00:00")
 
+    def test_scheduled_task_cancel_matching_rejects_generic_query(self):
+        first_id = create_scheduled_task(
+            "test_tooling_registry",
+            "生日提醒",
+            "提醒用户生日",
+            "2026-05-01T09:00:00",
+            "yearly",
+            None,
+        )
+        second_id = create_scheduled_task(
+            "test_tooling_registry",
+            "喝水提醒",
+            "提醒用户喝水",
+            "2026-05-01T10:00:00",
+            "daily",
+            None,
+        )
+
+        result = execute_tool(
+            "manage_scheduled_task",
+            {"action": "cancel_matching", "query": "提醒"},
+            session_id="test_tooling_registry",
+        )
+        remaining = list_scheduled_tasks("test_tooling_registry")
+
+        self.assertIn("没有找到匹配", result)
+        self.assertEqual([row["id"] for row in remaining], [first_id, second_id])
+
     def test_server_descriptions_expose_builtin_servers(self):
         names = {server["name"] for server in describe_tool_servers()}
         self.assertEqual(

@@ -152,6 +152,40 @@ class LLMProviderTests(unittest.TestCase):
         self.assertEqual(fake_client.messages.create.call_count, 2)
         self.assertEqual(fake_client.messages.create.call_args_list[0].kwargs["model"], "deepseek-v4-pro")
 
+    def test_deepseek_provider_applies_effort_from_env(self):
+        fake_client = Mock()
+        text_block = Mock()
+        text_block.type = "text"
+        text_block.text = "ok"
+        fake_client.messages.create.return_value = Mock(stop_reason="end_turn", content=[text_block])
+
+        with patch("pupu.llm.anthropic.Anthropic", return_value=fake_client):
+            with patch.dict(
+                os.environ,
+                {
+                    "PUPU_CHAT_PROVIDER": "deepseek",
+                    "PUPU_DEEPSEEK_BASE_URL": "https://api.deepseek.com/anthropic",
+                    "PUPU_DEEPSEEK_API_KEY": "test-key",
+                    "PUPU_DEEPSEEK_MODEL": "deepseek-v4-pro",
+                    "PUPU_DEEPSEEK_EFFORT": "xhigh",
+                },
+                clear=False,
+            ):
+                provider = llm.get_provider("chat")
+
+        result = provider.chat_complete(
+            model="deepseek-v4-pro",
+            system="system",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=20,
+        )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(
+            fake_client.messages.create.call_args.kwargs["output_config"],
+            {"effort": "max"},
+        )
+
     def test_openai_compatible_provider_posts_chat_completion(self):
         provider = OpenAICompatibleProvider(
             name="xiaoshuoai",
@@ -224,7 +258,7 @@ class LLMProviderTests(unittest.TestCase):
             endpoint="https://api.deepseek.com/chat/completions",
             api_key="test-key",
             model="deepseek-v4-pro",
-            reasoning_effort="high",
+            reasoning_effort="max",
             thinking_enabled=True,
         )
         fake_response = Mock()

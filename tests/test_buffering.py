@@ -9,7 +9,7 @@ os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from plugins.pupu_support import state
-from plugins.pupu_support.buffering import debounce_flush
+from plugins.pupu_support.buffering import buffer_message, debounce_flush
 
 
 class BufferingTests(unittest.IsolatedAsyncioTestCase):
@@ -93,6 +93,34 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         mock_create.assert_not_called()
         self.assertNotIn(sid, state.msg_buffers)
         self.assertNotIn(sid, state.debounce_tasks)
+
+    async def test_owner_message_cancels_wait_followup_timer(self):
+        sid = state.OWNER_SESSION
+        scheduled = object()
+        with patch(
+            "plugins.pupu_support.buffering.cancel_wait_timer",
+            return_value=True,
+        ) as mock_cancel:
+            with patch(
+                "plugins.pupu_support.buffering.asyncio.create_task",
+                return_value=scheduled,
+            ) as mock_create:
+                await buffer_message(
+                    sid=sid,
+                    text="hi",
+                    image_urls=[],
+                    bot=object(),
+                    event=object(),
+                    is_admin=True,
+                    nickname="owner",
+                    session_label="私聊",
+                )
+
+        mock_cancel.assert_called_once_with(sid)
+        self.assertIn(sid, state.debounce_tasks)
+        self.assertIs(state.debounce_tasks[sid], scheduled)
+        created_coro = mock_create.call_args.args[0]
+        created_coro.close()
 
 
 if __name__ == "__main__":

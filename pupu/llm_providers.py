@@ -112,15 +112,19 @@ class AnthropicProvider:
         max_tokens: int,
         tools: list[dict] | None = None,
         tool_handler: ToolHandler | None = None,
+        request_overrides: dict | None = None,
         **_: object,
     ) -> str:
-        response = self.client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=messages,
-            tools=tools or None,
-        )
+        create_kwargs = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": messages,
+            "tools": tools or None,
+        }
+        if request_overrides:
+            create_kwargs.update(request_overrides)
+        response = self.client.messages.create(**create_kwargs)
 
         while response.stop_reason == "tool_use":
             if tool_handler is None:
@@ -145,13 +149,16 @@ class AnthropicProvider:
                 {"role": "assistant", "content": response.content},
                 {"role": "user", "content": tool_results},
             ]
-            response = self.client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
-                tools=tools or None,
-            )
+            create_kwargs = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": system,
+                "messages": messages,
+                "tools": tools or None,
+            }
+            if request_overrides:
+                create_kwargs.update(request_overrides)
+            response = self.client.messages.create(**create_kwargs)
 
         text = join_text_blocks(response.content).strip()
         if not text:
@@ -194,14 +201,18 @@ class AnthropicProvider:
         system: str,
         user_content: str,
         max_tokens: int,
+        request_overrides: dict | None = None,
         **_: object,
     ) -> str:
-        response = self.client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user_content}],
-        )
+        create_kwargs = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": "user", "content": user_content}],
+        }
+        if request_overrides:
+            create_kwargs.update(request_overrides)
+        response = self.client.messages.create(**create_kwargs)
         text = join_text_blocks(response.content).strip()
         if not text:
             try:

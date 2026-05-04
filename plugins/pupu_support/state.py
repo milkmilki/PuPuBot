@@ -22,7 +22,6 @@ DEBOUNCE_SECONDS = 20.0
 
 proactive_task: asyncio.Task | None = None
 scheduler_task: asyncio.Task | None = None
-proactive_followup_task: asyncio.Task | None = None
 maintenance_task: asyncio.Task | None = None
 tts_reply_enabled: bool = _env_bool("PUPU_TTS_REPLY_DEFAULT", False)
 

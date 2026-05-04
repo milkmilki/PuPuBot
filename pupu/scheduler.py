@@ -6,7 +6,7 @@ import threading
 from datetime import datetime
 
 from .config import load_first_numeric_owner_id
-from .memory import finalize_scheduled_task, get_due_scheduled_tasks
+from .memory import finalize_scheduled_task, get_due_scheduled_tasks, get_recent_messages
 
 _scheduler_lock = threading.Lock()
 
@@ -19,6 +19,32 @@ def _scheduled_user_message(task: dict) -> str:
     title = (task.get("title") or "提醒").strip()
     inst = (task.get("instruction") or "").strip()
     return f"[定时任务「{title}」]\n{inst}"
+
+
+def _latest_message_is_user(session_id: str) -> bool:
+    recent = get_recent_messages(1, session_id)
+    if not recent:
+        return False
+    return str(recent[-1].get("role") or "") == "user"
+
+
+def _is_wait_followup_task(task: dict) -> bool:
+    """Legacy DB tasks from an older design; in-memory timers replace these."""
+    return str(task.get("title") or "").strip().lower().startswith("wait_followup")
+
+
+def _finalize_due_task(task: dict) -> None:
+    tid = task["id"]
+    old_run = task["run_at"]
+    rk = task.get("repeat_kind") or "once"
+    print(
+        "[pupu][scheduled-debug] scheduler_finalize_call "
+        f"task_id={tid} session={task.get('session_id')} old_run_at={old_run} repeat={rk} interval={task.get('interval_seconds')}"
+    )
+    with _scheduler_lock:
+        ok = finalize_scheduled_task(tid, old_run, rk, task.get("interval_seconds"))
+    if not ok:
+        print(f"[pupu] scheduled task #{tid}: finalize skipped (stale run_at?)")
 
 
 def _split_message(text: str) -> list[str]:
@@ -85,49 +111,76 @@ async def _onebot_send(bot, session_id: str, text: str) -> None:
 
 async def onebot_scheduled_tasks_loop(bot) -> None:
     """Wake periodically, run due tasks for this bot's reachable sessions."""
-    import asyncio
-
     from .agent import chat
 
     while True:
         await asyncio.sleep(45)
         now_iso = datetime.now().isoformat(timespec="seconds")
         with _scheduler_lock:
-            tasks = get_due_scheduled_tasks(now_iso, 10)
+            tasks = [
+                task
+                for task in get_due_scheduled_tasks(now_iso, 10)
+                if not _is_wait_followup_task(task)
+            ]
+        if tasks:
+            brief = "; ".join(
+                f"id={task['id']} session={task['session_id']} run_at={task['run_at']} repeat={task.get('repeat_kind')} title={str(task.get('title') or '')[:18]}"
+                for task in tasks
+            )
+            print(
+                "[pupu][scheduled-debug] scheduler_tick_due "
+                f"now={now_iso} count={len(tasks)} tasks=[{brief}]"
+            )
         for task in tasks:
             tid = task["id"]
             sid = task["session_id"]
-            old_run = task["run_at"]
-            rk = task.get("repeat_kind") or "once"
+            print(
+                "[pupu][scheduled-debug] scheduler_task_start "
+                f"task_id={tid} session={sid} run_at={task.get('run_at')} repeat={task.get('repeat_kind')}"
+            )
+
             hint = "这是你自己之前设的定时提醒触发的，自然一点接上就好"
             synthetic = _scheduled_user_message(task)
+            source = "scheduled"
+
             try:
                 reply = await asyncio.to_thread(
                     chat,
-                synthetic,
-                sid,
-                sid == "owner",
-                None,
-                hint,
-                "scheduled",
-            )
+                    synthetic,
+                    sid,
+                    sid == "owner",
+                    None,
+                    hint,
+                    source,
+                )
             except Exception as e:
                 print(f"[pupu] scheduled task #{tid} chat failed: {e}")
+                print(
+                    "[pupu][scheduled-debug] scheduler_task_end "
+                    f"task_id={tid} session={sid} result=chat_failed"
+                )
                 continue
             if not reply or not str(reply).strip():
+                print(
+                    "[pupu][scheduled-debug] scheduler_task_end "
+                    f"task_id={tid} session={sid} result=empty_reply"
+                )
                 continue
             text = str(reply).strip()
             try:
                 await _onebot_send(bot, sid, text)
             except Exception as e:
                 print(f"[pupu] scheduled task #{tid} send failed: {e}")
-                continue
-            with _scheduler_lock:
-                ok = finalize_scheduled_task(
-                    tid, old_run, rk, task.get("interval_seconds")
+                print(
+                    "[pupu][scheduled-debug] scheduler_task_end "
+                    f"task_id={tid} session={sid} result=send_failed"
                 )
-            if not ok:
-                print(f"[pupu] scheduled task #{tid}: finalize skipped (stale run_at?)")
+                continue
+            _finalize_due_task(task)
+            print(
+                "[pupu][scheduled-debug] scheduler_task_end "
+                f"task_id={tid} session={sid} result=sent_and_finalized"
+            )
 
 
 def cli_scheduled_tasks_tick() -> None:
@@ -136,14 +189,32 @@ def cli_scheduled_tasks_tick() -> None:
 
     now_iso = datetime.now().isoformat(timespec="seconds")
     with _scheduler_lock:
-        tasks = get_due_scheduled_tasks(now_iso, 10)
+        tasks = [
+            task
+            for task in get_due_scheduled_tasks(now_iso, 10)
+            if not _is_wait_followup_task(task)
+        ]
+    if tasks:
+        brief = "; ".join(
+            f"id={task['id']} session={task['session_id']} run_at={task['run_at']} repeat={task.get('repeat_kind')} title={str(task.get('title') or '')[:18]}"
+            for task in tasks
+        )
+        print(
+            "[pupu][scheduled-debug] cli_tick_due "
+            f"now={now_iso} count={len(tasks)} tasks=[{brief}]"
+        )
     for task in tasks:
         tid = task["id"]
         sid = task["session_id"]
-        old_run = task["run_at"]
-        rk = task.get("repeat_kind") or "once"
+        print(
+            "[pupu][scheduled-debug] cli_task_start "
+            f"task_id={tid} session={sid} run_at={task.get('run_at')} repeat={task.get('repeat_kind')}"
+        )
+
         synthetic = _scheduled_user_message(task)
         hint = "这是你自己之前设的定时提醒触发的，自然一点接上就好"
+        source = "scheduled"
+
         try:
             reply = chat(
                 synthetic,
@@ -151,14 +222,25 @@ def cli_scheduled_tasks_tick() -> None:
                 is_admin=(sid == "owner"),
                 image_urls=None,
                 reply_speed_hint=hint,
-                message_source="scheduled",
+                message_source=source,
             )
         except Exception as e:
             print(f"[pupu] scheduled task #{tid} chat failed: {e}")
+            print(
+                "[pupu][scheduled-debug] cli_task_end "
+                f"task_id={tid} session={sid} result=chat_failed"
+            )
             continue
         if not reply or not str(reply).strip():
+            print(
+                "[pupu][scheduled-debug] cli_task_end "
+                f"task_id={tid} session={sid} result=empty_reply"
+            )
             continue
         text = str(reply).strip()
         print(f"\n[pupu 定时任务 → {sid}]\n{text}\n")
-        with _scheduler_lock:
-            finalize_scheduled_task(tid, old_run, rk, task.get("interval_seconds"))
+        _finalize_due_task(task)
+        print(
+            "[pupu][scheduled-debug] cli_task_end "
+            f"task_id={tid} session={sid} result=printed_and_finalized"
+        )

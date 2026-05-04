@@ -3,12 +3,88 @@
 from __future__ import annotations
 
 import calendar
+import os
 import re
 from datetime import datetime
 
 from .db import get_conn
 
 MAX_SCHEDULED_TASKS_PER_SESSION = 30
+
+_GENERIC_TASK_QUERY_WORDS = {
+    "提醒",
+    "定时",
+    "任务",
+    "定时任务",
+    "闹钟",
+    "待办",
+    "那个提醒",
+    "这个提醒",
+    "那个任务",
+    "这个任务",
+}
+
+
+def _debug_enabled() -> bool:
+    return str(os.environ.get("PUPU_DEBUG_SCHEDULED_TASKS", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _task_brief(row: dict) -> str:
+    return (
+        f"id={row.get('id')}"
+        f" enabled={row.get('enabled')}"
+        f" run_at={row.get('run_at')}"
+        f" repeat={row.get('repeat_kind')}"
+        f" title={str(row.get('title') or '')[:24]}"
+    )
+
+
+def _debug_dump_session_tasks(conn, session_id: str, tag: str, limit: int = 30) -> None:
+    if not _debug_enabled() or not session_id:
+        return
+    rows = conn.execute(
+        """SELECT id, session_id, title, run_at, repeat_kind, enabled
+           FROM scheduled_tasks
+           WHERE session_id = ?
+           ORDER BY id ASC
+           LIMIT ?""",
+        (session_id, max(1, int(limit))),
+    ).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) AS c FROM scheduled_tasks WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    enabled = conn.execute(
+        "SELECT COUNT(*) AS c FROM scheduled_tasks WHERE session_id = ? AND enabled = 1",
+        (session_id,),
+    ).fetchone()
+    total_count = int(total["c"]) if total else 0
+    enabled_count = int(enabled["c"]) if enabled else 0
+    preview = "; ".join(_task_brief(dict(row)) for row in rows)
+    print(
+        "[pupu][scheduled-debug] "
+        f"{tag} session={session_id} total={total_count} enabled={enabled_count} preview=[{preview}]"
+    )
+
+
+def _debug_dump_task_by_id(conn, task_id: int, tag: str) -> dict | None:
+    if task_id is None:
+        return None
+    row = conn.execute(
+        """SELECT id, session_id, title, instruction, run_at, repeat_kind, interval_seconds, enabled
+           FROM scheduled_tasks
+           WHERE id = ?""",
+        (task_id,),
+    ).fetchone()
+    data = dict(row) if row else None
+    if _debug_enabled():
+        print(f"[pupu][scheduled-debug] {tag} task={data}")
+    return data
 
 
 def count_scheduled_tasks(session_id: str) -> int:
@@ -31,6 +107,12 @@ def create_scheduled_task(
 ) -> int:
     conn = get_conn()
     now = datetime.now().isoformat()
+    if _debug_enabled():
+        print(
+            "[pupu][scheduled-debug] create request "
+            f"session={session_id} title={title} run_at={run_at} repeat={repeat_kind} interval={interval_seconds}"
+        )
+        _debug_dump_session_tasks(conn, session_id, "create_before")
     cursor = conn.execute(
         """INSERT INTO scheduled_tasks
            (session_id, title, instruction, run_at, repeat_kind, interval_seconds, enabled, created_at)
@@ -47,6 +129,8 @@ def create_scheduled_task(
     )
     conn.commit()
     task_id = cursor.lastrowid
+    _debug_dump_task_by_id(conn, int(task_id), "create_after_row")
+    _debug_dump_session_tasks(conn, session_id, "create_after")
     conn.close()
     return int(task_id)
 
@@ -68,21 +152,39 @@ def cancel_matching_scheduled_tasks(session_id: str, query: str) -> list[dict]:
     query_text = str(query or "").strip()
     if not query_text:
         return []
+    if _is_query_too_generic(query_text):
+        if _debug_enabled():
+            print(
+                "[pupu][scheduled-debug] cancel_matching rejected_generic "
+                f"session={session_id} query={query_text}"
+            )
+        return []
 
     rows = list_scheduled_tasks(session_id)
     matches = [row for row in rows if _scheduled_task_matches_query(row, query_text)]
+    if _debug_enabled():
+        print(
+            "[pupu][scheduled-debug] cancel_matching matched "
+            f"session={session_id} query={query_text} match_ids={[int(row['id']) for row in matches]}"
+        )
     if not matches:
         return []
 
     conn = get_conn()
     cancelled = []
     try:
+        _debug_dump_session_tasks(conn, session_id, "cancel_matching_before")
         for row in matches:
             task_id = int(row["id"])
             cursor = conn.execute(
                 "UPDATE scheduled_tasks SET enabled = 0 WHERE id = ? AND session_id = ? AND enabled = 1",
                 (task_id, session_id),
             )
+            if _debug_enabled():
+                print(
+                    "[pupu][scheduled-debug] cancel_matching update "
+                    f"session={session_id} task_id={task_id} rowcount={cursor.rowcount}"
+                )
             if cursor.rowcount <= 0:
                 continue
             conn.execute(
@@ -95,6 +197,7 @@ def cancel_matching_scheduled_tasks(session_id: str, query: str) -> list[dict]:
             )
             cancelled.append(dict(row))
         conn.commit()
+        _debug_dump_session_tasks(conn, session_id, "cancel_matching_after")
     finally:
         conn.close()
     return cancelled
@@ -111,15 +214,28 @@ def reschedule_matching_scheduled_tasks(
     run_at_text = str(run_at or "").strip()
     if not query_text or not run_at_text:
         return []
+    if _is_query_too_generic(query_text):
+        if _debug_enabled():
+            print(
+                "[pupu][scheduled-debug] reschedule_matching rejected_generic "
+                f"session={session_id} query={query_text}"
+            )
+        return []
 
     rows = list_scheduled_tasks(session_id)
     matches = [row for row in rows if _scheduled_task_matches_query(row, query_text)]
+    if _debug_enabled():
+        print(
+            "[pupu][scheduled-debug] reschedule_matching matched "
+            f"session={session_id} query={query_text} match_ids={[int(row['id']) for row in matches]}"
+        )
     if not matches:
         return []
 
     conn = get_conn()
     updated = []
     try:
+        _debug_dump_session_tasks(conn, session_id, "reschedule_matching_before")
         for row in matches:
             task_id = int(row["id"])
             if repeat_kind:
@@ -144,6 +260,11 @@ def reschedule_matching_scheduled_tasks(
                 )
             if cursor.rowcount <= 0:
                 continue
+            if _debug_enabled():
+                print(
+                    "[pupu][scheduled-debug] reschedule_matching update "
+                    f"session={session_id} task_id={task_id} rowcount={cursor.rowcount} new_run_at={run_at_text}"
+                )
             updated_row = dict(row)
             updated_row["old_run_at"] = row.get("run_at")
             updated_row["run_at"] = run_at_text
@@ -152,6 +273,7 @@ def reschedule_matching_scheduled_tasks(
                 updated_row["interval_seconds"] = interval_seconds
             updated.append(updated_row)
         conn.commit()
+        _debug_dump_session_tasks(conn, session_id, "reschedule_matching_after")
     finally:
         conn.close()
     return updated
@@ -213,10 +335,16 @@ def find_matching_scheduled_task(
 
 def cancel_scheduled_task(session_id: str, task_id: int) -> bool:
     conn = get_conn()
+    _debug_dump_session_tasks(conn, session_id, "cancel_task_before")
     cursor = conn.execute(
         "UPDATE scheduled_tasks SET enabled = 0 WHERE id = ? AND session_id = ? AND enabled = 1",
         (task_id, session_id),
     )
+    if _debug_enabled():
+        print(
+            "[pupu][scheduled-debug] cancel_task update "
+            f"session={session_id} task_id={task_id} rowcount={cursor.rowcount}"
+        )
     if cursor.rowcount > 0:
         conn.execute(
             """
@@ -227,6 +355,8 @@ def cancel_scheduled_task(session_id: str, task_id: int) -> bool:
             (session_id, task_id),
         )
     conn.commit()
+    _debug_dump_task_by_id(conn, task_id, "cancel_task_after_row")
+    _debug_dump_session_tasks(conn, session_id, "cancel_task_after")
     changed = cursor.rowcount
     conn.close()
     return changed > 0
@@ -264,6 +394,24 @@ def _scheduled_task_matches_query(row: dict, query: str) -> bool:
     return sum(1 for ch in set(chars) if ch in haystack) >= min(2, len(set(chars)))
 
 
+def _is_query_too_generic(query: str) -> bool:
+    needle = _normalize_match_text(query)
+    if not needle:
+        return True
+    if needle in _GENERIC_TASK_QUERY_WORDS:
+        return True
+
+    # Purely generic characters like “提醒任务” should not cancel/reschedule in bulk.
+    specific_chars = [
+        ch
+        for ch in needle
+        if not ch.isspace() and ch not in "提醒任务定时闹钟待办用户一下一个"
+    ]
+    if not specific_chars and len(needle) <= 4:
+        return True
+    return False
+
+
 def _normalize_match_text(value: str) -> str:
     return re.sub(r"\s+", "", str(value or "").lower())
 
@@ -282,6 +430,20 @@ def get_due_scheduled_tasks(before_iso: str, limit: int = 10) -> list[dict]:
            LIMIT ?""",
         (before_iso, limit),
     ).fetchall()
+    if _debug_enabled() and rows:
+        preview = "; ".join(
+            f"id={row['id']} session={row['session_id']} run_at={row['run_at']} repeat={row['repeat_kind']} title={str(row['title'])[:18]}"
+            for row in rows
+        )
+        print(
+            "[pupu][scheduled-debug] due_fetch "
+            f"before={before_iso} limit={limit} count={len(rows)} tasks=[{preview}]"
+        )
+        rows = [
+            row
+            for row in rows
+            if not str(row.get("title") or "").strip().lower().startswith("wait_followup")
+        ]
     conn.close()
     return [dict(row) for row in rows]
 
@@ -298,11 +460,25 @@ def finalize_scheduled_task(
     if normalized_repeat != "once":
         next_at = _compute_next_run_at_iso(fired_at, normalized_repeat, interval_seconds)
     conn = get_conn()
+    before_row = _debug_dump_task_by_id(conn, task_id, "finalize_before_row")
+    session_id = str(before_row.get("session_id") or "") if before_row else ""
+    if session_id:
+        _debug_dump_session_tasks(conn, session_id, "finalize_before")
+    if _debug_enabled():
+        print(
+            "[pupu][scheduled-debug] finalize request "
+            f"task_id={task_id} old_run_at={old_run_at} repeat={normalized_repeat} interval={interval_seconds} next_at={next_at}"
+        )
     if next_at is None:
         cursor = conn.execute(
             "DELETE FROM scheduled_tasks WHERE id = ? AND run_at = ?",
             (task_id, old_run_at),
         )
+        if _debug_enabled():
+            print(
+                "[pupu][scheduled-debug] finalize delete "
+                f"task_id={task_id} rowcount={cursor.rowcount}"
+            )
         if cursor.rowcount > 0:
             conn.execute(
                 """
@@ -317,8 +493,16 @@ def finalize_scheduled_task(
             "UPDATE scheduled_tasks SET run_at = ? WHERE id = ? AND run_at = ?",
             (next_at, task_id, old_run_at),
         )
+        if _debug_enabled():
+            print(
+                "[pupu][scheduled-debug] finalize update_run_at "
+                f"task_id={task_id} next_at={next_at} rowcount={cursor.rowcount}"
+            )
     ok = cursor.rowcount > 0
     conn.commit()
+    _debug_dump_task_by_id(conn, task_id, "finalize_after_row")
+    if session_id:
+        _debug_dump_session_tasks(conn, session_id, "finalize_after")
     conn.close()
     return ok
 

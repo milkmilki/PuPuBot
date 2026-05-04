@@ -100,17 +100,26 @@ def _dedupe_scheduled_tasks(conn) -> int:
     ).fetchall()
     disabled = 0
     for row in rows:
+        keep_id = int(row["keep_id"])
         all_ids = [
             int(part)
             for part in str(row["all_ids"]).split(",")
-            if part and int(part) != int(row["keep_id"])
+            if part and int(part) != keep_id
         ]
         if not all_ids:
             continue
         placeholders = ",".join("?" for _ in all_ids)
+        print(
+            "[pupu][scheduled-debug] maintenance_dedupe_candidates "
+            f"keep_id={keep_id} disable_ids={all_ids}"
+        )
         cur = conn.execute(
             f"UPDATE scheduled_tasks SET enabled = 0 WHERE id IN ({placeholders})",
             all_ids,
+        )
+        print(
+            "[pupu][scheduled-debug] maintenance_dedupe_applied "
+            f"keep_id={keep_id} disabled_rowcount={cur.rowcount}"
         )
         disabled += cur.rowcount
     return disabled

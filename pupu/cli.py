@@ -9,6 +9,7 @@ from rich.panel import Panel
 
 from .agent import chat, run_due_batch_reviews
 from .backup import maybe_run_daily_backup
+from .dialogue_loop import register_sender
 from .facts_report import format_facts_report
 from .important_event_report import format_important_events_report
 from .llm import preflight_model_providers
@@ -110,6 +111,15 @@ def main():
     init_db()
     preflight_model_providers()
     print_banner()
+
+    def _cli_followup_sender(text: str):
+        console.print()
+        console.print("[bold cyan]仆仆 (追问):[/bold cyan] ", end="")
+        console.print(Markdown(text))
+        console.print()
+
+    register_sender(OWNER_SESSION, _cli_followup_sender)
+
     threading.Thread(target=_cli_scheduler_loop, daemon=True).start()
 
     while True:

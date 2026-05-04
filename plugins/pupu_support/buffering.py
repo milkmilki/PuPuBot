@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from pupu.agent import chat
+from pupu.config import load_first_numeric_owner_id
+from pupu.dialogue_loop import cancel_wait_timer, is_followup_eligible, register_sender
 from pupu.familiarity import compute_reply_delay
 from pupu.memory import get_familiarity, save_message
 
@@ -18,32 +20,38 @@ from .common import (
 )
 
 
-async def owner_no_reply_followup(bot, owner_qq: int):
-    """If owner stays silent for 10 minutes after a proactive ping, follow up once."""
-    try:
-        await asyncio.sleep(600)
-        synthetic = (
-            "[系统提醒] 你10分钟前主动找对方聊天了，但对方一直没回。"
-            "请你自然地发一条轻微撒娇但不过分黏人的消息。"
-        )
-        hint = "这是未回复提醒触发的跟进消息，语气轻一点，不要重复之前那句。"
-        text = await asyncio.to_thread(
-            chat,
-            synthetic,
-            state.OWNER_SESSION,
-            True,
-            None,
-            hint,
-            "proactive_followup",
-        )
-        if not text or not str(text).strip():
-            return
-        followup = str(text).strip()
-        segments = split_message(followup)
-        await send_private_segments(bot, owner_qq, segments)
-        log("send", "私聊", str(owner_qq), followup)
-    except asyncio.CancelledError:
-        return
+def _make_qq_wait_followup_sender(bot, sid: str, loop: asyncio.AbstractEventLoop):
+    """Build a sync sender for wait_followup delivery (private / owner sessions)."""
+    uid = None
+    if sid == state.OWNER_SESSION:
+        uid = load_first_numeric_owner_id()
+    elif sid.startswith("private_"):
+        tail = sid[8:]
+        if tail.isdigit():
+            uid = int(tail)
+    if uid is None:
+        return None
+
+    async def _async_send(text: str):
+        segs = split_message(text)
+        await send_private_segments(bot, uid, segs)
+        log("send", "私聊", str(uid), text)
+
+    def _send(text: str):
+        fut = asyncio.run_coroutine_threadsafe(_async_send(text), loop)
+        try:
+            fut.result(timeout=120)
+        except Exception as exc:
+            print(f"[pupu] wait_followup send failed session={sid} err={exc}")
+
+    return _send
+
+
+def register_owner_wait_followup_sender(bot, loop: asyncio.AbstractEventLoop) -> None:
+    """Register owner session sender when the bot connects (for proactive + timer delivery)."""
+    sender = _make_qq_wait_followup_sender(bot, state.OWNER_SESSION, loop)
+    if sender:
+        register_sender(state.OWNER_SESSION, sender)
 
 
 async def buffer_message(
@@ -71,13 +79,17 @@ async def buffer_message(
 
     buf = state.msg_buffers[sid]
 
-    if (
-        sid == state.OWNER_SESSION
-        and state.proactive_followup_task is not None
-        and not state.proactive_followup_task.done()
-    ):
-        state.proactive_followup_task.cancel()
-        state.proactive_followup_task = None
+    try:
+        if cancel_wait_timer(sid):
+            print(f"[pupu] wait_followup timer cancelled: session={sid}")
+    except Exception as exc:
+        print(f"[pupu] wait_followup cancel failed: session={sid} error={exc}")
+
+    if is_followup_eligible(sid):
+        loop = asyncio.get_running_loop()
+        sender = _make_qq_wait_followup_sender(bot, sid, loop)
+        if sender:
+            register_sender(sid, sender)
 
     if text:
         buf["texts"].append(text)
