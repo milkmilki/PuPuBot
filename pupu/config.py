@@ -8,6 +8,9 @@ from pathlib import Path
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
+# Used when config omits ``owner_ids`` and for new console instances.
+DEFAULT_OWNER_IDS: list[str] = ["424225912"]
+
 
 def get_config_path() -> Path:
     override = os.environ.get("PUPU_CONFIG_PATH")
@@ -33,8 +36,8 @@ def load_owner_ids() -> list[str]:
     try:
         config = load_config()
     except Exception:
-        return []
-    return [str(value) for value in config.get("owner_ids", [])]
+        return list(DEFAULT_OWNER_IDS)
+    return [str(value) for value in config.get("owner_ids", DEFAULT_OWNER_IDS)]
 
 
 def load_owner_id_set() -> set[str]:

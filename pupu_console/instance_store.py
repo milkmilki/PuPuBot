@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from pupu.config import DEFAULT_OWNER_IDS
+
 from .paths import instances_dir
 
 _ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -157,7 +159,7 @@ def create_instance(
         "qq_mode": qq_mode,
         "qq_app_id": "",
         "qq_app_secret": "",
-        "owner_ids": [],
+        "owner_ids": list(DEFAULT_OWNER_IDS),
         "tool_servers": json.loads(json.dumps(DEFAULT_TOOL_SERVERS)),
     }
     persona = _default_persona()

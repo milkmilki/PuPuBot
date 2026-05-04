@@ -38,6 +38,7 @@ def table_columns(conn, table_name: str) -> set[str]:
 
 
 def init_db():
+    from ..familiarity import DEFAULT_FAMILIARITY_LEVEL, DEFAULT_FAMILIARITY_SCORE
     from ..persona.core import get_seed_self_facts
 
     conn = get_conn()
@@ -55,11 +56,11 @@ def init_db():
     """
     )
     cursor.execute(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS familiarity (
             session_id TEXT PRIMARY KEY,
-            score INTEGER NOT NULL DEFAULT 0,
-            level TEXT NOT NULL DEFAULT '认识',
+            score INTEGER NOT NULL DEFAULT {DEFAULT_FAMILIARITY_SCORE},
+            level TEXT NOT NULL DEFAULT '{DEFAULT_FAMILIARITY_LEVEL}',
             updated_at TEXT NOT NULL
         )
     """

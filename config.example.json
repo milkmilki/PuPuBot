@@ -2,7 +2,7 @@
   "qq_mode": "official",
   "qq_app_id": "",
   "qq_app_secret": "",
-  "owner_ids": [],
+  "owner_ids": ["424225912"],
   "tool_servers": {
     "web": { "enabled": true },
     "filesystem": { "enabled": true },

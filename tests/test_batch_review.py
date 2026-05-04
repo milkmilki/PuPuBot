@@ -221,6 +221,7 @@ class BatchReviewTests(unittest.TestCase):
         )
 
     def test_familiarity_updates_accumulate_in_order(self):
+        set_familiarity(0, session_id=self.session_id)
         self.assertEqual(get_familiarity(self.session_id), 0)
 
         update_familiarity(2, session_id=self.session_id)
@@ -278,6 +279,7 @@ class BatchReviewTests(unittest.TestCase):
 
         from pupu.agent import _maybe_batch_review
 
+        set_familiarity(0, session_id=self.session_id)
         with patch("pupu.agent.json_task", return_value=raw) as mock_json_task:
             _maybe_batch_review(self.session_id)
 

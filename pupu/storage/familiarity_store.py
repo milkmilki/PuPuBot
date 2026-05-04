@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..familiarity import score_to_level
+from ..familiarity import (
+    DEFAULT_FAMILIARITY_LEVEL,
+    DEFAULT_FAMILIARITY_SCORE,
+    score_to_level,
+)
 from .db import get_conn
 
 
@@ -14,9 +18,10 @@ def ensure_familiarity(conn, session_id: str):
         (session_id,),
     ).fetchone()
     if not row:
+        now = datetime.now().isoformat()
         conn.execute(
-            "INSERT INTO familiarity (session_id, score, level, updated_at) VALUES (?, 0, '认识', ?)",
-            (session_id, datetime.now().isoformat()),
+            "INSERT INTO familiarity (session_id, score, level, updated_at) VALUES (?, ?, ?, ?)",
+            (session_id, DEFAULT_FAMILIARITY_SCORE, DEFAULT_FAMILIARITY_LEVEL, now),
         )
         conn.commit()
 
@@ -29,7 +34,7 @@ def get_familiarity(session_id: str = "default") -> int:
         (session_id,),
     ).fetchone()
     conn.close()
-    return row["score"] if row else 0
+    return row["score"] if row else DEFAULT_FAMILIARITY_SCORE
 
 
 def update_familiarity(
@@ -44,7 +49,7 @@ def update_familiarity(
         "SELECT score FROM familiarity WHERE session_id = ?",
         (session_id,),
     ).fetchone()
-    old_score = row["score"] if row else 0
+    old_score = row["score"] if row else DEFAULT_FAMILIARITY_SCORE
     new_score = max(0, min(100, old_score + int(delta)))
     new_level = score_to_level(new_score)
     now = datetime.now().isoformat()
@@ -112,4 +117,8 @@ def get_familiarity_info(session_id: str = "default") -> dict:
             "level": row["level"],
             "updated_at": row["updated_at"],
         }
-    return {"score": 0, "level": "认识", "updated_at": ""}
+    return {
+        "score": DEFAULT_FAMILIARITY_SCORE,
+        "level": DEFAULT_FAMILIARITY_LEVEL,
+        "updated_at": "",
+    }

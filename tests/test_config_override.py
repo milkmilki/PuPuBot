@@ -29,6 +29,36 @@ class ConfigPathOverrideTests(unittest.TestCase):
         finally:
             Path(path).unlink(missing_ok=True)
 
+    def test_load_owner_ids_defaults_when_key_missing(self) -> None:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump({"qq_mode": "napcat"}, f)
+            path = f.name
+        try:
+            os.environ["PUPU_CONFIG_PATH"] = path
+            import pupu.config as cfg
+
+            importlib.reload(cfg)
+            self.assertEqual(cfg.load_owner_ids(), ["424225912"])
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def test_load_owner_ids_respects_explicit_empty(self) -> None:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as f:
+            json.dump({"owner_ids": []}, f)
+            path = f.name
+        try:
+            os.environ["PUPU_CONFIG_PATH"] = path
+            import pupu.config as cfg
+
+            importlib.reload(cfg)
+            self.assertEqual(cfg.load_owner_ids(), [])
+        finally:
+            Path(path).unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,6 +34,7 @@ class ConsoleStoresTests(unittest.TestCase):
         self.assertEqual(cfg["display_name"], "A")
         self.assertEqual(cfg["port"], 8099)
         self.assertEqual(cfg["qq_mode"], "cli")
+        self.assertEqual(cfg["owner_ids"], ["424225912"])
         self.assertIn("core_persona", persona)
         port = instance_store.read_port(Path(self._tmpdir.name) / "instances" / iid)
         self.assertEqual(port, 8099)

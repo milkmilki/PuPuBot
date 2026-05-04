@@ -29,6 +29,10 @@ def score_to_level_index(score: int) -> int:
     return len(LEVELS) - 1
 
 
+DEFAULT_FAMILIARITY_SCORE = 100
+DEFAULT_FAMILIARITY_LEVEL = score_to_level(DEFAULT_FAMILIARITY_SCORE)
+
+
 # ── Reply delay config (indexed by level index 0-4) ──
 
 REPLY_DELAY_CONFIG = [

@@ -52,6 +52,20 @@ def start_cli():
     main()
 
 
+def _read_env_qq_port(default: int = 8081) -> int:
+    from pathlib import Path
+
+    path = Path(".env.qq")
+    if not path.is_file():
+        return default
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("PORT="):
+            raw = line.split("=", 1)[1].strip().strip('"').strip("'")
+            return int(raw)
+    return default
+
+
 def start_qq(config):
     import nonebot
 
@@ -62,11 +76,12 @@ def start_qq(config):
         from nonebot.adapters.onebot.v11 import Adapter as OneBotV11Adapter
         driver = nonebot.get_driver()
         driver.register_adapter(OneBotV11Adapter)
+        port = _read_env_qq_port()
         print("[仆仆QQ] 模式: NapCat (OneBot v11)")
         print()
         print("  仆仆已启动，正在等待 NapCat 连接...")
         print("  请确保 NapCat 已配置反向 WebSocket 地址:")
-        print("    ws://127.0.0.1:8081/onebot/v11/ws")
+        print(f"    ws://127.0.0.1:{port}/onebot/v11/ws")
         print()
         print("  如果还没启动 NapCat，现在启动它。")
         print("  连接成功后会显示提示。")
