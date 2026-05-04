@@ -9,6 +9,7 @@ os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from pupu.scheduler import _is_wait_followup_task, _latest_message_is_user, _onebot_send
+from pupu.sessions import OWNER_SESSION
 
 
 async def _no_sleep(_seconds):
@@ -33,7 +34,7 @@ class SchedulerSendTests(unittest.IsolatedAsyncioTestCase):
         with patch("pupu.scheduler._load_first_numeric_owner_qq", return_value=123):
             with patch("pupu.scheduler.asyncio.sleep", _no_sleep):
                 with patch("builtins.print") as mock_print:
-                    await _onebot_send(bot, "owner", "第一句\n第二句\n\n第三句")
+                    await _onebot_send(bot, OWNER_SESSION, "第一句\n第二句\n\n第三句")
 
         self.assertEqual(
             bot.private_messages,
@@ -61,11 +62,11 @@ class SchedulerGuardTests(unittest.TestCase):
 
     def test_latest_message_is_user(self):
         with patch("pupu.scheduler.get_recent_messages", return_value=[{"role": "user"}]):
-            self.assertTrue(_latest_message_is_user("owner"))
+            self.assertTrue(_latest_message_is_user(OWNER_SESSION))
         with patch("pupu.scheduler.get_recent_messages", return_value=[{"role": "assistant"}]):
-            self.assertFalse(_latest_message_is_user("owner"))
+            self.assertFalse(_latest_message_is_user(OWNER_SESSION))
         with patch("pupu.scheduler.get_recent_messages", return_value=[]):
-            self.assertFalse(_latest_message_is_user("owner"))
+            self.assertFalse(_latest_message_is_user(OWNER_SESSION))
 
 
 if __name__ == "__main__":

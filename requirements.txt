@@ -4,6 +4,9 @@ duckduckgo-search
 httpx
 beautifulsoup4
 python-dotenv
+fastapi
+python-multipart
+uvicorn[standard]
 nonebot2[fastapi]
 nonebot-adapter-onebot
 nonebot-adapter-qq

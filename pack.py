@@ -8,6 +8,7 @@ PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 INCLUDE = [
     "pupu/",
+    "pupu_console/",
     "plugins/",
     "docs/",
     "data/",

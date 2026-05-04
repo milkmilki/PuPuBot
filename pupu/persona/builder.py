@@ -2,7 +2,7 @@
 
 from ..familiarity import score_to_level
 from ..important_event_context import format_important_events_section
-from .core import CORE_PERSONA
+from .core import get_core_persona
 from .familiarity_prompts import FAMILIARITY_PROMPTS
 
 
@@ -20,7 +20,7 @@ def build_system_prompt(
     reply_speed_hint: str = None,
 ) -> str:
     level = score_to_level(familiarity_score)
-    prompt = CORE_PERSONA + "\n" + FAMILIARITY_PROMPTS[level]
+    prompt = get_core_persona() + "\n" + FAMILIARITY_PROMPTS[level]
 
     if self_facts:
         prompt += "\n\n## 你自己的设定\n" + _format_facts(self_facts)
@@ -50,13 +50,5 @@ def build_system_prompt(
         "- 没拿到工具成功结果前，不要说“已设置”“已创建”“我记住了到时提醒你”。\n"
         "- 缺日期或时间就先追问，不要自己编。\n"
         "- repeat 只用 once、daily、weekly、monthly、yearly、interval。"
-    )
-
-    prompt += (
-        "\n\n## 回复格式规则\n"
-        "- 你必须输出一个 JSON 对象，且只能包含两个字段：content、should_wait。\n"
-        "- content 是要发给用户的文本。\n"
-        "- should_wait 必须是布尔值，表示你是否期待用户回复并希望系统稍后跟进。\n"
-        "- 不要输出 JSON 以外的任何文字。"
     )
     return prompt

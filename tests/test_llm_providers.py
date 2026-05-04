@@ -19,6 +19,7 @@ from pupu.llm_providers import (
     _default_codex_command,
 )
 from pupu.memory import init_db
+from pupu.sessions import OWNER_SESSION
 
 
 class LLMProviderTests(unittest.TestCase):
@@ -332,7 +333,7 @@ class LLMProviderTests(unittest.TestCase):
                 output_path=Path("D:/tmp/last.txt"),
                 run_dir=Path("D:/tmp/run"),
                 use_mcp=True,
-                session_id="owner",
+                session_id=OWNER_SESSION,
                 image_urls=["https://example.test/a.png"],
                 is_admin=True,
                 tool_exposure="chat",

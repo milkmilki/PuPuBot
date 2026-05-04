@@ -10,6 +10,7 @@ from rich.panel import Panel
 from .agent import chat, run_due_batch_reviews
 from .backup import maybe_run_daily_backup
 from .dialogue_loop import register_sender
+from .sessions import OWNER_SESSION
 from .facts_report import format_facts_report
 from .important_event_report import format_important_events_report
 from .llm import preflight_model_providers
@@ -19,8 +20,6 @@ from .memory import get_familiarity_info, get_recent_messages, init_db, reset_se
 from .tools import manage_scheduled_task
 
 console = Console()
-
-OWNER_SESSION = "owner"
 
 
 def _cli_scheduler_loop():

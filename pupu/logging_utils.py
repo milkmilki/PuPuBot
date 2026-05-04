@@ -2,6 +2,7 @@
 
 import atexit
 import builtins
+import os
 import sys
 import threading
 from datetime import datetime
@@ -50,7 +51,11 @@ def _get_project_root() -> Path:
 
 
 def _ensure_log_dir() -> Path:
-    log_dir = _get_project_root() / "data" / "logs"
+    inst = os.environ.get("PUPU_INSTANCE_DIR")
+    if inst:
+        log_dir = Path(inst) / "data" / "logs"
+    else:
+        log_dir = _get_project_root() / "data" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 

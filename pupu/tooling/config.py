@@ -7,10 +7,8 @@ compatible with a future move to real MCP/external server entries in config.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-CONFIG_PATH = ROOT_DIR / "config.json"
+from pupu.config import get_config_path
 
 DEFAULT_BUILTIN_SERVER_STATE = {
     "web": True,
@@ -23,11 +21,12 @@ DEFAULT_BUILTIN_SERVER_STATE = {
 
 def load_builtin_server_state() -> dict[str, bool]:
     state = dict(DEFAULT_BUILTIN_SERVER_STATE)
-    if not CONFIG_PATH.exists():
+    config_path = get_config_path()
+    if not config_path.exists():
         return state
 
     try:
-        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
     except Exception:
         return state
 

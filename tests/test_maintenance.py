@@ -23,6 +23,7 @@ from pupu.memory import (
     upsert_self_facts,
     upsert_user_facts,
 )
+from pupu.message_sources import CHAT, PROACTIVE
 from pupu.maintenance.model_compaction import _call_model_json
 
 
@@ -53,15 +54,15 @@ class MaintenanceTests(unittest.TestCase):
         reset_session(self.session_id)
 
     def _save_chat_turn(self, index: int):
-        save_message("user", f"user-{index}", self.session_id, source="chat")
-        save_message("assistant", f"assistant-{index}", self.session_id, source="chat")
+        save_message("user", f"user-{index}", self.session_id, source=CHAT)
+        save_message("assistant", f"assistant-{index}", self.session_id, source=CHAT)
 
     def test_run_memory_maintenance_dedupes_and_prunes(self):
         for i in range(14):
             self._save_chat_turn(i)
 
         for i in range(25):
-            save_message("assistant", f"proactive-{i}", self.session_id, source="proactive")
+            save_message("assistant", f"proactive-{i}", self.session_id, source=PROACTIVE)
 
         conn = _get_conn()
         try:

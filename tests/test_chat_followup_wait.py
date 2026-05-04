@@ -11,6 +11,7 @@ os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 from pupu.agent import _parse_dialogue_output, chat
 from pupu.dialogue_loop import cancel_wait_timer, has_wait_timer, schedule_wait_timer
 from pupu.memory import init_db, reset_session
+from pupu.sessions import OWNER_SESSION
 
 
 class ChatFollowupWaitTests(unittest.TestCase):
@@ -19,15 +20,15 @@ class ChatFollowupWaitTests(unittest.TestCase):
         init_db()
 
     def setUp(self):
-        reset_session("owner")
+        reset_session(OWNER_SESSION)
         reset_session("private_10001")
         reset_session("group_42")
-        cancel_wait_timer("owner")
+        cancel_wait_timer(OWNER_SESSION)
         cancel_wait_timer("private_10001")
         cancel_wait_timer("group_42")
 
     def tearDown(self):
-        cancel_wait_timer("owner")
+        cancel_wait_timer(OWNER_SESSION)
         cancel_wait_timer("private_10001")
         cancel_wait_timer("group_42")
 
@@ -58,10 +59,10 @@ class ChatFollowupWaitTests(unittest.TestCase):
     def test_chat_starts_wait_timer_for_owner_when_should_wait_true(self):
         with patch("pupu.agent.chat_complete", return_value='{"content":"你先忙","should_wait":true}'):
             with patch("pupu.agent._maybe_batch_review", return_value=None):
-                reply = chat("hello", session_id="owner", is_admin=True)
+                reply = chat("hello", session_id=OWNER_SESSION, is_admin=True)
 
         self.assertEqual(reply, "你先忙")
-        self.assertTrue(has_wait_timer("owner"))
+        self.assertTrue(has_wait_timer(OWNER_SESSION))
 
     def test_chat_starts_wait_timer_for_private_session(self):
         with patch("pupu.agent.chat_complete", return_value='{"content":"回我","should_wait":true}'):
@@ -80,13 +81,13 @@ class ChatFollowupWaitTests(unittest.TestCase):
         self.assertFalse(has_wait_timer("group_42"))
 
     def test_chat_cancels_wait_timer_when_should_wait_false(self):
-        schedule_wait_timer("owner")
-        self.assertTrue(has_wait_timer("owner"))
+        schedule_wait_timer(OWNER_SESSION)
+        self.assertTrue(has_wait_timer(OWNER_SESSION))
         with patch("pupu.agent.chat_complete", return_value='{"content":"行了","should_wait":false}'):
             with patch("pupu.agent._maybe_batch_review", return_value=None):
-                reply = chat("ok", session_id="owner", is_admin=True)
+                reply = chat("ok", session_id=OWNER_SESSION, is_admin=True)
         self.assertEqual(reply, "行了")
-        self.assertFalse(has_wait_timer("owner"))
+        self.assertFalse(has_wait_timer(OWNER_SESSION))
 
 
 if __name__ == "__main__":

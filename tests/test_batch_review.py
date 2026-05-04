@@ -29,6 +29,8 @@ from pupu.memory import (
     update_familiarity,
 )
 
+from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED
+
 
 class BatchReviewTests(unittest.TestCase):
     @classmethod
@@ -40,8 +42,8 @@ class BatchReviewTests(unittest.TestCase):
         reset_session(self.session_id)
 
     def _save_chat_turn(self, index: int):
-        save_message("user", f"user-{index}", self.session_id, source="chat")
-        save_message("assistant", f"assistant-{index}", self.session_id, source="chat")
+        save_message("user", f"user-{index}", self.session_id, source=CHAT)
+        save_message("assistant", f"assistant-{index}", self.session_id, source=CHAT)
 
     def _set_chat_timestamps(self, moment: datetime):
         conn = _get_conn()
@@ -58,13 +60,13 @@ class BatchReviewTests(unittest.TestCase):
         for i in range(3):
             self._save_chat_turn(i)
 
-        save_message("assistant", "proactive ping", self.session_id, source="proactive")
-        save_message("user", "scheduled user", self.session_id, source="scheduled")
+        save_message("assistant", "proactive ping", self.session_id, source=PROACTIVE)
+        save_message("user", "scheduled user", self.session_id, source=SCHEDULED)
         save_message(
             "assistant",
             "scheduled assistant",
             self.session_id,
-            source="scheduled",
+            source=SCHEDULED,
         )
 
         progress = get_summary_trigger_progress(self.session_id, review_interval=8)
@@ -81,18 +83,18 @@ class BatchReviewTests(unittest.TestCase):
                     "assistant",
                     "proactive ping",
                     self.session_id,
-                    source="proactive",
+                    source=PROACTIVE,
                 )
 
         batch = get_review_candidate_batch(
             session_id=self.session_id,
             review_interval=8,
-            source="chat",
+            source=CHAT,
         )
 
         self.assertEqual(sum(1 for item in batch if item["role"] == "assistant"), 8)
         self.assertTrue(batch)
-        self.assertTrue(all(item["source"] == "chat" for item in batch))
+        self.assertTrue(all(item["source"] == CHAT for item in batch))
         self.assertEqual(batch[0]["content"], "user-0")
         self.assertEqual(batch[-1]["content"], "assistant-7")
 
@@ -103,7 +105,7 @@ class BatchReviewTests(unittest.TestCase):
         batch = get_review_candidate_batch(
             session_id=self.session_id,
             review_interval=8,
-            source="chat",
+            source=CHAT,
         )
         save_summary("batch one", batch[0]["id"], batch[-1]["id"], self.session_id)
 
@@ -111,7 +113,7 @@ class BatchReviewTests(unittest.TestCase):
         next_batch = get_review_candidate_batch(
             session_id=self.session_id,
             review_interval=8,
-            source="chat",
+            source=CHAT,
         )
 
         self.assertEqual(progress["pending"], 2)
@@ -121,7 +123,7 @@ class BatchReviewTests(unittest.TestCase):
     def test_pending_review_last_message_time_uses_unsummarized_chat_only(self):
         for i in range(2):
             self._save_chat_turn(i)
-        save_message("assistant", "proactive", self.session_id, source="proactive")
+        save_message("assistant", "proactive", self.session_id, source=PROACTIVE)
 
         conn = _get_conn()
         try:
@@ -140,7 +142,7 @@ class BatchReviewTests(unittest.TestCase):
             conn.close()
 
         self.assertEqual(
-            get_pending_review_last_message_time(self.session_id, source="chat"),
+            get_pending_review_last_message_time(self.session_id, source=CHAT),
             chat_time,
         )
 
@@ -360,7 +362,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(get_summaries(self.session_id, limit=3), [])
 
     def test_idle_batch_review_ignores_half_turn(self):
-        save_message("user", "lonely user message", self.session_id, source="chat")
+        save_message("user", "lonely user message", self.session_id, source=CHAT)
         self._set_chat_timestamps(datetime.now() - timedelta(seconds=700))
 
         from pupu.agent import _maybe_batch_review
@@ -374,10 +376,10 @@ class BatchReviewTests(unittest.TestCase):
         self._save_chat_turn(1)
         other_session = self.session_id + "_other"
         reset_session(other_session)
-        save_message("user", "half", other_session, source="chat")
+        save_message("user", "half", other_session, source=CHAT)
 
-        self.assertIn(self.session_id, list_pending_review_sessions(source="chat"))
-        self.assertNotIn(other_session, list_pending_review_sessions(source="chat"))
+        self.assertIn(self.session_id, list_pending_review_sessions(source=CHAT))
+        self.assertNotIn(other_session, list_pending_review_sessions(source=CHAT))
 
     def test_run_due_batch_reviews_scans_pending_sessions(self):
         self._save_chat_turn(1)

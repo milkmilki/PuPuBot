@@ -2,6 +2,7 @@ import unittest
 
 from pupu.followup_manager import cancel_timer, create_timer, drain_fired, has_timer
 from pupu import followup
+from pupu.sessions import OWNER_SESSION
 
 
 class FollowupModuleTests(unittest.TestCase):
@@ -18,7 +19,7 @@ class FollowupModuleTests(unittest.TestCase):
         self.assertTrue(should_wait)
 
     def test_followup_timer_manager_roundtrip(self):
-        session_id = "owner"
+        session_id = OWNER_SESSION
         self.assertFalse(has_timer(session_id))
         create_timer(session_id, 0.01, lambda: None)
         self.assertTrue(has_timer(session_id))
@@ -26,7 +27,7 @@ class FollowupModuleTests(unittest.TestCase):
         self.assertFalse(has_timer(session_id))
 
     def test_followup_timer_manager_drain_fired(self):
-        session_id = "owner"
+        session_id = OWNER_SESSION
         create_timer(session_id, 0.01, lambda: None)
         import time
 

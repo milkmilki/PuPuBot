@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
 
 def get_config_path() -> Path:
+    override = os.environ.get("PUPU_CONFIG_PATH")
+    if override:
+        return Path(override)
     return CONFIG_PATH
 
 
 def load_config() -> dict:
-    with open(CONFIG_PATH, encoding="utf-8") as file:
+    path = get_config_path()
+    with open(path, encoding="utf-8") as file:
         return json.load(file)
 
 
 def save_config(config: dict) -> None:
-    with open(CONFIG_PATH, "w", encoding="utf-8") as file:
+    path = get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as file:
         json.dump(config, file, ensure_ascii=False, indent=2)
 
 

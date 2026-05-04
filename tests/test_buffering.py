@@ -10,6 +10,7 @@ os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from plugins.pupu_support import state
 from plugins.pupu_support.buffering import buffer_message, debounce_flush
+from pupu.sessions import OWNER_SESSION
 
 
 class BufferingTests(unittest.IsolatedAsyncioTestCase):
@@ -24,7 +25,7 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         state.session_phase.clear()
 
     async def test_processing_messages_schedule_next_debounce(self):
-        sid = "owner"
+        sid = OWNER_SESSION
         state.msg_buffers[sid] = {
             "texts": ["first"],
             "image_urls": [],
@@ -67,7 +68,7 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         created_coro.close()
 
     async def test_no_new_messages_does_not_schedule_next_debounce(self):
-        sid = "owner"
+        sid = OWNER_SESSION
         state.msg_buffers[sid] = {
             "texts": ["first"],
             "image_urls": [],

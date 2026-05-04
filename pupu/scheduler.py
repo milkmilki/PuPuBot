@@ -7,6 +7,8 @@ from datetime import datetime
 
 from .config import load_first_numeric_owner_id
 from .memory import finalize_scheduled_task, get_due_scheduled_tasks, get_recent_messages
+from .message_sources import SCHEDULED, WAIT_FOLLOWUP
+from .sessions import OWNER_SESSION
 
 _scheduler_lock = threading.Lock()
 
@@ -30,7 +32,7 @@ def _latest_message_is_user(session_id: str) -> bool:
 
 def _is_wait_followup_task(task: dict) -> bool:
     """Legacy DB tasks from an older design; in-memory timers replace these."""
-    return str(task.get("title") or "").strip().lower().startswith("wait_followup")
+    return str(task.get("title") or "").strip().lower().startswith(WAIT_FOLLOWUP)
 
 
 def _finalize_due_task(task: dict) -> None:
@@ -86,7 +88,7 @@ def _log_scheduled_send(session_label: str, user_label: str, text: str) -> None:
 async def _onebot_send(bot, session_id: str, text: str) -> None:
     """Send scheduled reply to the right peer (NapCat / OneBot v11)."""
     segments = _split_message(text)
-    if session_id == "owner":
+    if session_id == OWNER_SESSION:
         u = _load_first_numeric_owner_qq()
         if u is None:
             print("[pupu] scheduled: 未配置数字 owner QQ，无法投递 owner 会话")
@@ -141,14 +143,14 @@ async def onebot_scheduled_tasks_loop(bot) -> None:
 
             hint = "这是你自己之前设的定时提醒触发的，自然一点接上就好"
             synthetic = _scheduled_user_message(task)
-            source = "scheduled"
+            source = SCHEDULED
 
             try:
                 reply = await asyncio.to_thread(
                     chat,
                     synthetic,
                     sid,
-                    sid == "owner",
+                    sid == OWNER_SESSION,
                     None,
                     hint,
                     source,
@@ -213,13 +215,13 @@ def cli_scheduled_tasks_tick() -> None:
 
         synthetic = _scheduled_user_message(task)
         hint = "这是你自己之前设的定时提醒触发的，自然一点接上就好"
-        source = "scheduled"
+        source = SCHEDULED
 
         try:
             reply = chat(
                 synthetic,
                 sid,
-                is_admin=(sid == "owner"),
+                is_admin=(sid == OWNER_SESSION),
                 image_urls=None,
                 reply_speed_hint=hint,
                 message_source=source,

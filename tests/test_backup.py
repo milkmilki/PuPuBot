@@ -9,7 +9,9 @@ os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from pupu.backup import get_backup_path, maybe_run_daily_backup, run_database_backup
+from pupu.message_sources import CHAT
 from pupu.memory import get_familiarity_info, init_db, reset_session, save_message, set_familiarity
+from pupu.sessions import OWNER_SESSION
 
 
 class BackupTests(unittest.TestCase):
@@ -18,19 +20,19 @@ class BackupTests(unittest.TestCase):
         init_db()
 
     def setUp(self):
-        reset_session("owner")
+        reset_session(OWNER_SESSION)
         TEST_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         for path in TEST_BACKUP_DIR.glob("*.db"):
             path.unlink()
 
     def test_set_familiarity_restores_score_and_level(self):
-        set_familiarity(50, "owner")
-        info = get_familiarity_info("owner")
+        set_familiarity(50, OWNER_SESSION)
+        info = get_familiarity_info(OWNER_SESSION)
         self.assertEqual(info["score"], 50)
         self.assertTrue(info["updated_at"])
 
     def test_run_database_backup_writes_daily_snapshot(self):
-        save_message("user", "hello", "owner", source="chat")
+        save_message("user", "hello", OWNER_SESSION, source=CHAT)
         report = run_database_backup(now=datetime(2026, 4, 26, 3, 5, 0))
         backup_path = get_backup_path(datetime(2026, 4, 26, 3, 5, 0).date())
 

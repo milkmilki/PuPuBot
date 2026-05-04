@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
+from pupu.sessions import OWNER_SESSION
+
 
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name, "").strip().lower()
@@ -17,7 +19,6 @@ def _env_bool(name: str, default: bool = False) -> bool:
         return default
     return raw in {"1", "true", "yes", "y", "on"}
 
-OWNER_SESSION = "owner"
 DEBOUNCE_SECONDS = 20.0
 
 proactive_task: asyncio.Task | None = None

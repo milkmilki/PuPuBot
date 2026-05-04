@@ -6,3 +6,4 @@ pupu_*.zip
 data/tts_cache/
 *.db
 *.log
+instances/

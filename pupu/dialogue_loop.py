@@ -7,8 +7,8 @@ from typing import Callable
 
 from .followup import WAIT_DELAY_SECONDS
 from .followup_manager import cancel_timer, create_timer, has_timer
-
-FOLLOWUP_SOURCE = "wait_followup"
+from .message_sources import WAIT_FOLLOWUP
+from .sessions import OWNER_SESSION
 
 _senders: dict[str, Callable[[str], None]] = {}
 _senders_lock = threading.Lock()
@@ -16,7 +16,7 @@ _senders_lock = threading.Lock()
 
 def is_followup_eligible(session_id: str) -> bool:
     sid = str(session_id or "").strip()
-    if sid == "owner":
+    if sid == OWNER_SESSION:
         return True
     if sid.startswith("private_"):
         tail = sid[8:]
@@ -58,10 +58,10 @@ def _on_timer_fire(session_id: str) -> None:
     text = chat(
         synthetic,
         session_id,
-        is_admin=(session_id == "owner"),
+        is_admin=(session_id == OWNER_SESSION),
         image_urls=None,
         reply_speed_hint=hint,
-        message_source=FOLLOWUP_SOURCE,
+        message_source=WAIT_FOLLOWUP,
     )
     sender = None
     with _senders_lock:

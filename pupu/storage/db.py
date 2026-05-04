@@ -6,6 +6,8 @@ import os
 import sqlite3
 from datetime import datetime
 
+from ..sessions import OWNER_SESSION
+
 DEFAULT_DB_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
     "data",
@@ -36,7 +38,7 @@ def table_columns(conn, table_name: str) -> set[str]:
 
 
 def init_db():
-    from ..persona import SEED_SELF_FACTS
+    from ..persona.core import get_seed_self_facts
 
     conn = get_conn()
     cursor = conn.cursor()
@@ -215,12 +217,13 @@ def init_db():
     """
     )
 
-    if SEED_SELF_FACTS:
+    seed = get_seed_self_facts()
+    if seed:
         now = datetime.now().isoformat()
-        for key, value in SEED_SELF_FACTS.items():
+        for key, value in seed.items():
             cursor.execute(
                 "INSERT OR IGNORE INTO self_facts (session_id, fact_key, fact_value, updated_at) VALUES (?, ?, ?, ?)",
-                ("owner", key, value, now),
+                (OWNER_SESSION, key, value, now),
             )
 
     conn.commit()

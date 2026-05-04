@@ -7,6 +7,7 @@ import os
 import re
 from datetime import datetime
 
+from ..message_sources import WAIT_FOLLOWUP
 from .db import get_conn
 
 MAX_SCHEDULED_TASKS_PER_SESSION = 30
@@ -442,7 +443,7 @@ def get_due_scheduled_tasks(before_iso: str, limit: int = 10) -> list[dict]:
         rows = [
             row
             for row in rows
-            if not str(row.get("title") or "").strip().lower().startswith("wait_followup")
+            if not str(row.get("title") or "").strip().lower().startswith(WAIT_FOLLOWUP)
         ]
     conn.close()
     return [dict(row) for row in rows]

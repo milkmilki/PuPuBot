@@ -34,6 +34,7 @@ from .memory import (
     upsert_user_facts,
 )
 from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
+from .message_sources import CHAT
 from .persona import build_batch_review_prompt, build_system_prompt
 from .review_followups import (
     apply_review_task_updates,
@@ -46,7 +47,7 @@ from .tools import TOOL_DEFINITIONS, execute_tool, is_admin_tool
 
 REVIEW_INTERVAL = 8
 REVIEW_IDLE_SECONDS = 600
-REVIEW_SOURCE = "chat"
+REVIEW_SOURCE = CHAT
 CHAT_HISTORY_LIMIT = 30
 PROMPT_SUMMARY_LIMIT = 3
 PROMPT_IMPORTANT_EVENT_LIMIT = 6

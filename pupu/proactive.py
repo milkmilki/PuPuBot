@@ -18,9 +18,9 @@ from .memory import (
     get_user_facts,
     save_message,
 )
+from .message_sources import PROACTIVE
 from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT
-
-OWNER_SESSION = "owner"
+from .sessions import OWNER_SESSION
 
 TIME_PERIODS = [
     {"name": "凌晨到早上", "start": 0, "end": 9, "topics": [
@@ -290,7 +290,7 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
         print(f"[pupu][proactive] phase=generate done text={_truncate_debug(text, 220)}")
         content, should_wait = _parse_dialogue_output(text or "")
         if content:
-            save_message("assistant", content, OWNER_SESSION, source="proactive")
+            save_message("assistant", content, OWNER_SESSION, source=PROACTIVE)
         if should_wait:
             schedule_wait_timer(OWNER_SESSION)
         return content or None

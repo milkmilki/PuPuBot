@@ -4,6 +4,7 @@ import threading
 import traceback
 from datetime import datetime
 
+from ..message_sources import PROACTIVE, SCHEDULED
 from ..storage.db import get_conn, init_db
 from .constants import BUSY_REPORT_PREFIX
 from .dedupe import (
@@ -63,7 +64,7 @@ def run_memory_maintenance(
 
             for session_id in session_ids:
                 report["deleted_chat_messages"] += _prune_old_chat_messages(conn, session_id)
-                for source in ("scheduled", "proactive"):
+                for source in (SCHEDULED, PROACTIVE):
                     report["deleted_internal_messages"] += _prune_old_internal_messages(
                         conn,
                         session_id,

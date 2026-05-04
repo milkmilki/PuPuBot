@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from ..message_sources import CHAT
 from .db import get_conn
 from .summaries import get_oldest_unsummarized_msg_id
 
@@ -12,7 +13,7 @@ def save_message(
     role: str,
     content: str,
     session_id: str = "default",
-    source: str = "chat",
+    source: str = CHAT,
 ):
     conn = get_conn()
     conn.execute(
@@ -50,7 +51,7 @@ def get_messages_in_range(
 def count_pending_review_turns(
     session_id: str = "default",
     after_msg_id: int = 0,
-    source: str = "chat",
+    source: str = CHAT,
 ) -> int:
     conn = get_conn()
     row = conn.execute(
@@ -69,7 +70,7 @@ def count_pending_review_turns(
 def get_review_candidate_batch(
     session_id: str = "default",
     review_interval: int = 8,
-    source: str = "chat",
+    source: str = CHAT,
     min_turns: int | None = None,
 ) -> list[dict]:
     interval = max(1, int(review_interval or 1))
@@ -111,7 +112,7 @@ def get_review_candidate_batch(
 def get_pending_review_last_message_time(
     session_id: str = "default",
     after_msg_id: int = 0,
-    source: str = "chat",
+    source: str = CHAT,
 ) -> str | None:
     conn = get_conn()
     row = conn.execute(
@@ -128,7 +129,7 @@ def get_pending_review_last_message_time(
     return row["timestamp"] if row else None
 
 
-def list_pending_review_sessions(source: str = "chat") -> list[str]:
+def list_pending_review_sessions(source: str = CHAT) -> list[str]:
     conn = get_conn()
     rows = conn.execute(
         """SELECT m.session_id
@@ -158,7 +159,7 @@ def get_summary_trigger_progress(
     pending = count_pending_review_turns(
         session_id=session_id,
         after_msg_id=last_reviewed_id,
-        source="chat",
+        source=CHAT,
     )
     remaining = max(0, interval - pending)
     return {
