@@ -262,7 +262,8 @@ class OpenAICompatibleProvider:
             "stream": False,
         }
         if self.reasoning_effort:
-            payload["reasoning_effort"] = self.reasoning_effort
+            effort = "high" if self.reasoning_effort == "max" else self.reasoning_effort
+            payload["reasoning_effort"] = effort
         if self.thinking_enabled:
             payload["extra_body"] = {"thinking": {"type": "enabled"}}
         return payload

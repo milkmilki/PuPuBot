@@ -67,7 +67,7 @@ def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
             run_at = _parse_local_run_at(str(row["run_at"]))
             overdue = ""
             if run_at is not None and run_at < datetime.now():
-                overdue = " ⚠️ 这个时间早于当前时间，会被立刻触发；如果年份填错了请先取消再重建"
+                overdue = " [注意] 这个时间早于当前时间，会被立刻触发；如果年份填错了请先取消再重建"
             interval = (
                 f" interval={row['interval_seconds']}"
                 if row.get("interval_seconds")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 from datetime import datetime
 
 from nonebot.adapters import Event
@@ -15,10 +16,12 @@ from pupu.tts import synthesize_reply_to_file
 from . import state
 
 try:
+    from nonebot.adapters.onebot.v11 import Message as OBMessage
     from nonebot.adapters.onebot.v11 import MessageSegment as OBMsgSeg
 
     HAS_ONEBOT_V11 = True
 except ImportError:
+    OBMessage = None
     OBMsgSeg = None
     HAS_ONEBOT_V11 = False
 
@@ -29,6 +32,10 @@ def is_owner(user_id) -> bool:
 
 def is_admin(user_id) -> bool:
     return is_owner(user_id)
+
+
+def identity_session_for_user(user_id) -> str:
+    return state.OWNER_SESSION if is_owner(user_id) else f"private_{user_id}"
 
 
 def compute_reply_speed_hint(session_id: str) -> str | None:
@@ -60,10 +67,11 @@ def split_message(text: str) -> list[str]:
 
 async def send_segments(bot, event, segments: list[str], prefix=None):
     for index, segment in enumerate(segments):
+        message = _build_outgoing_message(bot, segment, prefix if index == 0 else None)
         if index == 0 and prefix is not None:
-            await bot.send(event, prefix + segment)
+            await bot.send(event, message)
         else:
-            await bot.send(event, segment)
+            await bot.send(event, message)
         if index < len(segments) - 1:
             typing_time = min(
                 4,
@@ -71,6 +79,30 @@ async def send_segments(bot, event, segments: list[str], prefix=None):
             )
             await asyncio.sleep(typing_time)
     await maybe_send_voice_reply(bot, event, "\n".join(segments))
+
+
+_AT_PROTOCOL_RE = re.compile(r"<at\s+qq=[\"']?(\d+)[\"']?\s*/>")
+
+
+def _build_outgoing_message(bot, text: str, prefix=None):
+    if not _is_onebot_v11_bot(bot) or OBMessage is None or OBMsgSeg is None:
+        return (prefix + text) if prefix is not None else text
+    if not _AT_PROTOCOL_RE.search(text or ""):
+        return (prefix + text) if prefix is not None else text
+    message = OBMessage()
+    if prefix is not None:
+        message += prefix
+    pos = 0
+    for match in _AT_PROTOCOL_RE.finditer(text):
+        before = text[pos:match.start()]
+        if before:
+            message += OBMsgSeg.text(before)
+        message += OBMsgSeg.at(int(match.group(1)))
+        pos = match.end()
+    rest = text[pos:]
+    if rest:
+        message += OBMsgSeg.text(rest)
+    return message
 
 
 def _is_onebot_v11_bot(bot) -> bool:
@@ -114,10 +146,23 @@ def log(direction: str, session: str, user: str, text: str):
 
 
 def resolve_session(event: Event) -> str:
+    context_session, _identity_session = resolve_sessions(event)
+    return context_session
+
+
+def resolve_sessions(event: Event) -> tuple[str, str]:
+    """Return (context_session, identity_session) for a QQ event.
+
+    Context tracks where a conversation happened; identity tracks who the user is.
+    In private chats they are the same. In groups, the context is the group while
+    the identity is the sender (or owner).
+    """
     try:
         user_id = event.get_user_id()
-        if is_owner(user_id):
-            return state.OWNER_SESSION
-        return f"session_{event.get_session_id()}"
+        identity_session = identity_session_for_user(user_id)
+        group_id = getattr(event, "group_id", None)
+        if group_id is not None:
+            return f"group_{group_id}", identity_session
+        return identity_session, identity_session
     except Exception:
-        return "default"
+        return "default", "default"

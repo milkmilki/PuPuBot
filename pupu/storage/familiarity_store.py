@@ -12,6 +12,10 @@ from ..familiarity import (
 from .db import get_conn
 
 
+def _resolve_identity_session(session_id: str = "default", identity_session: str | None = None) -> str:
+    return str(identity_session or session_id or "default")
+
+
 def ensure_familiarity(conn, session_id: str):
     row = conn.execute(
         "SELECT session_id FROM familiarity WHERE session_id = ?",
@@ -26,7 +30,12 @@ def ensure_familiarity(conn, session_id: str):
         conn.commit()
 
 
-def get_familiarity(session_id: str = "default") -> int:
+def get_familiarity(
+    session_id: str = "default",
+    *,
+    identity_session: str | None = None,
+) -> int:
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     ensure_familiarity(conn, session_id)
     row = conn.execute(
@@ -42,7 +51,10 @@ def update_familiarity(
     reason: str | None = None,
     session_id: str = "default",
     record_event: bool = False,
+    *,
+    identity_session: str | None = None,
 ):
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     ensure_familiarity(conn, session_id)
     row = conn.execute(
@@ -71,7 +83,10 @@ def set_familiarity(
     session_id: str = "default",
     reason: str | None = None,
     write_event: bool = False,
+    *,
+    identity_session: str | None = None,
 ):
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     ensure_familiarity(conn, session_id)
     new_score = max(0, min(100, int(score)))
@@ -90,7 +105,13 @@ def set_familiarity(
     conn.close()
 
 
-def get_event_log(limit: int = 20, session_id: str = "default") -> list[dict]:
+def get_event_log(
+    limit: int = 20,
+    session_id: str = "default",
+    *,
+    identity_session: str | None = None,
+) -> list[dict]:
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     rows = conn.execute(
         "SELECT date, delta, description FROM events WHERE session_id = ? ORDER BY id DESC LIMIT ?",
@@ -103,7 +124,12 @@ def get_event_log(limit: int = 20, session_id: str = "default") -> list[dict]:
     ]
 
 
-def get_familiarity_info(session_id: str = "default") -> dict:
+def get_familiarity_info(
+    session_id: str = "default",
+    *,
+    identity_session: str | None = None,
+) -> dict:
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     ensure_familiarity(conn, session_id)
     row = conn.execute(

@@ -37,7 +37,7 @@ from pupu.proactive import (
 from pupu.tools import manage_scheduled_task
 from pupu.tts import get_tts_config
 
-from .common import is_owner, resolve_session
+from .common import is_owner, resolve_sessions
 from . import state
 
 HELP_TEXT = """PuPu 可用命令
@@ -113,34 +113,34 @@ async def handle_help():
 
 @score_cmd.handle()
 async def handle_score(event: Event):
-    sid = resolve_session(event)
-    info = get_familiarity_info(sid)
+    _context_sid, identity_sid = resolve_sessions(event)
+    info = get_familiarity_info(identity_sid)
     text = f"好感度: {info['score']}/100\n等级: {info['level']}"
     await score_cmd.finish(text)
 
 
 @tasks_cmd.handle()
 async def handle_tasks(event: Event):
-    sid = resolve_session(event)
-    await tasks_cmd.finish(manage_scheduled_task(sid, {"action": "list"}))
+    context_sid, _identity_sid = resolve_sessions(event)
+    await tasks_cmd.finish(manage_scheduled_task(context_sid, {"action": "list"}))
 
 
 @important_cmd.handle()
 async def handle_important(event: Event):
-    sid = resolve_session(event)
-    await important_cmd.finish(format_important_events_report(sid))
+    _context_sid, identity_sid = resolve_sessions(event)
+    await important_cmd.finish(format_important_events_report(identity_sid))
 
 
 @facts_cmd.handle()
 async def handle_facts(event: Event):
-    sid = resolve_session(event)
-    await facts_cmd.finish(format_facts_report(sid))
+    _context_sid, identity_sid = resolve_sessions(event)
+    await facts_cmd.finish(format_facts_report(identity_sid))
 
 
 @history_cmd.handle()
 async def handle_history(event: Event):
-    sid = resolve_session(event)
-    messages = get_recent_messages(10, sid)
+    context_sid, _identity_sid = resolve_sessions(event)
+    messages = get_recent_messages(10, context_sid)
     if not messages:
         await history_cmd.finish("还没有聊天记录。")
     lines = []
@@ -155,8 +155,10 @@ async def handle_reset(event: Event):
     user_id = event.get_user_id()
     if not is_owner(user_id):
         await reset_cmd.finish("只有管理员才能重置。")
-    sid = resolve_session(event)
-    reset_session(sid)
+    context_sid, identity_sid = resolve_sessions(event)
+    reset_session(context_sid)
+    if identity_sid != context_sid:
+        reset_session(identity_sid)
     await reset_cmd.finish("已重置。仆仆回到了最初的状态。")
 
 

@@ -125,7 +125,11 @@ def parse_onebot_message(message) -> tuple[str, list[str]]:
             if url:
                 image_urls.append(url)
         elif seg.type == "at":
-            pass
+            qq = str(seg.data.get("qq") or "").strip()
+            if qq == "all":
+                text_parts.append("@全体成员")
+            elif qq:
+                text_parts.append(f"@{qq}")
 
     text = "".join(text_parts).strip()
     return text, image_urls

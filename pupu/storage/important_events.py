@@ -9,6 +9,10 @@ from datetime import datetime
 from .db import get_conn
 
 
+def _resolve_identity_session(session_id: str = "default", identity_session: str | None = None) -> str:
+    return str(identity_session or session_id or "default")
+
+
 def derive_source_event_key(
     source_event_key: str | None = None,
     *,
@@ -35,7 +39,13 @@ def derive_source_event_key(
     return f"event-{digest}"
 
 
-def upsert_important_events(session_id: str, events: list[dict]) -> list[dict]:
+def upsert_important_events(
+    session_id: str,
+    events: list[dict],
+    *,
+    identity_session: str | None = None,
+) -> list[dict]:
+    session_id = _resolve_identity_session(session_id, identity_session)
     if not events:
         return []
 
@@ -118,7 +128,13 @@ def upsert_important_events(session_id: str, events: list[dict]) -> list[dict]:
     return rows
 
 
-def get_important_event_by_key(session_id: str, source_event_key: str) -> dict | None:
+def get_important_event_by_key(
+    session_id: str,
+    source_event_key: str,
+    *,
+    identity_session: str | None = None,
+) -> dict | None:
+    session_id = _resolve_identity_session(session_id, identity_session)
     normalized_key = derive_source_event_key(source_event_key)
     conn = get_conn()
     try:
@@ -141,7 +157,10 @@ def get_important_events(
     session_id: str,
     limit: int = 8,
     statuses: tuple[str, ...] = ("active", "scheduled"),
+    *,
+    identity_session: str | None = None,
 ) -> list[dict]:
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     try:
         placeholders = ",".join("?" for _ in statuses)
@@ -190,7 +209,10 @@ def link_important_event_task(
     source_event_key: str,
     task_id: int,
     status: str = "scheduled",
+    *,
+    identity_session: str | None = None,
 ) -> None:
+    session_id = _resolve_identity_session(session_id, identity_session)
     normalized_key = derive_source_event_key(source_event_key)
     conn = get_conn()
     try:

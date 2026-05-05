@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 
 from nonebot import get_driver, on_message
-from nonebot.rule import to_me
+from nonebot.rule import Rule, to_me
 
-from pupu.config import load_owner_ids
+from pupu.config import load_open_group_ids, load_owner_ids, load_peer_config
 from pupu.familiarity import PROACTIVE_THRESHOLD
 from pupu.memory import get_familiarity
 from pupu.proactive import proactive_loop
@@ -16,7 +16,14 @@ from pupu.scheduler import onebot_scheduled_tasks_loop
 
 from . import state
 from .buffering import buffer_message, register_owner_wait_followup_sender
-from .common import is_admin, is_owner, log, send_private_segments, split_message
+from .common import (
+    identity_session_for_user,
+    is_admin,
+    is_owner,
+    log,
+    send_private_segments,
+    split_message,
+)
 
 try:
     from nonebot.adapters.onebot.v11 import (
@@ -32,16 +39,32 @@ except ImportError:
 
 
 if HAS_ONEBOT:
+    async def _open_group_rule(event: OBGroupEvent) -> bool:
+        if not isinstance(event, OBGroupEvent):
+            return False
+        return str(event.group_id) in load_open_group_ids()
+
+    ob_open_group = on_message(rule=Rule(_open_group_rule), priority=9, block=True)
     ob_private = on_message(priority=10, block=True)
     ob_group = on_message(rule=to_me(), priority=10, block=True)
     driver = get_driver()
+
+    def _speaker_prefix(user_id, nickname: str) -> tuple[str, bool]:
+        peer = load_peer_config()
+        peer_qq = str(peer.get("qq") or "").strip()
+        peer_name = str(peer.get("name") or "").strip()
+        if peer_qq and str(user_id) == peer_qq:
+            display = peer_name or nickname or str(user_id)
+            return f"[bot {display}(QQ:{user_id})] ", True
+        display = nickname or str(user_id)
+        return f"[{display}(QQ:{user_id})] ", False
 
     @ob_private.handle()
     async def handle_ob_private(bot: OBBot, event: OBPrivateEvent):
         text, image_urls = parse_onebot_message(event.get_message())
         if not text and not image_urls:
             return
-        sid = state.OWNER_SESSION if is_owner(event.user_id) else f"private_{event.user_id}"
+        sid = identity_session_for_user(event.user_id)
         nickname = event.sender.nickname or str(event.user_id)
         await buffer_message(
             sid,
@@ -52,14 +75,47 @@ if HAS_ONEBOT:
             is_admin(event.user_id),
             nickname,
             "私聊",
+            identity_session=sid,
         )
 
-    @ob_group.handle()
-    async def handle_ob_group(bot: OBBot, event: OBGroupEvent):
+    @ob_open_group.handle()
+    async def handle_ob_open_group(bot: OBBot, event: OBGroupEvent):
         text, image_urls = parse_onebot_message(event.get_message())
         if not text and not image_urls:
             return
         sid = f"group_{event.group_id}"
+        identity_sid = identity_session_for_user(event.user_id)
+        nickname = event.sender.nickname or str(event.user_id)
+        prefix, speaker_is_bot = _speaker_prefix(event.user_id, nickname)
+        display_text = f"{prefix}{text}" if text else prefix.strip()
+        await buffer_message(
+            sid,
+            display_text,
+            image_urls,
+            bot,
+            event,
+            is_admin(event.user_id),
+            nickname,
+            f"群{event.group_id}",
+            reply_prefix=None,
+            identity_session=identity_sid,
+            is_open_group=True,
+            group_id=str(event.group_id),
+            message_id=str(getattr(event, "message_id", "")),
+            speaker_user_id=str(event.user_id),
+            speaker_name=nickname,
+            speaker_is_bot=speaker_is_bot,
+        )
+
+    @ob_group.handle()
+    async def handle_ob_group(bot: OBBot, event: OBGroupEvent):
+        if str(event.group_id) in load_open_group_ids():
+            return
+        text, image_urls = parse_onebot_message(event.get_message())
+        if not text and not image_urls:
+            return
+        sid = f"group_{event.group_id}"
+        identity_sid = identity_session_for_user(event.user_id)
         nickname = event.sender.nickname or str(event.user_id)
         await buffer_message(
             sid,
@@ -71,6 +127,7 @@ if HAS_ONEBOT:
             nickname,
             f"群{event.group_id}",
             reply_prefix=OBMsgSeg.at(event.user_id) + " ",
+            identity_session=identity_sid,
         )
 
     @driver.on_bot_connect

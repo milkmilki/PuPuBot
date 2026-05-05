@@ -23,8 +23,21 @@ body {
   background: var(--panel);
   border-bottom: 1px solid #30363d;
 }
-.topbar h1 { font-size: 1.1rem; margin: 0; font-weight: 600; }
-.actions { display: flex; gap: 0.5rem; }
+.topbar h1 { font-size: 1.1rem; margin: 0; font-weight: 600; flex: 0 0 auto; }
+.arbiter-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+}
+.arbiter-title { font-size: 0.85rem; color: var(--muted); }
+.arbiter-detail { font-size: 0.8rem; color: var(--muted); max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.arbiter-link { color: var(--accent); text-decoration: none; border: none; background: none; padding: 0; font-size: inherit; cursor: pointer; }
+a.arbiter-link:hover { text-decoration: underline; }
+.actions { display: flex; gap: 0.5rem; margin-left: auto; flex: 0 0 auto; }
 button, input, select, textarea {
   font: inherit;
   color: var(--text);

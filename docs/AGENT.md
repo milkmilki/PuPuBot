@@ -53,7 +53,9 @@ User (QQ / Terminal)
 | [pupu/scheduler.py](../pupu/scheduler.py) | Due **DB** `scheduled_tasks` → synthetic user message → `chat(..., message_source="scheduled")` → send via OneBot / CLI print; **`_is_wait_followup_task`** filters legacy `wait_followup*` DB rows (real wait is in-memory now) |
 | [pupu/cli.py](../pupu/cli.py) | Terminal REPL; imports **`OWNER_SESSION`** from [`sessions.py`](../pupu/sessions.py); **`register_sender(OWNER_SESSION, ...)`** so timer follow-ups print in-terminal |
 | [plugins/pupu_plugin.py](../plugins/pupu_plugin.py) | NoneBot plugin load entry |
-| [plugins/pupu_support/buffering.py](../plugins/pupu_support/buffering.py) | Debounced QQ messages; **every** inbound message **`cancel_wait_timer(sid)`**; for eligible sessions **`register_sender`** (private OneBot delivery via `run_coroutine_threadsafe`) |
+| [plugins/pupu_support/buffering.py](../plugins/pupu_support/buffering.py) | Debounced QQ messages; **every** inbound message **`cancel_wait_timer(sid)`**; for eligible sessions **`register_sender`** (private OneBot delivery via `run_coroutine_threadsafe`). **Open-group** sessions push every message to `/api/observe` and react to decisions via `arbiter_decision_subscriber`; private/owner sessions still use the local `debounce_flush`. |
+| [pupu_console/arbitrator.py](../pupu_console/arbitrator.py) | Group speaker arbitration. `observe()` records each group message (deduped on `(group_id, message_id)`) and upserts the reporter into `group_bots`. `run_judge()` runs **once per debounce flush** under a per-group threading lock and writes to `group_decisions`. `await_decision_async()` is the long-poll backing `/api/await_decision` (uses `asyncio.Event`). Legacy `arbitrate()` (`/api/group_arbitrate`) kept for the deprecation window with the same per-group lock. |
+| [pupu_console/arbiter_server.py](../pupu_console/arbiter_server.py) | FastAPI app for the arbiter. Routes: `POST /api/observe`, `GET /api/await_decision`, `POST /api/group_arbitrate` (legacy), `GET /health`. Owns the per-group debounce watchdog (idle reset + hard cap). |
 | [plugins/pupu_support/onebot_handlers.py](../plugins/pupu_support/onebot_handlers.py) | OneBot v11 private/group; on connect **`register_owner_wait_followup_sender`** so proactive/timer can reach owner without a recent user turn |
 | [pupu/memory.py](../pupu/memory.py) | Facade re-exporting [pupu/storage/*](../pupu/storage/) (messages, familiarity, facts, summaries, important events, scheduled tasks, …) |
 | [pupu/persona/](../pupu/persona/) | **`build_system_prompt`** (persona + memory + scheduler tool rules only; **no** duplicate JSON format block — that lives in `followup.DIALOGUE_OUTPUT_PROTOCOL`) |
@@ -106,6 +108,15 @@ High-signal tables (not exhaustive):
 - **`user_facts`**, **`self_facts`** — long-term facts.
 - **`summaries`**, **`important_events`** — compression and notable episodes.
 - **`scheduled_tasks`** — user/assistant scheduled reminders; legacy rows titled `wait_followup*` are ignored by the scheduler loop; **live** wait-followup uses **memory timers** only.
+
+## Session model
+
+Runtime code separates the old single `session_id` concept into two meanings while keeping the SQLite schema unchanged:
+
+- **Context session** — where the conversation happens. `messages`, `summaries`, pending review cursors, and scheduled-task delivery use this. Private chats use `owner` / `private_<QQ>`; groups use `group_<群号>`.
+- **Identity session** — who the speaker is. `familiarity`, legacy familiarity `events`, `user_facts`, `self_facts`, and `important_events` use this. Owner maps to `owner`; other users map to `private_<QQ>`.
+
+In normal private chat these two values are identical. In open groups, `context_session=group_<群号>` and `identity_session=owner|private_<QQ>`, so group context stays shared while each person keeps their own score and facts.
 
 ## Familiarity (overview)
 

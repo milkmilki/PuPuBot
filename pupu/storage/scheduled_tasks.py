@@ -267,7 +267,7 @@ def reschedule_matching_scheduled_tasks(
                     f"session={session_id} task_id={task_id} rowcount={cursor.rowcount} new_run_at={run_at_text}"
                 )
             updated_row = dict(row)
-            updated_row["old_run_at"] = row.get("run_at")
+            updated_row["old_run_at"] = row["run_at"]
             updated_row["run_at"] = run_at_text
             if repeat_kind:
                 updated_row["repeat_kind"] = repeat_kind
@@ -423,7 +423,7 @@ def _match_tokens(value: str) -> list[str]:
 
 def get_due_scheduled_tasks(before_iso: str, limit: int = 10) -> list[dict]:
     conn = get_conn()
-    rows = conn.execute(
+    raw_rows = conn.execute(
         """SELECT id, session_id, title, instruction, run_at, repeat_kind, interval_seconds
            FROM scheduled_tasks
            WHERE enabled = 1 AND run_at <= ?
@@ -431,20 +431,21 @@ def get_due_scheduled_tasks(before_iso: str, limit: int = 10) -> list[dict]:
            LIMIT ?""",
         (before_iso, limit),
     ).fetchall()
-    if _debug_enabled() and rows:
+    # sqlite3.Row has no .get(); use subscript. Filter legacy wait_followup titles always.
+    rows = [
+        row
+        for row in raw_rows
+        if not str(row["title"] or "").strip().lower().startswith(WAIT_FOLLOWUP)
+    ]
+    if _debug_enabled() and raw_rows:
         preview = "; ".join(
             f"id={row['id']} session={row['session_id']} run_at={row['run_at']} repeat={row['repeat_kind']} title={str(row['title'])[:18]}"
-            for row in rows
+            for row in raw_rows
         )
         print(
             "[pupu][scheduled-debug] due_fetch "
-            f"before={before_iso} limit={limit} count={len(rows)} tasks=[{preview}]"
+            f"before={before_iso} limit={limit} count={len(raw_rows)} tasks=[{preview}]"
         )
-        rows = [
-            row
-            for row in rows
-            if not str(row.get("title") or "").strip().lower().startswith(WAIT_FOLLOWUP)
-        ]
     conn.close()
     return [dict(row) for row in rows]
 

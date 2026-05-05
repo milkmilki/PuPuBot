@@ -305,11 +305,18 @@ def chat(
     image_urls: list[str] = None,
     reply_speed_hint: str = None,
     message_source: str = REVIEW_SOURCE,
+    *,
+    context_session: str | None = None,
+    identity_session: str | None = None,
+    persist_user: bool = True,
 ) -> str:
     """Process one turn of conversation. Returns the assistant's text reply."""
     from .dialogue_loop import cancel_wait_timer, schedule_wait_timer
 
-    cancel_wait_timer(session_id)
+    context_session = str(context_session or session_id or "default")
+    identity_session = str(identity_session or session_id or "default")
+
+    cancel_wait_timer(context_session)
 
     display_text = user_input
     if image_urls:
@@ -319,14 +326,15 @@ def chat(
 
     display_text = f"[t:{_format_turn_timestamp()}] {display_text}"
 
-    save_message("user", display_text, session_id, source=message_source)
+    if persist_user:
+        save_message("user", display_text, context_session, source=message_source)
 
-    history = get_recent_messages(CHAT_HISTORY_LIMIT, session_id)
-    score = get_familiarity(session_id)
-    user_facts = get_user_facts(session_id)
-    self_facts = get_self_facts(session_id)
-    summaries = get_summaries(session_id, limit=PROMPT_SUMMARY_LIMIT)
-    important_events = get_important_events(session_id, limit=PROMPT_IMPORTANT_EVENT_LIMIT)
+    history = get_recent_messages(CHAT_HISTORY_LIMIT, context_session)
+    score = get_familiarity(identity_session)
+    user_facts = get_user_facts(identity_session)
+    self_facts = get_self_facts(identity_session)
+    summaries = get_summaries(context_session, limit=PROMPT_SUMMARY_LIMIT)
+    important_events = get_important_events(identity_session, limit=PROMPT_IMPORTANT_EVENT_LIMIT)
     system_prompt = build_system_prompt(
         score,
         None,
@@ -346,7 +354,7 @@ def chat(
             tool_name,
             tool_input,
             image_urls=image_urls,
-            session_id=session_id,
+            session_id=context_session,
             reason_hint=reason_hint or None,
         )
 
@@ -358,7 +366,7 @@ def chat(
         max_tokens=10000,
         tools=TOOL_DEFINITIONS,
         tool_handler=_tool_handler,
-        session_id=session_id,
+        session_id=context_session,
         image_urls=image_urls,
         is_admin=is_admin,
         tool_exposure="chat",
@@ -366,26 +374,37 @@ def chat(
     final_text, should_wait = _parse_dialogue_output(final_text_raw)
     print(
         "[pupu] dialogue decision: "
-        f"session={session_id} source={message_source} should_wait={should_wait}"
+        f"context={context_session} identity={identity_session} "
+        f"source={message_source} should_wait={should_wait}"
     )
 
-    save_message("assistant", final_text, session_id, source=message_source)
+    save_message("assistant", final_text, context_session, source=message_source)
 
     if should_wait:
-        schedule_wait_timer(session_id)
+        schedule_wait_timer(context_session)
 
     if message_source == REVIEW_SOURCE:
-        _maybe_batch_review(session_id)
+        _maybe_batch_review(context_session, identity_session=identity_session)
 
     return final_text
 
 
-def _maybe_batch_review(session_id: str = "default"):
+def _maybe_batch_review(
+    session_id: str = "default",
+    *,
+    context_session: str | None = None,
+    identity_session: str | None = None,
+):
+    context_session = str(context_session or session_id or "default")
+    identity_session = str(identity_session or session_id or "default")
     if not _batch_review_lock.acquire(blocking=False):
-        print(f"[pupu] batch review skip: lock busy session={session_id}")
+        print(
+            "[pupu] batch review skip: lock busy "
+            f"context={context_session} identity={identity_session}"
+        )
         return
     try:
-        return _maybe_batch_review_unlocked(session_id)
+        return _maybe_batch_review_unlocked(context_session, identity_session=identity_session)
     finally:
         _batch_review_lock.release()
 
@@ -395,21 +414,29 @@ def run_due_batch_reviews():
         _maybe_batch_review(session_id)
 
 
-def _maybe_batch_review_unlocked(session_id: str = "default"):
+def _maybe_batch_review_unlocked(
+    session_id: str = "default",
+    *,
+    context_session: str | None = None,
+    identity_session: str | None = None,
+):
     """Every REVIEW_INTERVAL completed chat turns, summarize + judge familiarity + extract facts."""
+    context_session = str(context_session or session_id or "default")
+    identity_session = str(identity_session or session_id or "default")
     try:
         print(
             "[pupu] batch review check: "
-            f"session={session_id}, interval={REVIEW_INTERVAL}, idle={REVIEW_IDLE_SECONDS}s"
+            f"context={context_session}, identity={identity_session}, "
+            f"interval={REVIEW_INTERVAL}, idle={REVIEW_IDLE_SECONDS}s"
         )
-        last_reviewed = get_oldest_unsummarized_msg_id(session_id)
+        last_reviewed = get_oldest_unsummarized_msg_id(context_session)
         pending_turns = count_pending_review_turns(
-            session_id=session_id,
+            session_id=context_session,
             after_msg_id=last_reviewed,
             source=REVIEW_SOURCE,
         )
         last_pending_time = get_pending_review_last_message_time(
-            session_id=session_id,
+            session_id=context_session,
             after_msg_id=last_reviewed,
             source=REVIEW_SOURCE,
         )
@@ -442,7 +469,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
             return
 
         batch = get_review_candidate_batch(
-            session_id=session_id,
+            session_id=context_session,
             review_interval=review_turns,
             source=REVIEW_SOURCE,
             min_turns=review_turns,
@@ -459,7 +486,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
             f"msg_id_range={batch[0]['id']}..{batch[-1]['id']}"
         )
 
-        active_tasks_text = _format_active_scheduled_tasks_for_review(session_id)
+        active_tasks_text = _format_active_scheduled_tasks_for_review(context_session)
         conversation_text = "\n".join(
             f"{'User' if item['role'] == 'user' else 'Pupu'}: {item['content']}"
             for item in batch
@@ -470,7 +497,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
             + "\n\n待整理对话：\n"
             + conversation_text
         )
-        familiarity_score = get_familiarity(session_id)
+        familiarity_score = get_familiarity(identity_session)
         include_familiarity_delta = familiarity_score < 100
         review_prompt = build_batch_review_prompt(
             include_familiarity_delta=include_familiarity_delta
@@ -519,7 +546,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
             print("[pupu] batch review fallback summary enabled")
 
         summary = result.get("summary") or _build_fallback_summary(batch)
-        save_summary(summary, batch[0]["id"], batch[-1]["id"], session_id)
+        save_summary(summary, batch[0]["id"], batch[-1]["id"], context_session)
         print(
             "[pupu] batch review summary saved: "
             f"chars={len(summary)}, range={batch[0]['id']}..{batch[-1]['id']}"
@@ -533,7 +560,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
             )
             familiarity_delta = 0
         if familiarity_delta:
-            update_familiarity(familiarity_delta, session_id=session_id)
+            update_familiarity(familiarity_delta, session_id=identity_session)
             print(
                 "[pupu] batch review familiarity delta applied: "
                 f"delta={familiarity_delta}"
@@ -543,7 +570,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
 
         user_facts = result.get("user_facts", {})
         if user_facts:
-            upsert_user_facts(user_facts, session_id)
+            upsert_user_facts(user_facts, identity_session)
             print(
                 "[pupu] batch review user_facts upserted: "
                 f"count={len(user_facts)}, keys={list(user_facts.keys())}"
@@ -553,7 +580,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
 
         self_facts = result.get("self_facts", {})
         if self_facts:
-            upsert_self_facts(self_facts, session_id)
+            upsert_self_facts(self_facts, identity_session)
             print(
                 "[pupu] batch review self_facts upserted: "
                 f"count={len(self_facts)}, keys={list(self_facts.keys())}"
@@ -564,7 +591,7 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
         important_events = result.get("important_events", [])
         saved_event_rows = {}
         if important_events:
-            saved_event_rows = save_review_important_events(session_id, important_events)
+            saved_event_rows = save_review_important_events(identity_session, important_events)
             print(
                 "[pupu] batch review important_events saved: "
                 f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"
@@ -575,9 +602,10 @@ def _maybe_batch_review_unlocked(session_id: str = "default"):
         task_updates = result.get("task_updates", [])
         if task_updates:
             update_results = apply_review_task_updates(
-                session_id,
+                context_session,
                 task_updates,
                 saved_event_rows,
+                identity_session=identity_session,
             )
             cancelled_count = sum(
                 len(item.get("task_ids", []))

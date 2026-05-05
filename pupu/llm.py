@@ -278,8 +278,7 @@ class _DeepSeekAnthropicProvider:
         is_admin: bool = False,
         tool_exposure: str = "chat",
     ) -> str:
-        if not model:
-            model = self._default_model
+        model = self._default_model
         return self._provider.chat_complete(
             model=model,
             system=system,
@@ -303,8 +302,7 @@ class _DeepSeekAnthropicProvider:
         max_tokens: int,
         task_name: str = "json_task",
     ) -> str:
-        if not model:
-            model = self._default_model
+        model = self._default_model
         return self._provider.json_task(
             model=model,
             system=system,

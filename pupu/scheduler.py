@@ -1,6 +1,7 @@
 """Poll and run due scheduled tasks (DB + chat + optional OneBot send)."""
 
 import asyncio
+import os
 import random
 import threading
 from datetime import datetime
@@ -11,6 +12,15 @@ from .message_sources import SCHEDULED, WAIT_FOLLOWUP
 from .sessions import OWNER_SESSION
 
 _scheduler_lock = threading.Lock()
+
+
+def _sched_debug() -> bool:
+    return str(os.environ.get("PUPU_DEBUG_SCHEDULED_TASKS", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def _load_first_numeric_owner_qq() -> int | None:
@@ -28,6 +38,14 @@ def _latest_message_is_user(session_id: str) -> bool:
     if not recent:
         return False
     return str(recent[-1].get("role") or "") == "user"
+
+
+def _scheduled_identity_session(context_session: str) -> str:
+    """Scheduled tasks are delivered by context; unknown group owners use owner identity."""
+    sid = str(context_session or "")
+    if sid == OWNER_SESSION or sid.startswith("private_"):
+        return sid
+    return OWNER_SESSION
 
 
 def _is_wait_followup_task(task: dict) -> bool:
@@ -115,8 +133,13 @@ async def onebot_scheduled_tasks_loop(bot) -> None:
     """Wake periodically, run due tasks for this bot's reachable sessions."""
     from .agent import chat
 
+    # First tick runs immediately so reconnects process overdue tasks without waiting
+    # an extra poll interval; subsequent ticks wait 45s.
+    first_tick = True
     while True:
-        await asyncio.sleep(45)
+        if not first_tick:
+            await asyncio.sleep(45)
+        first_tick = False
         now_iso = datetime.now().isoformat(timespec="seconds")
         with _scheduler_lock:
             tasks = [
@@ -124,6 +147,11 @@ async def onebot_scheduled_tasks_loop(bot) -> None:
                 for task in get_due_scheduled_tasks(now_iso, 10)
                 if not _is_wait_followup_task(task)
             ]
+        if _sched_debug():
+            print(
+                "[pupu][scheduled-debug] scheduler_poll "
+                f"now={now_iso} due_count={len(tasks)}"
+            )
         if tasks:
             brief = "; ".join(
                 f"id={task['id']} session={task['session_id']} run_at={task['run_at']} repeat={task.get('repeat_kind')} title={str(task.get('title') or '')[:18]}"
@@ -136,6 +164,7 @@ async def onebot_scheduled_tasks_loop(bot) -> None:
         for task in tasks:
             tid = task["id"]
             sid = task["session_id"]
+            identity_sid = _scheduled_identity_session(sid)
             print(
                 "[pupu][scheduled-debug] scheduler_task_start "
                 f"task_id={tid} session={sid} run_at={task.get('run_at')} repeat={task.get('repeat_kind')}"
@@ -150,10 +179,12 @@ async def onebot_scheduled_tasks_loop(bot) -> None:
                     chat,
                     synthetic,
                     sid,
-                    sid == OWNER_SESSION,
+                    identity_sid == OWNER_SESSION,
                     None,
                     hint,
                     source,
+                    context_session=sid,
+                    identity_session=identity_sid,
                 )
             except Exception as e:
                 print(f"[pupu] scheduled task #{tid} chat failed: {e}")
@@ -208,6 +239,7 @@ def cli_scheduled_tasks_tick() -> None:
     for task in tasks:
         tid = task["id"]
         sid = task["session_id"]
+        identity_sid = _scheduled_identity_session(sid)
         print(
             "[pupu][scheduled-debug] cli_task_start "
             f"task_id={tid} session={sid} run_at={task.get('run_at')} repeat={task.get('repeat_kind')}"
@@ -221,10 +253,12 @@ def cli_scheduled_tasks_tick() -> None:
             reply = chat(
                 synthetic,
                 sid,
-                is_admin=(sid == OWNER_SESSION),
+                is_admin=(identity_sid == OWNER_SESSION),
                 image_urls=None,
                 reply_speed_hint=hint,
                 message_source=source,
+                context_session=sid,
+                identity_session=identity_sid,
             )
         except Exception as e:
             print(f"[pupu] scheduled task #{tid} chat failed: {e}")

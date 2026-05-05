@@ -40,6 +40,7 @@ if HAS_QQ_OFFICIAL:
             return
         sid = f"channel_{event.channel_id}"
         user = event.get_user_id()
+        identity_sid = state.OWNER_SESSION if is_admin(user) else f"c2c_{user}"
         await buffer_message(
             sid,
             text,
@@ -49,6 +50,7 @@ if HAS_QQ_OFFICIAL:
             is_admin(user),
             user,
             f"频道{event.channel_id}",
+            identity_session=identity_sid,
         )
 
     @qq_c2c.handle()
@@ -72,6 +74,7 @@ if HAS_QQ_OFFICIAL:
             is_admin(user),
             user,
             "私聊",
+            identity_session=sid,
         )
 
     @qq_group_at.handle()
@@ -86,6 +89,7 @@ if HAS_QQ_OFFICIAL:
             return
         sid = f"qqgroup_{event.group_openid}"
         user = event.get_user_id()
+        identity_sid = state.OWNER_SESSION if is_admin(user) else f"c2c_{user}"
         await buffer_message(
             sid,
             text,
@@ -95,4 +99,5 @@ if HAS_QQ_OFFICIAL:
             is_admin(user),
             user,
             "QQ群",
+            identity_session=identity_sid,
         )

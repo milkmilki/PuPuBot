@@ -299,6 +299,36 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(events[0]["source_event_key"], "promise-test")
         self.assertEqual(list_scheduled_tasks(self.session_id), [])
 
+    def test_batch_review_splits_context_summary_and_identity_memory(self):
+        context_id = self.session_id + "_context"
+        identity_id = self.session_id + "_identity"
+        reset_session(context_id)
+        reset_session(identity_id)
+        set_familiarity(0, session_id=identity_id)
+        for i in range(8):
+            save_message("user", f"user-{i}", context_id, source=CHAT)
+            save_message("assistant", f"assistant-{i}", context_id, source=CHAT)
+
+        raw = """{
+          "summary": "群上下文摘要。",
+          "familiarity_delta": 2,
+          "user_facts": {"喜欢": "草莓"},
+          "self_facts": {},
+          "important_events": [],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+        from pupu.memory import get_user_facts
+
+        with patch("pupu.agent.json_task", return_value=raw):
+            _maybe_batch_review(context_id, identity_session=identity_id)
+
+        self.assertEqual(get_summaries(context_id, limit=1)[-1]["summary"], "群上下文摘要。")
+        self.assertEqual(get_familiarity(identity_id), 2)
+        self.assertEqual(get_user_facts(identity_id), {"喜欢": "草莓"})
+        self.assertEqual(get_summaries(identity_id, limit=1), [])
+
     def test_batch_review_omits_familiarity_delta_after_score_reaches_100(self):
         set_familiarity(100, session_id=self.session_id)
         for i in range(8):

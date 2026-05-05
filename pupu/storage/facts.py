@@ -7,7 +7,17 @@ from datetime import datetime
 from .db import get_conn
 
 
-def upsert_user_facts(facts: dict[str, str], session_id: str = "default"):
+def _resolve_identity_session(session_id: str = "default", identity_session: str | None = None) -> str:
+    return str(identity_session or session_id or "default")
+
+
+def upsert_user_facts(
+    facts: dict[str, str],
+    session_id: str = "default",
+    *,
+    identity_session: str | None = None,
+):
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     now = datetime.now().isoformat()
     for key, value in facts.items():
@@ -27,7 +37,12 @@ def upsert_user_facts(facts: dict[str, str], session_id: str = "default"):
     conn.close()
 
 
-def get_user_facts(session_id: str = "default") -> dict[str, str]:
+def get_user_facts(
+    session_id: str = "default",
+    *,
+    identity_session: str | None = None,
+) -> dict[str, str]:
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     rows = conn.execute(
         "SELECT fact_key, fact_value FROM user_facts WHERE session_id = ? ORDER BY updated_at ASC",
@@ -37,7 +52,13 @@ def get_user_facts(session_id: str = "default") -> dict[str, str]:
     return {row["fact_key"]: row["fact_value"] for row in rows}
 
 
-def upsert_self_facts(facts: dict[str, str], session_id: str = "default"):
+def upsert_self_facts(
+    facts: dict[str, str],
+    session_id: str = "default",
+    *,
+    identity_session: str | None = None,
+):
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     now = datetime.now().isoformat()
     for key, value in facts.items():
@@ -57,7 +78,12 @@ def upsert_self_facts(facts: dict[str, str], session_id: str = "default"):
     conn.close()
 
 
-def get_self_facts(session_id: str = "default") -> dict[str, str]:
+def get_self_facts(
+    session_id: str = "default",
+    *,
+    identity_session: str | None = None,
+) -> dict[str, str]:
+    session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     rows = conn.execute(
         "SELECT fact_key, fact_value FROM self_facts WHERE session_id = ? ORDER BY updated_at ASC",

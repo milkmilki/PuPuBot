@@ -7,7 +7,16 @@ from datetime import datetime
 from .db import get_conn
 
 
-def get_oldest_unsummarized_msg_id(session_id: str = "default") -> int:
+def _resolve_context_session(session_id: str = "default", context_session: str | None = None) -> str:
+    return str(context_session or session_id or "default")
+
+
+def get_oldest_unsummarized_msg_id(
+    session_id: str = "default",
+    *,
+    context_session: str | None = None,
+) -> int:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     row = conn.execute(
         "SELECT MAX(end_msg_id) AS last_end FROM summaries WHERE session_id = ?",
@@ -23,7 +32,10 @@ def save_summary(
     start_msg_id: int,
     end_msg_id: int,
     session_id: str = "default",
+    *,
+    context_session: str | None = None,
 ):
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     conn.execute(
         "INSERT INTO summaries (session_id, summary, start_msg_id, end_msg_id, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -33,7 +45,13 @@ def save_summary(
     conn.close()
 
 
-def get_summaries(session_id: str = "default", limit: int = 5) -> list[dict]:
+def get_summaries(
+    session_id: str = "default",
+    limit: int = 5,
+    *,
+    context_session: str | None = None,
+) -> list[dict]:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     rows = conn.execute(
         "SELECT summary, created_at FROM summaries WHERE session_id = ? ORDER BY id DESC LIMIT ?",

@@ -9,12 +9,19 @@ from .db import get_conn
 from .summaries import get_oldest_unsummarized_msg_id
 
 
+def _resolve_context_session(session_id: str = "default", context_session: str | None = None) -> str:
+    return str(context_session or session_id or "default")
+
+
 def save_message(
     role: str,
     content: str,
     session_id: str = "default",
     source: str = CHAT,
+    *,
+    context_session: str | None = None,
 ):
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     conn.execute(
         "INSERT INTO messages (session_id, role, content, timestamp, source) VALUES (?, ?, ?, ?, ?)",
@@ -24,7 +31,13 @@ def save_message(
     conn.close()
 
 
-def get_recent_messages(n: int = 50, session_id: str = "default") -> list[dict]:
+def get_recent_messages(
+    n: int = 50,
+    session_id: str = "default",
+    *,
+    context_session: str | None = None,
+) -> list[dict]:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     rows = conn.execute(
         "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
@@ -38,7 +51,10 @@ def get_messages_in_range(
     session_id: str,
     after_id: int,
     limit: int = 100,
+    *,
+    context_session: str | None = None,
 ) -> list[dict]:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     rows = conn.execute(
         "SELECT id, role, content FROM messages WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
@@ -52,7 +68,10 @@ def count_pending_review_turns(
     session_id: str = "default",
     after_msg_id: int = 0,
     source: str = CHAT,
+    *,
+    context_session: str | None = None,
 ) -> int:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     row = conn.execute(
         """SELECT COUNT(*) AS cnt
@@ -72,7 +91,10 @@ def get_review_candidate_batch(
     review_interval: int = 8,
     source: str = CHAT,
     min_turns: int | None = None,
+    *,
+    context_session: str | None = None,
 ) -> list[dict]:
+    session_id = _resolve_context_session(session_id, context_session)
     interval = max(1, int(review_interval or 1))
     minimum = interval if min_turns is None else max(1, int(min_turns or 1))
     after_msg_id = get_oldest_unsummarized_msg_id(session_id)
@@ -113,7 +135,10 @@ def get_pending_review_last_message_time(
     session_id: str = "default",
     after_msg_id: int = 0,
     source: str = CHAT,
+    *,
+    context_session: str | None = None,
 ) -> str | None:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     row = conn.execute(
         """SELECT timestamp
@@ -153,7 +178,10 @@ def list_pending_review_sessions(source: str = CHAT) -> list[str]:
 def get_summary_trigger_progress(
     session_id: str = "default",
     review_interval: int = 8,
+    *,
+    context_session: str | None = None,
 ) -> dict[str, int | bool]:
+    session_id = _resolve_context_session(session_id, context_session)
     interval = max(1, int(review_interval or 1))
     last_reviewed_id = get_oldest_unsummarized_msg_id(session_id)
     pending = count_pending_review_turns(
@@ -170,7 +198,8 @@ def get_summary_trigger_progress(
     }
 
 
-def count_messages(session_id: str = "default") -> int:
+def count_messages(session_id: str = "default", *, context_session: str | None = None) -> int:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     row = conn.execute(
         "SELECT COUNT(*) AS cnt FROM messages WHERE session_id = ?",
@@ -180,7 +209,12 @@ def count_messages(session_id: str = "default") -> int:
     return row["cnt"] if row else 0
 
 
-def get_last_user_message_time(session_id: str = "default") -> str | None:
+def get_last_user_message_time(
+    session_id: str = "default",
+    *,
+    context_session: str | None = None,
+) -> str | None:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     row = conn.execute(
         "SELECT timestamp FROM messages WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1",
@@ -190,7 +224,12 @@ def get_last_user_message_time(session_id: str = "default") -> str | None:
     return row["timestamp"] if row else None
 
 
-def get_last_message_time(session_id: str = "default") -> str | None:
+def get_last_message_time(
+    session_id: str = "default",
+    *,
+    context_session: str | None = None,
+) -> str | None:
+    session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     row = conn.execute(
         "SELECT timestamp FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 1",

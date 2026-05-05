@@ -29,6 +29,9 @@ DEFAULT_TOOL_SERVERS: dict[str, dict[str, bool]] = {
     "scheduler": {"enabled": True},
 }
 
+DEFAULT_ARBITER_URL = "http://127.0.0.1:8079/api/group_arbitrate"
+DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 35.0
+
 
 def validate_instance_id(instance_id: str) -> None:
     if not instance_id or not _ID_RE.match(instance_id):
@@ -48,6 +51,41 @@ def _default_persona() -> dict[str, Any]:
 def _scrub_deprecated_instance_keys(cfg: dict[str, Any]) -> None:
     for k in _DEPRECATED_INSTANCE_KEYS:
         cfg.pop(k, None)
+
+
+def _normalize_instance_config(cfg: dict[str, Any]) -> None:
+    _scrub_deprecated_instance_keys(cfg)
+    cfg.setdefault("open_groups", [])
+    if not isinstance(cfg["open_groups"], list):
+        cfg["open_groups"] = []
+    cfg["open_groups"] = [
+        str(value).strip()
+        for value in cfg["open_groups"]
+        if str(value).strip()
+    ]
+
+    cfg.setdefault("bot_id", "")
+    cfg["bot_id"] = str(cfg.get("bot_id") or "").strip()
+
+    cfg.setdefault("arbiter_url", DEFAULT_ARBITER_URL)
+    cfg["arbiter_url"] = str(cfg.get("arbiter_url") or DEFAULT_ARBITER_URL).strip()
+
+    cfg.setdefault("peer", {})
+    if not isinstance(cfg["peer"], dict):
+        cfg["peer"] = {}
+    peer = cfg["peer"]
+    cfg["peer"] = {
+        "bot_id": str(peer.get("bot_id") or "").strip(),
+        "name": str(peer.get("name") or "").strip(),
+        "qq": str(peer.get("qq") or "").strip(),
+        "persona_brief": str(peer.get("persona_brief") or "").strip(),
+    }
+
+    try:
+        debounce = float(cfg.get("debounce_seconds_open_group", DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS))
+    except (TypeError, ValueError):
+        debounce = DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS
+    cfg["debounce_seconds_open_group"] = max(5.0, min(120.0, debounce))
 
 
 def read_port(inst_dir: Path) -> int:
@@ -108,6 +146,7 @@ def read_instance_files(instance_id: str) -> tuple[dict[str, Any], dict[str, Any
     if not inst_path.is_file():
         raise FileNotFoundError("instance.json")
     cfg = json.loads(inst_path.read_text(encoding="utf-8"))
+    _normalize_instance_config(cfg)
     if per_path.is_file():
         persona = json.loads(per_path.read_text(encoding="utf-8"))
     else:
@@ -128,7 +167,7 @@ def write_instance_files(
     (inst_dir / "data" / "logs").mkdir(parents=True, exist_ok=True)
     if sync_port and "port" in cfg:
         write_env_qq(inst_dir, int(cfg["port"]))
-    _scrub_deprecated_instance_keys(cfg)
+    _normalize_instance_config(cfg)
     (inst_dir / "instance.json").write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -160,6 +199,16 @@ def create_instance(
         "qq_app_id": "",
         "qq_app_secret": "",
         "owner_ids": list(DEFAULT_OWNER_IDS),
+        "open_groups": [],
+        "bot_id": instance_id,
+        "arbiter_url": DEFAULT_ARBITER_URL,
+        "peer": {
+            "bot_id": "",
+            "name": "",
+            "qq": "",
+            "persona_brief": "",
+        },
+        "debounce_seconds_open_group": DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS,
         "tool_servers": json.loads(json.dumps(DEFAULT_TOOL_SERVERS)),
     }
     persona = _default_persona()

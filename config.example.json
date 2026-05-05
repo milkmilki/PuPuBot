@@ -3,6 +3,8 @@
   "qq_app_id": "",
   "qq_app_secret": "",
   "owner_ids": ["424225912"],
+  "arbiter_url": "http://127.0.0.1:8079/api/group_arbitrate",
+  "arbiter_timeout_seconds": 120,
   "tool_servers": {
     "web": { "enabled": true },
     "filesystem": { "enabled": true },

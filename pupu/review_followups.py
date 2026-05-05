@@ -166,8 +166,11 @@ def normalize_review_task_updates(value) -> list[dict]:
     return cleaned
 
 
-def save_review_important_events(session_id: str, important_events: list[dict]) -> dict[str, dict]:
-    rows = upsert_important_events(session_id, important_events)
+def save_review_important_events(
+    identity_session: str,
+    important_events: list[dict],
+) -> dict[str, dict]:
+    rows = upsert_important_events(identity_session, important_events)
     return {str(row["source_event_key"]): row for row in rows}
 
 
@@ -176,8 +179,11 @@ def apply_review_task_drafts(
     task_drafts: list[dict],
     important_event_rows: dict[str, dict] | None = None,
     now: datetime | None = None,
+    *,
+    identity_session: str | None = None,
 ) -> list[dict]:
     results = []
+    identity_session = str(identity_session or session_id)
     current = now or datetime.now()
     event_rows = dict(important_event_rows or {})
 
@@ -201,11 +207,11 @@ def apply_review_task_drafts(
             continue
 
         event_row = event_rows.get(source_event_key) or get_important_event_by_key(
-            session_id, source_event_key
+            identity_session, source_event_key
         )
         if event_row is None:
             placeholder_rows = upsert_important_events(
-                session_id,
+                identity_session,
                 [
                     {
                         "source_event_key": source_event_key,
@@ -293,7 +299,11 @@ def apply_review_task_drafts(
             interval_seconds,
         )
         if existing:
-            link_important_event_task(session_id, source_event_key, int(existing["id"]))
+            link_important_event_task(
+                identity_session,
+                source_event_key,
+                int(existing["id"]),
+            )
             results.append(
                 {
                     "source_event_key": source_event_key,
@@ -312,7 +322,7 @@ def apply_review_task_drafts(
             repeat,
             interval_seconds,
         )
-        link_important_event_task(session_id, source_event_key, task_id)
+        link_important_event_task(identity_session, source_event_key, task_id)
         results.append(
             {
                 "source_event_key": source_event_key,
@@ -330,8 +340,11 @@ def apply_review_task_updates(
     task_updates: list[dict],
     important_event_rows: dict[str, dict] | None = None,
     now: datetime | None = None,
+    *,
+    identity_session: str | None = None,
 ) -> list[dict]:
     results = []
+    identity_session = str(identity_session or session_id)
     event_rows = dict(important_event_rows or {})
     current = now or datetime.now()
     for update in task_updates:
@@ -353,6 +366,7 @@ def apply_review_task_updates(
                 [draft],
                 event_rows,
                 current,
+                identity_session=identity_session,
             )
             item = dict(draft_results[0] if draft_results else {})
             item["action"] = "create"

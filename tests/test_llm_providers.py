@@ -135,6 +135,7 @@ class LLMProviderTests(unittest.TestCase):
                     "PUPU_CHAT_PROVIDER": "deepseek",
                     "PUPU_DEEPSEEK_BASE_URL": "https://api.deepseek.com/anthropic",
                     "PUPU_DEEPSEEK_API_KEY": "test-key",
+                    "PUPU_DEEPSEEK_MODEL": "deepseek-v4-pro",
                 },
                 clear=False,
             ):

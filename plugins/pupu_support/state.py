@@ -29,3 +29,9 @@ tts_reply_enabled: bool = _env_bool("PUPU_TTS_REPLY_DEFAULT", False)
 msg_buffers: dict[str, dict] = {}
 debounce_tasks: dict[str, asyncio.Task] = {}
 session_phase: dict[str, str] = {}
+
+# arbiter_decision_subscriber tasks, keyed by group_id (one per open group).
+arbiter_subscriber_tasks: dict[str, asyncio.Task] = {}
+# Last seen ``decision_id`` per group, so the subscriber resumes from the
+# correct cursor across reconnects.
+arbiter_last_decision_id: dict[str, int] = {}
