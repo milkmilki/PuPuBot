@@ -13,6 +13,16 @@ Optional JSON config: ``instances/_shared/arbiter_server.json`` (see ``arbiter_s
 Environment (override file): ``PUPU_ARBITER_HOST``, ``PUPU_ARBITER_PORT``, ``PUPU_JUDGE_PROVIDER``,
 ``PUPU_DEEPSEEK_MODEL``, ``PUPU_DEEPSEEK_API_KEY``, etc. Loads repo ``.env`` first.
 
+Debounce (``PUPU_ARBITER_DEBOUNCE_IDLE_SEC`` / ``PUPU_ARBITER_DEBOUNCE_MAX_SEC`` or JSON keys
+``debounce_idle_seconds`` / ``debounce_max_seconds``):
+
+- **Idle**: seconds of quiet after the last ``/api/observe`` before ``run_judge`` (default 30, clamped
+  to 0.1–3600). JSON ``arbiter_server.json`` overrides via env at startup.
+- **Hard cap**: max seconds since the first observe in a burst before forcing ``run_judge`` even if
+  chat never goes quiet (default 60, clamped to 0.5–86400 when enabled). Set to **unlimited** with
+  ``none`` / ``off`` / ``unlimited`` / ``inf`` (case-insensitive), JSON ``null`` on
+  ``debounce_max_seconds``, or numeric ``-1`` — then only the idle window applies.
+
 Routes:
     POST /api/observe          — push one observed group message; idempotent
     GET  /api/await_decision   — long-poll for the next decision
@@ -69,6 +79,9 @@ def apply_arbiter_settings(cfg: dict) -> None:
             continue
         val = cfg[key]
         if val is None:
+            # JSON null on debounce_max_seconds disables the hard cap (idle-only debounce).
+            if key == "debounce_max_seconds":
+                os.environ["PUPU_ARBITER_DEBOUNCE_MAX_SEC"] = "none"
             continue
         text = str(val).strip()
         if text:
@@ -87,20 +100,36 @@ def resolve_bind(cfg: dict) -> tuple[str, int]:
     return host, port
 
 
+_DEBOUNCE_IDLE_MAX = 3600.0
+_DEBOUNCE_CAP_MAX = 86400.0
+_DEBOUNCE_MAX_DISABLED_TOKENS = frozenset(
+    {"none", "off", "no", "false", "unlimited", "inf", "infinity"}
+)
+
+
 def _debounce_idle_seconds() -> float:
     raw = os.environ.get("PUPU_ARBITER_DEBOUNCE_IDLE_SEC", "").strip()
     try:
-        return max(0.1, min(60.0, float(raw))) if raw else 30.0
+        return max(0.1, min(_DEBOUNCE_IDLE_MAX, float(raw))) if raw else 30.0
     except ValueError:
         return 30.0
 
 
-def _debounce_max_seconds() -> float:
+def _debounce_max_seconds() -> float | None:
+    """Hard cap from first observe in a burst; ``None`` = no cap (idle-only debounce)."""
     raw = os.environ.get("PUPU_ARBITER_DEBOUNCE_MAX_SEC", "").strip()
+    if not raw:
+        return 60.0
+    lower = raw.lower()
+    if lower in _DEBOUNCE_MAX_DISABLED_TOKENS:
+        return None
     try:
-        return max(0.5, min(120.0, float(raw))) if raw else 60.0
+        value = float(raw)
     except ValueError:
         return 60.0
+    if value < 0:
+        return None
+    return max(0.5, min(_DEBOUNCE_CAP_MAX, value))
 
 
 def _await_decision_max_timeout() -> float:
@@ -117,16 +146,18 @@ def _await_decision_max_timeout() -> float:
 
 
 class _DebounceWatchdog:
-    """One asyncio task per group; resettable idle timer with a hard cap.
+    """One asyncio task per group; resettable idle timer with an optional hard cap.
 
     Lifecycle:
       - First observe arrives -> ``schedule(group_id)`` creates the task and
         records ``opened_at = now``.
       - Subsequent observes -> ``schedule(group_id)`` cancels the existing
         idle wait and starts a new one, but does NOT reset ``opened_at`` so
-        the hard cap can still fire.
+        the hard cap can still fire (when enabled).
       - When either the idle window or the hard cap elapses, the task fires
         ``run_judge(group_id)`` in a worker thread, then drops state.
+      - If the hard cap is disabled (``debounce_max`` unlimited), only the idle
+        window applies after the last observe in a burst.
     """
 
     def __init__(self) -> None:
@@ -147,16 +178,16 @@ class _DebounceWatchdog:
         cap = _debounce_max_seconds()
         loop = asyncio.get_running_loop()
         opened_at = self._opened_at.get(group_id, loop.time())
-        # Sleep at most until the hard cap, but wake up after ``idle``.
-        max_remaining = max(0.0, opened_at + cap - loop.time())
-        sleep_for = min(idle, max_remaining) if max_remaining > 0 else idle
+        if cap is None:
+            sleep_for = idle
+        else:
+            # Sleep at most until the hard cap, but wake up after ``idle``.
+            max_remaining = max(0.0, opened_at + cap - loop.time())
+            sleep_for = min(idle, max_remaining) if max_remaining > 0 else idle
         try:
             await asyncio.sleep(sleep_for)
         except asyncio.CancelledError:
             return
-        # If a fresh observe pushed back the cap window we may still be inside
-        # the idle window; in that case re-check the cap. If the cap is hit,
-        # always fire even if a fresh observe just happened.
         await self._fire(group_id)
 
     async def _fire(self, group_id: str) -> None:
@@ -202,6 +233,7 @@ def build_app(bind_host: str, bind_port: int):
     @app.get("/health")
     def health() -> dict:
         jp = os.environ.get("PUPU_JUDGE_PROVIDER", "").strip() or "anthropic"
+        debounce_max = _debounce_max_seconds()
         return {
             "ok": True,
             "judge_provider": jp,
@@ -210,7 +242,8 @@ def build_app(bind_host: str, bind_port: int):
             "deepseek_model": (os.environ.get("PUPU_DEEPSEEK_MODEL") or "").strip() or None,
             "bind": f"{bind_host}:{bind_port}",
             "debounce_idle_sec": _debounce_idle_seconds(),
-            "debounce_max_sec": _debounce_max_seconds(),
+            "debounce_max_sec": debounce_max,
+            "debounce_max_unlimited": debounce_max is None,
         }
 
     @app.post("/api/observe")
@@ -260,13 +293,16 @@ def main() -> None:
     print(f"[arbiter_server] bind http://{host}:{port}")
     print(
         f"[arbiter_server] audit_log={instances_dir() / '_shared' / 'arbiter_audit.log'} "
-        f"(disable: PUPU_ARBITER_AUDIT=0)"
+        f"(disable: PUPU_ARBITER_AUDIT=0); "
+        f"judge_errors={instances_dir() / '_shared' / '错误.log'}"
     )
     print(f"[arbiter_server] config_file={_config_path()} exists={_config_path().is_file()}")
     print(f"[arbiter_server] PUPU_JUDGE_PROVIDER={jp}")
+    cap = _debounce_max_seconds()
+    cap_label = "unlimited" if cap is None else f"{cap}s"
     print(
         f"[arbiter_server] debounce idle={_debounce_idle_seconds()}s "
-        f"max={_debounce_max_seconds()}s"
+        f"max={cap_label}"
     )
     if os.environ.get("PUPU_JUDGE_PROVIDER", "").strip() == "deepseek":
         dm = os.environ.get("PUPU_DEEPSEEK_MODEL", "").strip() or "deepseek-v4-pro (default)"

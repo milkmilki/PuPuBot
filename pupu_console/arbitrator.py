@@ -29,6 +29,7 @@ import asyncio
 import json
 import os
 import re
+import sys
 import sqlite3
 import threading
 import time
@@ -53,6 +54,7 @@ _OPEN_MERGE_STALE_SEC = float(os.environ.get("PUPU_ARBITER_OPEN_MERGE_STALE_SEC"
 # ``decision_leaders`` table acting as a leader-election token).
 _GROUP_LOCKS: dict[str, threading.Lock] = {}
 _GROUP_LOCKS_META = threading.Lock()
+_JUDGE_ERROR_LOG_LOCK = threading.Lock()
 
 
 def _group_lock(group_id: str) -> threading.Lock:
@@ -327,9 +329,13 @@ def _llm_decide(
                 f"qq={candidate.get('qq') or 'unknown'}, persona={candidate.get('persona_brief') or '未提供'}"
             )
         system = (
-            "你是群聊发言仲裁器。从候选 bot 里选出本轮最适合接话的一位。"
-            "必须输出 JSON：{\"speaker\":\"bot_id或none\",\"reason\":\"简短理由\",\"confidence\":0到1}。"
-            "speaker 原则上应是候选里的某位 bot_id；仅在全场都不适合任何 bot 开口（例如激烈争吵、明确要求安静）时才选 none。"
+            "你是群聊发言仲裁器。从候选 bot 里选出本轮最适合接话的一位。\n"
+            "【输出格式】只输出一个 JSON 对象，不要 markdown 代码块、不要前言后语、不要注释。"
+            "对象必须且只能包含三个键：speaker（字符串）、reason（字符串）、confidence（数字，0 到 1 之间的小数，不要用字符串形式）。\n"
+            "【语法】必须是可被标准 JSON 解析器解析的文本：键与字符串用英文双引号；"
+            "confidence 写完数字后紧跟 } 或前面的逗号，禁止在数字后再多写一个引号（错误示例：\"confidence\":0.9\" ）；"
+            "不要在最后一个字段后面多加逗号。\n"
+            "speaker 取值为候选列表中的某位 bot_id，或仅在全场都不适合任何 bot 开口时填 none。"
             "用户之间日常聊天、闲聊、吐槽时也可以自然接梗、关心或打趣；不要因为「只是用户在对话」就频繁选 none。"
         )
         user_content = (
@@ -361,6 +367,7 @@ def _llm_decide(
         return "none", "llm_empty_response", 0.0
     data = _parse_llm_json(raw_text)
     if not data:
+        _append_judge_error_log(event="judge llm_invalid_json", body=raw_text)
         return "none", "llm_invalid_json", 0.0
     speaker = str(data.get("speaker") or "").strip() or "none"
     reason = str(data.get("reason") or "").strip() or "llm_no_reason"
@@ -401,6 +408,29 @@ def _avoid_low_confidence_repeat(
 
 def _audit_log_file() -> Path:
     return instances_dir() / "_shared" / "arbiter_audit.log"
+
+
+def _judge_error_log_file() -> Path:
+    """Human-readable judge failures (e.g. JSON parse); UTF-8 filename under ``_shared``."""
+    return instances_dir() / "_shared" / "错误.log"
+
+
+def _append_judge_error_log(*, event: str, body: str) -> None:
+    """Append one timestamped block to ``错误.log`` (thread-safe)."""
+    path = _judge_error_log_file()
+    ts = datetime.now().isoformat(timespec="seconds")
+    text = str(body or "")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _JUDGE_ERROR_LOG_LOCK:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(f"===== {ts} {event} =====\n")
+                handle.write(text)
+                if text and not text.endswith("\n"):
+                    handle.write("\n")
+                handle.write("\n")
+    except Exception as exc:
+        print(f"[arbiter] judge error log write failed: {exc}", file=sys.stderr, flush=True)
 
 
 def _audit_enabled() -> bool:
