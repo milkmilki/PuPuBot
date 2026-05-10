@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 
 from nonebot import on_command
 from nonebot.adapters import Event, Message
 from nonebot.params import CommandArg
+
+import httpx
+
+from pupu.config import load_arbiter_base_url, load_arbiter_timeout_seconds
 
 from pupu.facts_report import format_facts_report
 from pupu.important_event_report import format_important_events_report
@@ -35,7 +38,7 @@ from pupu.proactive import (
     generate_proactive_message,
 )
 from pupu.tools import manage_scheduled_task
-from pupu.tts import get_tts_config
+from pupu.tts import get_tts_config, get_tts_status
 
 from .common import is_owner, resolve_sessions
 from . import state
@@ -56,6 +59,9 @@ HELP_TEXT = """PuPu 可用命令
 /proactive：手动触发一次主动消息检查（管理员）
 /reset：重置当前会话记忆（管理员）
 /tidy：手动整理长期记忆和定时任务（管理员）
+/silence on：本群仲裁强制不接话（管理员，需中心化仲裁服务）
+/silence off：恢复本群仲裁接话
+/silence：查看本群静默状态
 """
 
 help_cmd = on_command(
@@ -101,6 +107,12 @@ proactive_cmd = on_command(
 provider_cmd = on_command(
     "provider",
     aliases={"llm", "模型源", "模型"},
+    priority=5,
+    block=True,
+)
+silence_cmd = on_command(
+    "silence",
+    aliases={"silenc", "沉默", "静默", "仲裁静默"},
     priority=5,
     block=True,
 )
@@ -177,12 +189,13 @@ async def handle_tidy(event: Event):
 
 def _voice_config_warning() -> str:
     cfg = get_tts_config()
+    status = get_tts_status(cfg)
     if not cfg.enabled:
         return "\n但 PUPU_TTS_ENABLED 还没开启，所以当前仍只会发文字。"
-    if not cfg.ref_audio or not Path(cfg.ref_audio).exists():
-        return "\n但参考音频不存在，当前仍只会发文字。"
-    if not cfg.prompt_text:
-        return "\n但参考文本为空，当前仍只会发文字。"
+    if status.reason == "provider_missing":
+        return "\n但 PUPU_TTS_PROVIDER 还没配置，所以当前仍只会发文字。"
+    if status.reason == "provider_unavailable":
+        return f"\n但当前 provider `{cfg.provider}` 还没安装接入，所以当前仍只会发文字。"
     return ""
 
 
@@ -201,19 +214,29 @@ async def handle_voice(event: Event, args: Message = CommandArg()):
         await voice_cmd.finish("语音回复已关闭。之后只发文字。")
 
     cfg = get_tts_config()
+    status = get_tts_status(cfg)
     switch = "开启" if state.tts_reply_enabled else "关闭"
-    config = "可用" if cfg.enabled else "未启用"
-    ref = "已找到" if cfg.ref_audio and Path(cfg.ref_audio).exists() else "未找到"
-    prompt = "已填写" if cfg.prompt_text else "为空"
+    config = "就绪" if status.ready else "未就绪"
+    provider = cfg.provider or "未配置"
+    installed = ", ".join(status.installed_providers) if status.installed_providers else "无"
+    reason_map = {
+        "disabled": "TTS 总开关未启用",
+        "provider_missing": "还没有配置 provider",
+        "provider_unavailable": "provider 还没接入到项目里",
+        "ok": "可正常尝试语音合成",
+    }
+    reason = reason_map.get(status.reason, status.reason)
     await voice_cmd.finish(
         "语音回复："
         + switch
         + "\nTTS 配置："
         + config
-        + "\n参考音频："
-        + ref
-        + "\n参考文本："
-        + prompt
+        + "\n当前 provider："
+        + provider
+        + "\n已安装 provider："
+        + installed
+        + "\n状态说明："
+        + reason
         + "\n用法：/voice on 或 /voice off"
     )
 
@@ -372,3 +395,63 @@ async def handle_provider(event: Event, args: Message = CommandArg()):
         "\n下一次模型请求生效，重启后会回到 .env 配置。"
         + warning
     )
+
+
+def _silence_http_timeout() -> float:
+    return min(30.0, float(load_arbiter_timeout_seconds()))
+
+
+@silence_cmd.handle()
+async def handle_silence(event: Event, args: Message = CommandArg()):
+    user_id = event.get_user_id()
+    if not is_owner(user_id):
+        await silence_cmd.finish("只有管理员才能切换群仲裁静默。")
+    gid = getattr(event, "group_id", None)
+    if gid is None:
+        await silence_cmd.finish("这个命令只在群里用。")
+    group_id = str(gid).strip()
+    if not group_id:
+        await silence_cmd.finish("无法识别群号。")
+
+    base = load_arbiter_base_url().rstrip("/")
+    url = f"{base}/api/group_silence"
+    timeout = _silence_http_timeout()
+    action = args.extract_plain_text().strip().lower()
+
+    if action in {"", "status", "状态", "?"}:
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url, params={"group_id": group_id})
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            await silence_cmd.finish(f"查询失败（请确认仲裁服务已启动）：{exc}")
+        if not data.get("ok"):
+            await silence_cmd.finish(f"查询失败：{data.get('error', data)}")
+        on = bool(data.get("enabled"))
+        await silence_cmd.finish(
+            "本群仲裁静默：" + ("已开启（强制不接话）" if on else "已关闭（正常接话）")
+            + "\n用法：/silence on | /silence off"
+        )
+
+    if action in {"on", "enable", "start", "open", "1", "开启", "打开", "开", "true", "yes"}:
+        enabled = True
+    elif action in {"off", "disable", "stop", "close", "0", "关闭", "关", "false", "no"}:
+        enabled = False
+    else:
+        await silence_cmd.finish("用法：/silence on 关闭接话，/silence off 恢复，/silence 查看状态")
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json={"group_id": group_id, "enabled": enabled})
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        await silence_cmd.finish(f"同步失败（请确认仲裁服务已启动）：{exc}")
+    if not data.get("ok"):
+        await silence_cmd.finish(f"失败：{data.get('error', data)}")
+
+    if enabled:
+        await silence_cmd.finish("已开启：本群仲裁将固定为不接话（speaker 恒为 none），直到 /silence off。")
+    else:
+        await silence_cmd.finish("已关闭：本群仲裁恢复正常接话。")

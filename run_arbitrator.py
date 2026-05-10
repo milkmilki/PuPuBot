@@ -1,4 +1,4 @@
-"""Launch standalone group arbitration HTTP service (default :8079)."""
+"""Launch standalone group arbitration HTTP service (default :18079)."""
 
 from pupu_console.arbiter_server import main
 

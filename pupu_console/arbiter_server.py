@@ -1,4 +1,4 @@
-"""Standalone HTTP server for group arbitration (default 127.0.0.1:8079).
+"""Standalone HTTP server for group arbitration (default 127.0.0.1:18079).
 
 Run::
 
@@ -26,6 +26,8 @@ Debounce (``PUPU_ARBITER_DEBOUNCE_IDLE_SEC`` / ``PUPU_ARBITER_DEBOUNCE_MAX_SEC``
 Routes:
     POST /api/observe          — push one observed group message; idempotent
     GET  /api/await_decision   — long-poll for the next decision
+    GET  /api/group_silence    — query per-group forced ``speaker=none`` (``/silence``) flag
+    POST /api/group_silence   — set that flag (body: ``group_id``, ``enabled`` bool)
     POST /api/group_arbitrate  — legacy single-call arbitration (kept for the 30-day deprecation window)
     GET  /health
 """
@@ -96,7 +98,7 @@ def resolve_bind(cfg: dict) -> tuple[str, int]:
     if port_raw:
         port = int(port_raw)
     else:
-        port = int(cfg.get("port") or 8079)
+        port = int(cfg.get("port") or 18079)
     return host, port
 
 
@@ -272,6 +274,35 @@ def build_app(bind_host: str, bind_port: int):
         if decision is None:
             return {"ok": True, "decision": None, "since": int(since)}
         return {"ok": True, "decision": decision}
+
+    @app.get("/api/group_silence")
+    def api_group_silence_get(group_id: str = Query(...)) -> dict:
+        gid = str(group_id or "").strip()
+        if not gid:
+            return {"ok": False, "error": "missing_group_id"}
+        return {
+            "ok": True,
+            "group_id": gid,
+            "enabled": arbitrator.is_group_arbitration_silenced(gid),
+        }
+
+    @app.post("/api/group_silence")
+    async def api_group_silence_post(body: dict) -> dict:
+        gid = str(body.get("group_id") or "").strip()
+        if not gid:
+            return {"ok": False, "error": "missing_group_id"}
+        raw_en = body.get("enabled")
+        if isinstance(raw_en, str):
+            lo = raw_en.strip().lower()
+            if lo in {"1", "true", "yes", "y", "on", "开", "开启"}:
+                enabled = True
+            elif lo in {"0", "false", "no", "n", "off", "关", "关闭"}:
+                enabled = False
+            else:
+                return {"ok": False, "error": "invalid_enabled"}
+        else:
+            enabled = bool(raw_en)
+        return await asyncio.to_thread(arbitrator.set_group_arbitration_silence, gid, enabled)
 
     @app.post("/api/group_arbitrate")
     async def api_group_arbitrate(body: dict) -> dict:

@@ -46,11 +46,11 @@ def _arbiter_http_base() -> str:
         if p.is_file():
             j = json.loads(p.read_text(encoding="utf-8"))
             h = str(j.get("host") or "127.0.0.1").strip() or "127.0.0.1"
-            port = int(j.get("port") or 8079)
+            port = int(j.get("port") or 18079)
             return f"http://{h}:{port}"
     except Exception:
         pass
-    return "http://127.0.0.1:8079"
+    return "http://127.0.0.1:18079"
 
 
 @app.get("/api/arbiter")

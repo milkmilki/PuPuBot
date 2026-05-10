@@ -13,6 +13,8 @@ NEW (preferred, server-driven debounce):
     3. Bots long-poll ``/api/await_decision`` (``await_decision_async``) for the
        next ``decision_id``. All bots in the same group receive byte-identical
        decisions.
+    4. Admins may ``POST /api/group_silence`` (or ``/silence`` in PuPu) to force
+       ``speaker=none`` for a group until turned off.
 
 LEGACY (kept as a 30-day compatibility window):
     The old ``arbitrate(payload)`` flow remains: each bot POSTs once, the
@@ -232,6 +234,16 @@ def _connect() -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_gd_group ON group_decisions(group_id, decision_id)"
     )
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS group_arbitration_silence (
+            group_id TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+
     conn.commit()
     return conn
 
@@ -288,6 +300,50 @@ def _bump_recent_speaker(conn: sqlite3.Connection, group_id: str, speaker: str) 
         """,
         (group_id, speaker, _iso(_now()), consecutive),
     )
+
+
+def _group_silence_enabled(conn: sqlite3.Connection, group_id: str) -> bool:
+    row = conn.execute(
+        "SELECT enabled FROM group_arbitration_silence WHERE group_id = ?",
+        (group_id,),
+    ).fetchone()
+    return bool(row and int(row["enabled"] or 0))
+
+
+def is_group_arbitration_silenced(group_id: str) -> bool:
+    """Return whether ``group_id`` is in forced ``speaker=none`` mode (see ``/silence``)."""
+    group_id = str(group_id or "").strip()
+    if not group_id:
+        return False
+    conn = _connect()
+    try:
+        return _group_silence_enabled(conn, group_id)
+    finally:
+        conn.close()
+
+
+def set_group_arbitration_silence(group_id: str, enabled: bool) -> dict[str, Any]:
+    """Persist per-group arbitration silence (bots call via arbiter HTTP API)."""
+    group_id = str(group_id or "").strip()
+    if not group_id:
+        return {"ok": False, "error": "missing_group_id"}
+    now_iso = _iso(_now())
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO group_arbitration_silence (group_id, enabled, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(group_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at
+            """,
+            (group_id, 1 if enabled else 0, now_iso),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "group_id": group_id, "enabled": bool(enabled), "updated_at": now_iso}
 
 
 def _parse_llm_json(raw: str) -> dict[str, Any]:
@@ -784,6 +840,17 @@ def arbitrate(payload: dict[str, Any]) -> dict[str, Any]:
             cand_str = ",".join(sorted(candidates.keys()))
             base_audit = {"requesting_bot": bot_id, "candidates": cand_str, "context_preview": preview}
 
+            if _group_silence_enabled(conn, group_id):
+                return _legacy_store_decision(
+                    conn,
+                    group_id,
+                    merge_round,
+                    "none",
+                    "silence_command",
+                    1.0,
+                    audit={**base_audit, "source": "silence_command"},
+                )
+
             explicit = _explicit_at_speaker(target_set, candidates)
             if explicit:
                 return _legacy_store_decision(
@@ -1099,7 +1166,12 @@ def run_judge(group_id: str, *, source: str = "scheduled") -> dict[str, Any] | N
             audit_source: str
 
             explicit = _explicit_at_speaker(at_targets, candidates)
-            if explicit:
+            if _group_silence_enabled(conn, group_id):
+                decision_speaker = "none"
+                decision_reason = "silence_command"
+                decision_confidence = 1.0
+                audit_source = "silence_command"
+            elif explicit:
                 decision_speaker = explicit
                 decision_reason = "explicit_at"
                 decision_confidence = 1.0

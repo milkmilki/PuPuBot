@@ -10,8 +10,8 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
 # Used when config omits ``owner_ids`` and for new console instances.
 DEFAULT_OWNER_IDS: list[str] = ["424225912"]
-DEFAULT_ARBITER_URL = "http://127.0.0.1:8079/api/group_arbitrate"
-DEFAULT_ARBITER_BASE_URL = "http://127.0.0.1:8079"
+DEFAULT_ARBITER_URL = "http://127.0.0.1:18079/api/group_arbitrate"
+DEFAULT_ARBITER_BASE_URL = "http://127.0.0.1:18079"
 DEFAULT_ARBITER_TIMEOUT_SECONDS = 300.0
 DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 60.0
 DEFAULT_ARBITER_SUBSCRIBE_TIMEOUT_SECONDS = 30.0

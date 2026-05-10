@@ -7,3 +7,5 @@ data/tts_cache/
 *.db
 *.log
 instances/
+integrations/stardew_npc/**/bin/
+integrations/stardew_npc/**/obj/

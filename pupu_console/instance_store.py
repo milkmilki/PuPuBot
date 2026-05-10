@@ -29,7 +29,7 @@ DEFAULT_TOOL_SERVERS: dict[str, dict[str, bool]] = {
     "scheduler": {"enabled": True},
 }
 
-DEFAULT_ARBITER_URL = "http://127.0.0.1:8079/api/group_arbitrate"
+DEFAULT_ARBITER_URL = "http://127.0.0.1:18079/api/group_arbitrate"
 DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 35.0
 
 
