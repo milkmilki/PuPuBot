@@ -7,10 +7,10 @@ echo   Deploying pupu...
 echo ========================================
 echo.
 
-:: Check Python
-python --version >nul 2>&1
+:: Check Python 3.14
+py -3.14 --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python not found. Please install Python 3.10+ first.
+    echo [ERROR] Python 3.14 not found. Please install Python 3.14+ first.
     pause
     exit /b 1
 )
@@ -18,7 +18,7 @@ if errorlevel 1 (
 :: Create venv if missing
 if not exist "ForFun\Scripts\python.exe" (
     echo [1/3] Creating virtual environment...
-    python -m venv ForFun
+    py -3.14 -m venv ForFun
 ) else (
     echo [1/3] Virtual environment already exists.
 )
