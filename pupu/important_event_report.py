@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from .memory_index import format_memu_important_events_report
 from .memory import get_important_events
 
 
 def format_important_events_report(session_id: str, limit: int = 12) -> str:
+    memu_report = format_memu_important_events_report(session_id)
+    if memu_report is not None:
+        return memu_report
+
     events = get_important_events(session_id, limit=limit)
     if not events:
         return "当前没有重要事件记忆。"

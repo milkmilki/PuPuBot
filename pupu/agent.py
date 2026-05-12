@@ -17,6 +17,7 @@ from .llm import (
 from .memory import (
     count_pending_review_turns,
     get_familiarity,
+    has_successful_memu_sync,
     get_important_events,
     get_oldest_unsummarized_msg_id,
     get_pending_review_last_message_time,
@@ -27,12 +28,14 @@ from .memory import (
     get_user_facts,
     list_scheduled_tasks,
     list_pending_review_sessions,
+    record_memu_sync,
     save_message,
     save_summary,
     update_familiarity,
     upsert_self_facts,
     upsert_user_facts,
 )
+from .memory_index import is_memu_long_term_enabled, recall_memories, sync_review_memory
 from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
 from .message_sources import CHAT
 from .persona import build_batch_review_prompt, build_system_prompt
@@ -49,7 +52,7 @@ REVIEW_INTERVAL = 8
 REVIEW_IDLE_SECONDS = 600
 REVIEW_SOURCE = CHAT
 CHAT_HISTORY_LIMIT = 30
-PROMPT_SUMMARY_LIMIT = 3
+PROMPT_SUMMARY_LIMIT = 2
 PROMPT_IMPORTANT_EVENT_LIMIT = 6
 BATCH_REVIEW_MAX_TOKENS = 10000
 REVIEW_TASK_CONTEXT_LIMIT = 30
@@ -331,10 +334,23 @@ def chat(
 
     history = get_recent_messages(CHAT_HISTORY_LIMIT, context_session)
     score = get_familiarity(identity_session)
-    user_facts = get_user_facts(identity_session)
-    self_facts = get_self_facts(identity_session)
-    summaries = get_summaries(context_session, limit=PROMPT_SUMMARY_LIMIT)
-    important_events = get_important_events(identity_session, limit=PROMPT_IMPORTANT_EVENT_LIMIT)
+    recalled_memories = []
+    if is_memu_long_term_enabled():
+        recalled_memories = recall_memories(
+            query=display_text,
+            context_session=context_session,
+            identity_session=identity_session,
+            history=history,
+        )
+        user_facts = {}
+        self_facts = {}
+        summaries = get_summaries(context_session, limit=PROMPT_SUMMARY_LIMIT)
+        important_events = []
+    else:
+        user_facts = get_user_facts(identity_session)
+        self_facts = get_self_facts(identity_session)
+        summaries = get_summaries(context_session, limit=PROMPT_SUMMARY_LIMIT)
+        important_events = get_important_events(identity_session, limit=PROMPT_IMPORTANT_EVENT_LIMIT)
     system_prompt = build_system_prompt(
         score,
         None,
@@ -343,6 +359,7 @@ def chat(
         self_facts,
         important_events,
         reply_speed_hint,
+        recalled_memories,
     )
 
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
@@ -634,6 +651,42 @@ def _maybe_batch_review_unlocked(
                 )
         else:
             print("[pupu] batch review task_updates empty")
+
+        if is_memu_long_term_enabled():
+            if has_successful_memu_sync(
+                context_session=context_session,
+                identity_session=identity_session,
+                start_msg_id=batch[0]["id"],
+                end_msg_id=batch[-1]["id"],
+            ):
+                print(
+                    "[pupu][memu] sync review skipped: "
+                    f"already synced range={batch[0]['id']}..{batch[-1]['id']}"
+                )
+            else:
+                memu_result = sync_review_memory(
+                    context_session=context_session,
+                    identity_session=identity_session,
+                    start_msg_id=batch[0]["id"],
+                    end_msg_id=batch[-1]["id"],
+                    summary="",
+                    user_facts=user_facts,
+                    self_facts=self_facts,
+                    important_events=important_events,
+                )
+                record_memu_sync(
+                    context_session=context_session,
+                    identity_session=identity_session,
+                    start_msg_id=batch[0]["id"],
+                    end_msg_id=batch[-1]["id"],
+                    memu_ids=memu_result.ids,
+                    status=memu_result.status,
+                    error=memu_result.error,
+                )
+                print(
+                    "[pupu][memu] sync review recorded: "
+                    f"status={memu_result.status}, ids={len(memu_result.ids)}"
+                )
 
         print(
             "[pupu] batch review done: "

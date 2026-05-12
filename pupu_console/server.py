@@ -158,8 +158,11 @@ def api_get_instance(instance_id: str) -> dict[str, Any]:
     cfg["running"] = st["running"]
     cfg["pid"] = st.get("pid")
     mp = instance_store.memory_db_path(instance_id)
+    memu_path = instance_store.memu_db_path(instance_id)
     cfg["memory_path"] = str(mp)
     cfg["memory_db_exists"] = mp.is_file()
+    cfg["memu_path"] = str(memu_path)
+    cfg["memu_db_exists"] = memu_path.is_file()
     return cfg
 
 
@@ -230,10 +233,16 @@ def api_instance_logs(instance_id: str, tail: int = 200) -> dict[str, str]:
 def api_memory_path(instance_id: str) -> dict[str, Any]:
     try:
         p = instance_store.memory_db_path(instance_id)
+        memu_path = instance_store.memu_db_path(instance_id)
     except (FileNotFoundError, ValueError) as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     sp = str(p)
-    return {"memory_path": sp, "exists": p.is_file()}
+    return {
+        "memory_path": sp,
+        "exists": p.is_file(),
+        "memu_path": str(memu_path),
+        "memu_exists": memu_path.is_file(),
+    }
 
 
 @app.post("/api/instances/{instance_id}/import_memory")

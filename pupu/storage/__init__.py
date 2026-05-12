@@ -23,6 +23,7 @@ from .messages import (
     list_pending_review_sessions,
     save_message,
 )
+from .memu_sync import has_successful_memu_sync, record_memu_sync
 from .important_events import (
     derive_source_event_key,
     get_important_event_by_key,
@@ -68,6 +69,7 @@ __all__ = [
     "get_important_events",
     "get_last_message_time",
     "get_last_user_message_time",
+    "has_successful_memu_sync",
     "get_messages_in_range",
     "get_oldest_unsummarized_msg_id",
     "get_pending_review_last_message_time",
@@ -83,6 +85,7 @@ __all__ = [
     "list_scheduled_tasks",
     "reschedule_matching_scheduled_tasks",
     "reset_session",
+    "record_memu_sync",
     "save_message",
     "save_summary",
     "set_familiarity",

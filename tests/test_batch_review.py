@@ -8,6 +8,7 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
+os.environ["PUPU_MEMU_ENABLED"] = "false"
 
 from pupu.agent import _parse_batch_review_result
 from pupu.memory import (

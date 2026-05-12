@@ -7,6 +7,7 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
+os.environ["PUPU_MEMU_ENABLED"] = "false"
 
 from pupu.agent import _parse_dialogue_output, chat
 from pupu.dialogue_loop import cancel_wait_timer, has_wait_timer, schedule_wait_timer

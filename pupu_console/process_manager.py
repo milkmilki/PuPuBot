@@ -165,6 +165,7 @@ class ProcessManager:
             env["PUPU_INSTANCE_DIR"] = str(inst_dir)
             env["PUPU_CONFIG_PATH"] = str(inst_dir / "instance.json")
             env["PUPU_DB_PATH"] = str(inst_dir / "data" / "pupu.db")
+            env["PUPU_MEMU_DB_PATH"] = str(inst_dir / "data" / "memu.db")
             env["PUPU_PERSONA_PATH"] = str(inst_dir / "persona.json")
             # Child stdout is decoded as UTF-8 below; on Chinese Windows the default
             # console encoding is often GBK, which would mojibake Chinese in console.log.

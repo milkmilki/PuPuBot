@@ -5,6 +5,7 @@ import traceback
 from datetime import datetime
 
 from ..message_sources import PROACTIVE, SCHEDULED
+from ..memory_index import is_memu_long_term_enabled, run_memu_maintenance
 from ..storage.db import get_conn, init_db
 from .constants import BUSY_REPORT_PREFIX
 from .dedupe import (
@@ -59,6 +60,8 @@ def run_memory_maintenance(
                 "model_updated_important_events": 0,
                 "model_deleted_facts": 0,
                 "model_updated_facts": 0,
+                "memu_deleted": 0,
+                "memu_updated": 0,
                 "model_notes": [],
             }
 
@@ -73,7 +76,23 @@ def run_memory_maintenance(
 
             conn.commit()
 
-            if include_model:
+            if include_model and is_memu_long_term_enabled():
+                for session_id in session_ids:
+                    print(f"[pupu][maintenance] session={session_id} phase=memu start")
+                    session_result = run_memu_maintenance(session_id)
+                    report["memu_deleted"] += int(session_result.get("deleted") or 0)
+                    report["memu_updated"] += int(session_result.get("updated") or 0)
+                    if session_result.get("note"):
+                        report["model_notes"].append(
+                            f"{session_id}: {session_result['note']}"
+                        )
+                    print(
+                        "[pupu][maintenance] "
+                        f"session={session_id} phase=memu done "
+                        f"deleted={session_result.get('deleted', 0)} "
+                        f"updated={session_result.get('updated', 0)}"
+                    )
+            elif include_model:
                 for session_id in session_ids:
                     snapshot = _build_session_snapshot(conn, session_id)
                     try:
@@ -119,6 +138,8 @@ def run_memory_maintenance(
                         f"- 模型重排重要事件：{report['model_updated_important_events']}",
                         f"- 模型删除事实：{report['model_deleted_facts']}",
                         f"- 模型更新事实：{report['model_updated_facts']}",
+                        f"- memU 删除记忆：{report['memu_deleted']}",
+                        f"- memU 更新记忆：{report['memu_updated']}",
                     ]
                 )
                 if report["model_notes"]:

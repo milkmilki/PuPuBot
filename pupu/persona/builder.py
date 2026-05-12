@@ -10,6 +10,17 @@ def _format_facts(facts: dict[str, str]) -> str:
     return "\n".join(f"- {key}: {value}" for key, value in facts.items())
 
 
+def _format_recalled_memories(memories: list[dict]) -> str:
+    lines = []
+    for item in memories:
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        kind = str(item.get("kind") or "memory").strip()
+        lines.append(f"- [{kind}] {text}")
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     familiarity_score: int,
     event_log: list[dict] = None,
@@ -18,6 +29,7 @@ def build_system_prompt(
     self_facts: dict[str, str] = None,
     important_events: list[dict] = None,
     reply_speed_hint: str = None,
+    recalled_memories: list[dict] = None,
 ) -> str:
     level = score_to_level(familiarity_score)
     prompt = get_core_persona() + "\n" + FAMILIARITY_PROMPTS[level]
@@ -40,6 +52,11 @@ def build_system_prompt(
     important_events_section = format_important_events_section(important_events)
     if important_events_section:
         prompt += "\n\n" + important_events_section
+
+    recalled_section = _format_recalled_memories(recalled_memories or [])
+    if recalled_section:
+        prompt += "\n\n## 本轮自然想起的记忆\n" + recalled_section
+        prompt += "\n这些是当前对话相关的联想线索，可以自然使用，但不要生硬复述。"
 
     if reply_speed_hint:
         prompt += f"\n\n## 回复节奏\n{reply_speed_hint}\n自然调整，不要直接说出来。"

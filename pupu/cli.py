@@ -17,6 +17,7 @@ from .llm import preflight_model_providers
 from .logging_utils import setup_runtime_logging
 from .maintenance import maybe_run_daily_maintenance, run_memory_maintenance
 from .memory import get_familiarity_info, get_recent_messages, init_db, reset_session
+from .memory_index import clear_memu_session, format_memu_recall_report, rebuild_memu_session
 from .tools import manage_scheduled_task
 
 console = Console()
@@ -53,6 +54,7 @@ def print_banner():
 
 def handle_command(cmd: str) -> bool:
     """Handle slash commands. Returns True if handled."""
+    command_name, _, command_arg = cmd.partition(" ")
     if cmd in ("/quit", "/exit", "/q"):
         console.print("[dim]再见。[/dim]")
         return True
@@ -93,10 +95,22 @@ def handle_command(cmd: str) -> bool:
             report = run_memory_maintenance(trigger="manual", include_model=True)
         console.print(report)
         return False
+    elif command_name in ("/recall", "/memu_recall", "/召回"):
+        query = command_arg.strip()
+        if not query:
+            console.print("用法：/recall 想测试召回的内容")
+        else:
+            console.print(format_memu_recall_report(query, OWNER_SESSION))
+        return False
+    elif command_name in ("/memu_rebuild", "/rebuild_memory", "/重建记忆"):
+        with console.status("[cyan]正在重建 memU 记忆索引...[/cyan]"):
+            console.print(rebuild_memu_session(OWNER_SESSION))
+        return False
     elif cmd == "/reset":
         confirm = console.input("[bold red]确认重置仆仆？所有记忆、好感度、聊天记录都会清空 (y/N): [/bold red]").strip().lower()
         if confirm == "y":
             reset_session(OWNER_SESSION)
+            clear_memu_session(OWNER_SESSION)
             console.print("[bold red]已重置。仆仆回到了最初的状态。[/bold red]")
         else:
             console.print("[dim]取消重置。[/dim]")

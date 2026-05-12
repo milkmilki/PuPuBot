@@ -205,6 +205,27 @@ def init_db():
         ON important_events(session_id, status, event_time, last_seen_at)
     """
     )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memu_sync_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            context_session TEXT NOT NULL,
+            identity_session TEXT NOT NULL,
+            start_msg_id INTEGER NOT NULL,
+            end_msg_id INTEGER NOT NULL,
+            memu_ids TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_memu_sync_lookup
+        ON memu_sync_log(identity_session, context_session, start_msg_id, end_msg_id, status)
+    """
+    )
 
     message_columns = table_columns(conn, "messages")
     if "source" not in message_columns:

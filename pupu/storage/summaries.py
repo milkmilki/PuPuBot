@@ -54,7 +54,7 @@ def get_summaries(
     session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     rows = conn.execute(
-        "SELECT summary, created_at FROM summaries WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+        "SELECT summary, created_at FROM summaries WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
         (session_id, limit),
     ).fetchall()
     conn.close()

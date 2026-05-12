@@ -33,6 +33,7 @@ def _ensure_instance_env(inst: Path) -> None:
     os.environ["PUPU_INSTANCE_DIR"] = str(inst)
     os.environ.setdefault("PUPU_CONFIG_PATH", str(inst / "instance.json"))
     os.environ.setdefault("PUPU_DB_PATH", str(inst / "data" / "pupu.db"))
+    os.environ["PUPU_MEMU_DB_PATH"] = str(inst / "data" / "memu.db")
     os.environ.setdefault("PUPU_PERSONA_PATH", str(inst / "persona.json"))
     (inst / "data").mkdir(parents=True, exist_ok=True)
     (inst / "data" / "logs").mkdir(parents=True, exist_ok=True)

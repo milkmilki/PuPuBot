@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .memory_index import format_memu_facts_report
 from .memory import get_self_facts, get_user_facts
 
 
@@ -17,6 +18,10 @@ def _format_fact_section(title: str, facts: dict[str, str]) -> list[str]:
 
 
 def format_facts_report(session_id: str) -> str:
+    memu_report = format_memu_facts_report(session_id)
+    if memu_report is not None:
+        return memu_report
+
     user_facts = get_user_facts(session_id)
     self_facts = get_self_facts(session_id)
 

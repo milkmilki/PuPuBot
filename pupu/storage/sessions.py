@@ -18,5 +18,9 @@ def reset_session(session_id: str):
         "scheduled_tasks",
     ):
         conn.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
+    conn.execute(
+        "DELETE FROM memu_sync_log WHERE context_session = ? OR identity_session = ?",
+        (session_id, session_id),
+    )
     conn.commit()
     conn.close()

@@ -269,6 +269,12 @@ def memory_db_path(instance_id: str) -> Path:
     return (instance_dir(instance_id) / "data" / "pupu.db").resolve()
 
 
+def memu_db_path(instance_id: str) -> Path:
+    """Return resolved path to this instance's memU SQLite file (may not exist yet)."""
+    validate_instance_id(instance_id)
+    return (instance_dir(instance_id) / "data" / "memu.db").resolve()
+
+
 def _is_sqlite_header(path: Path) -> bool:
     try:
         with open(path, "rb") as f:

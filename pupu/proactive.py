@@ -18,6 +18,7 @@ from .memory import (
     get_user_facts,
     save_message,
 )
+from .memory_index import is_memu_long_term_enabled, recall_memories
 from .message_sources import PROACTIVE
 from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT
 from .sessions import OWNER_SESSION
@@ -115,6 +116,63 @@ def _truncate_debug(text: str, limit: int = 240) -> str:
     return text[:limit] + "...(truncated)"
 
 
+def _build_proactive_memu_query(score: int, period: dict, recent: list[dict]) -> str:
+    recent_lines = []
+    for item in recent[-4:]:
+        role = "user" if item.get("role") == "user" else "assistant"
+        content = str(item.get("content") or "").replace("\n", " ").strip()
+        if content:
+            recent_lines.append(f"{role}: {content[:120]}")
+    recent_text = " | ".join(recent_lines) or "none"
+    return (
+        f"Proactive memory recall. Current period: {period['name']}."
+        f" Familiarity score: {score}."
+        f" Recent chat: {recent_text}."
+        " Recall long-term memories naturally relevant to the current situation, recent status,"
+        " unresolved topics, or things worth gently following up."
+    )
+
+
+def _format_recalled_memories_section(memories: list[dict]) -> str:
+    lines = []
+    for item in memories:
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        kind = str(item.get("kind") or "memory").strip()
+        score = item.get("score")
+        score_text = f" score={float(score):.3f}" if isinstance(score, (int, float)) else ""
+        created_at = item.get("created_at")
+        created_text = f" created_at={created_at}" if created_at else ""
+        lines.append(f"- [{kind}] {text}{score_text}{created_text}")
+    if not lines:
+        return ""
+    return "## recalled memories\n" + "\n".join(lines)
+
+
+def _recall_proactive_memories(score: int, period: dict, recent: list[dict]) -> list[dict]:
+    if not is_memu_long_term_enabled():
+        return []
+    query = _build_proactive_memu_query(score, period, recent)
+    print(
+        f"[pupu][proactive] phase=memu_recall start score={score} "
+        f"period={period['name']} recent_messages={len(recent)} query_chars={len(query)}"
+    )
+    try:
+        memories = recall_memories(
+            query=query,
+            context_session=OWNER_SESSION,
+            identity_session=OWNER_SESSION,
+            history=recent,
+            limit=4,
+        )
+    except Exception as exc:
+        print(f"[pupu][proactive] phase=memu_recall failed error={type(exc).__name__}: {exc}")
+        return []
+    print(f"[pupu][proactive] phase=memu_recall done count={len(memories)}")
+    return memories
+
+
 def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: int | None) -> bool:
     """Ask model whether to send a proactive message now.
 
@@ -175,10 +233,40 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
     level = score_to_level(score)
     level_desc = FAMILIARITY_PROMPTS[level]
 
+    recent = get_recent_messages(4, OWNER_SESSION)
+    recent_ctx = "（还没怎么聊过）"
+    if recent:
+        lines = []
+        for m in recent[-5:]:
+            who = "用户" if m["role"] == "user" else "你"
+            lines.append(f"{who}: {m['content'][:80]}")
+        recent_ctx = "\n".join(lines)
+
+    topic = random.choice(period["topics"])
+
+    if is_memu_long_term_enabled():
+        recalled_memories = _recall_proactive_memories(score, period, recent)
+        prompt = PROACTIVE_PROMPT.format(
+            persona_level=level_desc,
+            self_facts_section="",
+            user_facts_section="",
+            time_period=period["name"],
+            time_desc=f"{datetime.now().strftime('%H:%M')}",
+            topic_hint=topic,
+            recent_context=recent_ctx,
+        )
+        recalled_section = _format_recalled_memories_section(recalled_memories)
+        if recalled_section:
+            prompt += (
+                "\n\n"
+                + recalled_section
+                + "\n这些是当前场景里自然想起的长期记忆，可以顺着当前情境轻轻提一句，但不要机械复述。"
+            )
+        return prompt
+
     self_facts = get_self_facts(OWNER_SESSION)
     important_events = get_important_events(OWNER_SESSION, limit=4)
     user_facts = get_user_facts(OWNER_SESSION)
-    recent = get_recent_messages(4, OWNER_SESSION)
 
     sf_section = ""
     if self_facts:
@@ -191,16 +279,6 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
         uf_section = "你对这个人的了解：\n" + "\n".join(
             f"- {k}：{v}" for k, v in user_facts.items()
         )
-
-    recent_ctx = "（还没怎么聊过）"
-    if recent:
-        lines = []
-        for m in recent[-5:]:
-            who = "用户" if m["role"] == "user" else "你"
-            lines.append(f"{who}: {m['content'][:80]}")
-        recent_ctx = "\n".join(lines)
-
-    topic = random.choice(period["topics"])
 
     prompt = PROACTIVE_PROMPT.format(
         persona_level=level_desc,

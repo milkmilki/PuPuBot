@@ -29,6 +29,11 @@ from pupu.memory import (
     get_familiarity,
 )
 from pupu.maintenance import run_memory_maintenance
+from pupu.memory_index import (
+    clear_memu_session,
+    format_memu_recall_report,
+    rebuild_memu_session,
+)
 from pupu.proactive import (
     _get_current_period,
     _had_recent_chat_within,
@@ -81,6 +86,18 @@ important_cmd = on_command(
 facts_cmd = on_command(
     "facts",
     aliases={"fact", "memory_facts", "长期记忆", "事实记忆"},
+    priority=5,
+    block=True,
+)
+recall_cmd = on_command(
+    "recall",
+    aliases={"memu_recall", "召回"},
+    priority=5,
+    block=True,
+)
+memu_rebuild_cmd = on_command(
+    "memu_rebuild",
+    aliases={"rebuild_memory", "重建记忆"},
     priority=5,
     block=True,
 )
@@ -140,13 +157,40 @@ async def handle_tasks(event: Event):
 @important_cmd.handle()
 async def handle_important(event: Event):
     _context_sid, identity_sid = resolve_sessions(event)
-    await important_cmd.finish(format_important_events_report(identity_sid))
+    report = await asyncio.to_thread(format_important_events_report, identity_sid)
+    await important_cmd.finish(report)
 
 
 @facts_cmd.handle()
 async def handle_facts(event: Event):
     _context_sid, identity_sid = resolve_sessions(event)
-    await facts_cmd.finish(format_facts_report(identity_sid))
+    report = await asyncio.to_thread(format_facts_report, identity_sid)
+    await facts_cmd.finish(report)
+
+
+@recall_cmd.handle()
+async def handle_recall(event: Event, args: Message = CommandArg()):
+    context_sid, identity_sid = resolve_sessions(event)
+    query = args.extract_plain_text().strip()
+    if not query:
+        await recall_cmd.finish("用法：/recall 想测试召回的内容")
+    report = await asyncio.to_thread(
+        format_memu_recall_report,
+        query,
+        identity_sid,
+        context_sid,
+    )
+    await recall_cmd.finish(report)
+
+
+@memu_rebuild_cmd.handle()
+async def handle_memu_rebuild(event: Event):
+    user_id = event.get_user_id()
+    if not is_owner(user_id):
+        await memu_rebuild_cmd.finish("只有管理员才能重建 memU 记忆索引")
+    context_sid, identity_sid = resolve_sessions(event)
+    report = await asyncio.to_thread(rebuild_memu_session, identity_sid, context_sid)
+    await memu_rebuild_cmd.finish(report)
 
 
 @history_cmd.handle()
@@ -169,8 +213,10 @@ async def handle_reset(event: Event):
         await reset_cmd.finish("只有管理员才能重置。")
     context_sid, identity_sid = resolve_sessions(event)
     reset_session(context_sid)
+    await asyncio.to_thread(clear_memu_session, context_sid)
     if identity_sid != context_sid:
         reset_session(identity_sid)
+        await asyncio.to_thread(clear_memu_session, identity_sid)
     await reset_cmd.finish("已重置。仆仆回到了最初的状态。")
 
 
