@@ -28,11 +28,11 @@ from pupu.memory import (
     reset_session,
     get_familiarity,
 )
-from pupu.maintenance import run_memory_maintenance
 from pupu.memory_index import (
     clear_memu_session,
     format_memu_recall_report,
     rebuild_memu_session,
+    run_memu_maintenance,
 )
 from pupu.proactive import (
     _get_current_period,
@@ -48,6 +48,8 @@ from pupu.tts import get_tts_config, get_tts_status
 from .common import is_owner, resolve_sessions
 from . import state
 
+TIDY_USAGE = "用法：/tidy [check|apply]"
+
 HELP_TEXT = f"""PuPu 可用命令
 
 基础：
@@ -61,7 +63,7 @@ HELP_TEXT = f"""PuPu 可用命令
 /facts（/fact /memory_facts /长期记忆 /事实记忆）：查看长期事实记忆
 /recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
 /memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引（管理员）
-/tidy（/cleanup /整理记忆 /整理）：整理长期记忆和定时任务（管理员）
+/tidy（/cleanup /整理记忆 /整理）：整理 memU 长期记忆（facts / important_events）（管理员），默认 apply，也可用 /tidy check
 /reset：重置当前会话记忆、好感度和聊天记录（管理员）
 
 语音：
@@ -240,14 +242,21 @@ async def handle_reset(event: Event):
 
 
 @tidy_cmd.handle()
-async def handle_tidy(event: Event):
+async def handle_tidy(event: Event, args: Message = CommandArg()):
     user_id = event.get_user_id()
     if not is_owner(user_id):
-        await tidy_cmd.finish("只有管理员才能整理长期记忆和定时任务")
+        await tidy_cmd.finish("只有管理员才能整理 memU 长期记忆")
+        return
+    mode = args.extract_plain_text().strip().lower()
+    if not mode:
+        mode = "apply"
+    if mode not in {"check", "apply"}:
+        await tidy_cmd.finish(TIDY_USAGE)
+        return
     report = await asyncio.to_thread(
-        run_memory_maintenance,
-        "manual",
-        True,
+        run_memu_maintenance,
+        state.OWNER_SESSION,
+        mode=mode,
     )
     await tidy_cmd.finish(report)
 

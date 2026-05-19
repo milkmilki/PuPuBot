@@ -15,12 +15,19 @@ from .facts_report import format_facts_report
 from .important_event_report import format_important_events_report
 from .llm import preflight_model_providers
 from .logging_utils import setup_runtime_logging
-from .maintenance import maybe_run_daily_maintenance, run_memory_maintenance
+from .maintenance import maybe_run_daily_memu_tidy
 from .memory import get_familiarity_info, get_recent_messages, init_db, reset_session
-from .memory_index import clear_memu_session, format_memu_recall_report, rebuild_memu_session
+from .memory_index import (
+    clear_memu_session,
+    format_memu_recall_report,
+    rebuild_memu_session,
+    run_memu_maintenance,
+)
 from .tools import manage_scheduled_task
 
 console = Console()
+
+TIDY_USAGE = "用法：/tidy [check|apply]"
 
 CLI_HELP_TEXT = """PuPu CLI 可用命令
 
@@ -36,7 +43,7 @@ CLI_HELP_TEXT = """PuPu CLI 可用命令
 /facts（/fact /memory_facts /长期记忆 /事实记忆）：查看长期事实记忆
 /recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
 /memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引
-/tidy（/cleanup /整理记忆 /整理）：整理长期记忆和定时任务
+/tidy（/cleanup /整理记忆 /整理）：整理 memU 长期记忆（facts / important_events），默认执行 apply，也可用 /tidy check
 /reset：重置当前会话记忆、好感度和聊天记录
 """
 
@@ -52,9 +59,9 @@ def _cli_scheduler_loop():
             backup_report = maybe_run_daily_backup()
             if backup_report:
                 print(f"[pupu] auto backup\n{backup_report}")
-            report = maybe_run_daily_maintenance()
-            if report:
-                print(f"[pupu] auto maintenance\n{report}")
+            memu_tidy_report = maybe_run_daily_memu_tidy()
+            if memu_tidy_report:
+                print(f"[pupu] auto memu tidy\n{memu_tidy_report}")
         except Exception as e:
             print(f"[pupu] cli scheduler: {e}")
 
@@ -64,10 +71,19 @@ def print_banner():
     console.print(
         Panel(
             f"[bold]仆仆[/bold] — 好感度: Lv.{score_info['level']}\n"
-            f"输入消息开始聊天 | /help 命令 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /facts 长期 facts | /tidy 整理记忆",
+            f"输入消息开始聊天 | /help 命令 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /facts 长期 facts | /tidy 整理 memU 记忆",
             style="cyan",
         )
     )
+
+
+def _parse_tidy_mode(command_arg: str) -> tuple[str | None, str | None]:
+    mode = command_arg.strip().lower()
+    if not mode:
+        return "apply", None
+    if mode in {"check", "apply"}:
+        return mode, None
+    return None, TIDY_USAGE
 
 
 def handle_command(cmd: str) -> bool:
@@ -111,9 +127,14 @@ def handle_command(cmd: str) -> bool:
     elif cmd in ("/facts", "/fact", "/memory_facts", "/长期记忆", "/事实记忆"):
         console.print(format_facts_report(OWNER_SESSION))
         return False
-    elif cmd in ("/tidy", "/cleanup", "/整理记忆", "/整理"):
-        with console.status("[cyan]仆仆在整理记忆和定时任务...[/cyan]"):
-            report = run_memory_maintenance(trigger="manual", include_model=True)
+    elif command_name in ("/tidy", "/cleanup", "/整理记忆", "/整理"):
+        tidy_mode, tidy_usage = _parse_tidy_mode(command_arg)
+        if tidy_usage:
+            console.print(tidy_usage)
+            return False
+        status_text = "[cyan]仆仆在检查 memU 长期记忆...[/cyan]" if tidy_mode == "check" else "[cyan]仆仆在整理 memU 长期记忆...[/cyan]"
+        with console.status(status_text):
+            report = run_memu_maintenance(OWNER_SESSION, mode=tidy_mode)
         console.print(report)
         return False
     elif command_name in ("/recall", "/memu_recall", "/召回"):

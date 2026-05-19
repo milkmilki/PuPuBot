@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -34,7 +35,7 @@ from pupu.memory_index.memu_adapter import (
     _retrieve_item_config,
     is_memu_long_term_enabled,
 )
-from pupu.memory_index import rebuild_memu_session, run_memu_maintenance
+from pupu.memory_index import rebuild_memu_session, run_memu_maintenance, run_memu_tidy
 from pupu.message_sources import CHAT
 from pupu.persona import build_system_prompt
 
@@ -348,7 +349,7 @@ class MemuMemoryTests(unittest.TestCase):
         with patch("pupu.facts_report.format_memu_facts_report", return_value=None):
             self.assertIn("游戏: 星露谷", format_facts_report(self.session_id))
 
-    def test_memu_maintenance_deletes_duplicates_and_low_value_items(self):
+    def legacy_memu_maintenance_deletes_duplicates_and_low_value_items(self):
         deleted_ids = []
 
         class FakeService:
@@ -367,8 +368,94 @@ class MemuMemoryTests(unittest.TestCase):
                 with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
                     result = run_memu_maintenance(self.session_id)
 
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(set(deleted_ids), {"c"})
+
+    def test_memu_tidy_apply_deletes_judge_selected_items_and_skips_summary(self):
+        deleted_ids = []
+        legacy_deleted = []
+
+        class FakeService:
+            async def delete_memory_item(self, *, memory_id, user=None):
+                deleted_ids.append(memory_id)
+                return {"id": memory_id}
+
+        items = [
+            {"id": "summary-1", "summary": '{"kind":"summary","text":"这条摘要不该进入 tidy"}'},
+            {
+                "id": "dup-fact",
+                "summary": '{"kind":"user_fact","key":"nickname","text":"nickname: 小夫","created_at":"2026-05-11T12:00:00"}',
+                "memory_type": "profile",
+            },
+            {
+                "id": "junk-fact",
+                "summary": '{"kind":"user_fact","key":"temp_note","text":"temp_note: True","created_at":"2026-05-11T12:00:00"}',
+                "memory_type": "profile",
+            },
+        ]
+
+        judge_response = json.dumps(
+            {
+                "drop_ids": ["dup-fact", "junk-fact"],
+                "reason_by_id": {
+                    "dup-fact": "重复",
+                    "junk-fact": "低价值",
+                },
+                "notes": "删掉重复和无用项",
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("pupu.memory_index.memu_tidy.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_tidy._list_items", return_value=items):
+                with patch("pupu.memory_index.memu_tidy._get_service", return_value=FakeService()):
+                    with patch(
+                        "pupu.memory_index.memu_tidy._delete_legacy_source",
+                        side_effect=lambda identity, candidate: legacy_deleted.append(
+                            (identity, candidate["legacy_key"], candidate["reason"])
+                        )
+                        or 1,
+                    ):
+                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response) as mock_json:
+                            result = run_memu_tidy(self.session_id, mode="apply")
+
         self.assertEqual(result["deleted"], 2)
-        self.assertEqual(set(deleted_ids), {"b", "c"})
+        self.assertEqual(result["legacy_deleted"], 1)
+        self.assertEqual(set(deleted_ids), {"dup-fact", "junk-fact"})
+        self.assertEqual(legacy_deleted, [(self.session_id, "temp_note", "低价值")])
+        self.assertEqual(result["reason_counts"], {"重复": 1, "低价值": 1})
+        payload = json.loads(mock_json.call_args.kwargs["user_content"])
+        self.assertNotIn("summary-1", json.dumps(payload, ensure_ascii=False))
+        self.assertTrue(all(item["kind"] != "summary" for item in payload["items"]))
+
+    def test_memu_tidy_check_does_not_delete(self):
+        items = [
+            {
+                "id": "junk-fact",
+                "summary": '{"kind":"user_fact","key":"temp_note","text":"temp_note: True","created_at":"2026-05-11T12:00:00"}',
+                "memory_type": "profile",
+            }
+        ]
+        judge_response = json.dumps(
+            {
+                "drop_ids": ["junk-fact"],
+                "reason_by_id": {"junk-fact": "低价值"},
+                "notes": "只预览",
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("pupu.memory_index.memu_tidy.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_tidy._list_items", return_value=items):
+                with patch("pupu.memory_index.memu_tidy._get_service") as mock_get_service:
+                    with patch("pupu.memory_index.memu_tidy._delete_legacy_source") as mock_delete_legacy:
+                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response):
+                            result = run_memu_tidy(self.session_id, mode="check")
+
+        self.assertEqual(result["deleted"], 0)
+        self.assertEqual(result["legacy_deleted"], 0)
+        mock_get_service.assert_not_called()
+        mock_delete_legacy.assert_not_called()
 
     def test_rebuild_syncs_context_summaries_and_identity_memory(self):
         context_id = self.session_id + "_context"

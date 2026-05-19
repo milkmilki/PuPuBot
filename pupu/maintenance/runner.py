@@ -5,7 +5,6 @@ import traceback
 from datetime import datetime
 
 from ..message_sources import PROACTIVE, SCHEDULED
-from ..memory_index import is_memu_long_term_enabled, run_memu_maintenance
 from ..storage.db import get_conn, init_db
 from .constants import BUSY_REPORT_PREFIX
 from .dedupe import (
@@ -30,17 +29,89 @@ def run_memory_maintenance(
     trigger: str = "manual",
     include_model: bool = True,
     now: datetime | None = None,
+    memu_mode: str = "apply",
 ) -> str:
     if not _maintenance_lock.acquire(blocking=False):
         return f"{BUSY_REPORT_PREFIX}，等它收尾一个。"
 
     run_at = now or datetime.now()
     run_date = run_at.date().isoformat()
+    tidy_mode = str(memu_mode or "apply").strip().lower()
+    if tidy_mode not in {"apply", "check"}:
+        raise ValueError("memu_mode must be 'apply' or 'check'")
     try:
         init_db()
         conn = get_conn()
         try:
             session_ids = _list_all_session_ids(conn)
+
+            if tidy_mode == "check":
+                report = {
+                    "sessions": len(session_ids),
+                    "model_dropped_summaries": 0,
+                    "model_merged_summaries": 0,
+                    "model_dropped_important_events": 0,
+                    "model_updated_important_events": 0,
+                    "model_deleted_facts": 0,
+                    "model_updated_facts": 0,
+                    "model_notes": [],
+                }
+
+                if include_model:
+                    for session_id in session_ids:
+                        print(f"[pupu][maintenance] session={session_id} phase=model_check start")
+                        snapshot = _build_session_snapshot(conn, session_id)
+                        try:
+                            session_result = _run_model_compaction(conn, snapshot, apply=False)
+                        except Exception as exc:
+                            report["model_notes"].append(
+                                f"{session_id}: model cleanup skipped ({exc})"
+                            )
+                            continue
+                        report["model_dropped_summaries"] += int(
+                            session_result.get("dropped_summaries") or 0
+                        )
+                        report["model_merged_summaries"] += int(
+                            session_result.get("merged_summaries") or 0
+                        )
+                        report["model_dropped_important_events"] += int(
+                            session_result.get("dropped_important_events") or 0
+                        )
+                        report["model_updated_important_events"] += int(
+                            session_result.get("updated_important_events") or 0
+                        )
+                        report["model_deleted_facts"] += int(
+                            session_result.get("deleted_facts") or 0
+                        )
+                        report["model_updated_facts"] += int(
+                            session_result.get("updated_facts") or 0
+                        )
+                        if session_result.get("note"):
+                            report["model_notes"].append(f"{session_id}: {session_result['note']}")
+                        print(
+                            "[pupu][maintenance] "
+                            f"session={session_id} phase=model_check done "
+                            f"dropped_summaries={session_result.get('dropped_summaries', 0)} "
+                            f"dropped_important_events={session_result.get('dropped_important_events', 0)} "
+                            f"deleted_facts={session_result.get('deleted_facts', 0)}"
+                        )
+
+                summary_lines = [
+                    f"记忆整理检查完成（{trigger}）",
+                    f"- 会话数：{report['sessions']}",
+                    f"- 模型删除摘要：{report['model_dropped_summaries']}",
+                    f"- 模型合并摘要：{report['model_merged_summaries']}",
+                    f"- 模型删除重要事件：{report['model_dropped_important_events']}",
+                    f"- 模型重排重要事件：{report['model_updated_important_events']}",
+                    f"- 模型删除事实：{report['model_deleted_facts']}",
+                    f"- 模型更新事实：{report['model_updated_facts']}",
+                ]
+                if report["model_notes"]:
+                    summary_lines.append("- 模型备注：")
+                    summary_lines.extend(f"  {note}" for note in report["model_notes"][:6])
+
+                report_text = "\n".join(summary_lines)
+                return report_text
 
             report = {
                 "sessions": len(session_ids),
@@ -60,8 +131,6 @@ def run_memory_maintenance(
                 "model_updated_important_events": 0,
                 "model_deleted_facts": 0,
                 "model_updated_facts": 0,
-                "memu_deleted": 0,
-                "memu_updated": 0,
                 "model_notes": [],
             }
 
@@ -76,47 +145,39 @@ def run_memory_maintenance(
 
             conn.commit()
 
-            if include_model and is_memu_long_term_enabled():
+            if include_model:
                 for session_id in session_ids:
-                    print(f"[pupu][maintenance] session={session_id} phase=memu start")
-                    session_result = run_memu_maintenance(session_id)
-                    report["memu_deleted"] += int(session_result.get("deleted") or 0)
-                    report["memu_updated"] += int(session_result.get("updated") or 0)
+                    print(f"[pupu][maintenance] session={session_id} phase=model start")
+                    snapshot = _build_session_snapshot(conn, session_id)
+                    try:
+                        session_result = _run_model_compaction(conn, snapshot, apply=True)
+                    except Exception as exc:
+                        report["model_notes"].append(
+                            f"{session_id}: model cleanup skipped ({exc})"
+                        )
+                        continue
+                    report["model_dropped_summaries"] += int(session_result.get("dropped_summaries") or 0)
+                    report["model_merged_summaries"] += int(session_result.get("merged_summaries") or 0)
+                    report["model_dropped_important_events"] += int(
+                        session_result.get("dropped_important_events") or 0
+                    )
+                    report["model_updated_important_events"] += int(
+                        session_result.get("updated_important_events") or 0
+                    )
+                    report["model_deleted_facts"] += int(session_result.get("deleted_facts") or 0)
+                    report["model_updated_facts"] += int(session_result.get("updated_facts") or 0)
                     if session_result.get("note"):
                         report["model_notes"].append(
                             f"{session_id}: {session_result['note']}"
                         )
                     print(
                         "[pupu][maintenance] "
-                        f"session={session_id} phase=memu done "
-                        f"deleted={session_result.get('deleted', 0)} "
-                        f"updated={session_result.get('updated', 0)}"
+                        f"session={session_id} phase=model done "
+                        f"dropped_summaries={session_result.get('dropped_summaries', 0)} "
+                        f"dropped_important_events={session_result.get('dropped_important_events', 0)} "
+                        f"deleted_facts={session_result.get('deleted_facts', 0)}"
                     )
-            elif include_model:
-                for session_id in session_ids:
-                    snapshot = _build_session_snapshot(conn, session_id)
-                    try:
-                        session_result = _run_model_compaction(conn, snapshot)
-                    except Exception as exc:
-                        report["model_notes"].append(
-                            f"{session_id}: model cleanup skipped ({exc})"
-                        )
-                        continue
-                    report["model_dropped_summaries"] += session_result["dropped_summaries"]
-                    report["model_merged_summaries"] += session_result["merged_summaries"]
-                    report["model_dropped_important_events"] += session_result[
-                        "dropped_important_events"
-                    ]
-                    report["model_updated_important_events"] += session_result[
-                        "updated_important_events"
-                    ]
-                    report["model_deleted_facts"] += session_result["deleted_facts"]
-                    report["model_updated_facts"] += session_result["updated_facts"]
-                    if session_result["note"]:
-                        report["model_notes"].append(
-                            f"{session_id}: {session_result['note']}"
-                        )
-                    conn.commit()
+                conn.commit()
 
             summary_lines = [
                 f"记忆整理完成（{trigger}）",
@@ -138,8 +199,6 @@ def run_memory_maintenance(
                         f"- 模型重排重要事件：{report['model_updated_important_events']}",
                         f"- 模型删除事实：{report['model_deleted_facts']}",
                         f"- 模型更新事实：{report['model_updated_facts']}",
-                        f"- memU 删除记忆：{report['memu_deleted']}",
-                        f"- memU 更新记忆：{report['memu_updated']}",
                     ]
                 )
                 if report["model_notes"]:

@@ -8,7 +8,7 @@ from nonebot import get_driver
 
 from pupu.agent import run_due_batch_reviews
 from pupu.backup import maybe_run_daily_backup
-from pupu.maintenance import maybe_run_daily_maintenance
+from pupu.maintenance import maybe_run_daily_memu_tidy
 
 from . import state
 
@@ -19,9 +19,9 @@ async def maintenance_loop():
             backup_report = await asyncio.to_thread(maybe_run_daily_backup)
             if backup_report:
                 print(f"[pupu] auto backup\n{backup_report}")
-            maintenance_report = await asyncio.to_thread(maybe_run_daily_maintenance)
-            if maintenance_report:
-                print(f"[pupu] auto maintenance\n{maintenance_report}")
+            memu_tidy_report = await asyncio.to_thread(maybe_run_daily_memu_tidy)
+            if memu_tidy_report:
+                print(f"[pupu] auto memu tidy\n{memu_tidy_report}")
             await asyncio.to_thread(run_due_batch_reviews)
         except asyncio.CancelledError:
             raise

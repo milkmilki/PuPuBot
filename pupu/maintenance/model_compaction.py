@@ -24,7 +24,7 @@ def _commit_quietly(conn) -> None:
         pass
 
 
-def _run_model_compaction(conn, snapshot: dict) -> dict:
+def _run_model_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
     if not _should_run_model_compaction(snapshot):
         return {
             "dropped_summaries": 0,
@@ -38,26 +38,29 @@ def _run_model_compaction(conn, snapshot: dict) -> dict:
 
     session_id = snapshot["session_id"]
     print(f"[pupu][maintenance] session={session_id} phase=summary start")
-    summary_result = _run_summary_compaction(conn, snapshot)
+    summary_result = _run_summary_compaction(conn, snapshot, apply=apply)
     print(
         f"[pupu][maintenance] session={session_id} phase=summary done "
         f"dropped={summary_result['dropped_summaries']} merged={summary_result['merged_summaries']}"
     )
-    _commit_quietly(conn)
+    if apply:
+        _commit_quietly(conn)
     print(f"[pupu][maintenance] session={session_id} phase=important_events start")
-    important_event_result = _run_important_event_compaction(conn, snapshot)
+    important_event_result = _run_important_event_compaction(conn, snapshot, apply=apply)
     print(
         f"[pupu][maintenance] session={session_id} phase=important_events done "
         f"dropped={important_event_result['dropped_important_events']} updated={important_event_result['updated_important_events']}"
     )
-    _commit_quietly(conn)
+    if apply:
+        _commit_quietly(conn)
     print(f"[pupu][maintenance] session={session_id} phase=facts start")
-    fact_result = _run_fact_compaction(conn, snapshot)
+    fact_result = _run_fact_compaction(conn, snapshot, apply=apply)
     print(
         f"[pupu][maintenance] session={session_id} phase=facts done "
         f"deleted={fact_result['deleted_facts']} updated={fact_result['updated_facts']}"
     )
-    _commit_quietly(conn)
+    if apply:
+        _commit_quietly(conn)
 
     notes = [
         part
@@ -102,7 +105,7 @@ def _call_model_json(
         ) from exc
 
 
-def _run_summary_compaction(conn, snapshot: dict) -> dict:
+def _run_summary_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
     summaries = snapshot["summaries"]
     if len(summaries) < 2:
         return {"dropped_summaries": 0, "merged_summaries": 0, "note": ""}
@@ -128,8 +131,8 @@ def _run_summary_compaction(conn, snapshot: dict) -> dict:
     merged_summary = str(result.get("merged_summary", "")).strip()
     note = str(result.get("notes", "")).strip()
 
-    merged_saved = 0
-    if merged_summary and len(drop_summary_ids) >= 2:
+    merged_saved = 1 if merged_summary and len(drop_summary_ids) >= 2 else 0
+    if merged_saved and apply:
         source_rows = [summary_rows[summary_id] for summary_id in drop_summary_ids]
         start_msg_id = min(row["start_msg_id"] for row in source_rows)
         end_msg_id = max(row["end_msg_id"] for row in source_rows)
@@ -145,10 +148,9 @@ def _run_summary_compaction(conn, snapshot: dict) -> dict:
                 datetime.now().isoformat(),
             ),
         )
-        merged_saved = 1
 
-    dropped_summaries = 0
-    if drop_summary_ids:
+    dropped_summaries = len(drop_summary_ids)
+    if apply and drop_summary_ids:
         placeholders = ",".join("?" for _ in drop_summary_ids)
         cur = conn.execute(
             f"DELETE FROM summaries WHERE id IN ({placeholders})",
@@ -163,7 +165,7 @@ def _run_summary_compaction(conn, snapshot: dict) -> dict:
     }
 
 
-def _run_important_event_compaction(conn, snapshot: dict) -> dict:
+def _run_important_event_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
     events = snapshot["important_events"]
     if not events:
         return {
@@ -208,44 +210,49 @@ def _run_important_event_compaction(conn, snapshot: dict) -> dict:
         if note:
             notes.append(note)
 
-        if drop_ids:
+        if apply and drop_ids:
             placeholders = ",".join("?" for _ in drop_ids)
             cur = conn.execute(
                 f"DELETE FROM important_events WHERE id IN ({placeholders})",
                 drop_ids,
             )
             dropped_total += cur.rowcount
+        else:
+            dropped_total += len(drop_ids)
 
-        for update in updates:
-            row = chunk_by_id[int(update["id"])]
-            conn.execute(
-                """
-                UPDATE important_events
-                SET title = ?,
-                    kind = ?,
-                    event_time = ?,
-                    time_text = ?,
-                    details = ?,
-                    followup_hint = ?,
-                    confidence = ?,
-                    last_seen_at = ?
-                WHERE id = ?
-                """,
-                (
-                    update.get("title") or row["title"],
-                    update.get("kind") or row["kind"],
-                    update.get("event_time") or None,
-                    update.get("time_text") or "",
-                    update.get("details") or "",
-                    update.get("followup_hint") or "",
-                    float(update.get("confidence", row.get("confidence") or 0.0)),
-                    datetime.now().isoformat(),
-                    int(update["id"]),
-                ),
-            )
-            updated_total += 1
+        if apply:
+            for update in updates:
+                row = chunk_by_id[int(update["id"])]
+                conn.execute(
+                    """
+                    UPDATE important_events
+                    SET title = ?,
+                        kind = ?,
+                        event_time = ?,
+                        time_text = ?,
+                        details = ?,
+                        followup_hint = ?,
+                        confidence = ?,
+                        last_seen_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        update.get("title") or row["title"],
+                        update.get("kind") or row["kind"],
+                        update.get("event_time") or None,
+                        update.get("time_text") or "",
+                        update.get("details") or "",
+                        update.get("followup_hint") or "",
+                        float(update.get("confidence", row.get("confidence") or 0.0)),
+                        datetime.now().isoformat(),
+                        int(update["id"]),
+                    ),
+                )
+                updated_total += 1
+        else:
+            updated_total += len(updates)
 
-        if drop_ids or updates:
+        if apply and (drop_ids or updates):
             _commit_quietly(conn)
 
     return {
@@ -255,7 +262,7 @@ def _run_important_event_compaction(conn, snapshot: dict) -> dict:
     }
 
 
-def _run_fact_compaction(conn, snapshot: dict) -> dict:
+def _run_fact_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
     user_facts = snapshot["user_facts"]
     self_facts = snapshot["self_facts"]
     if not user_facts and not self_facts:
@@ -280,6 +287,7 @@ def _run_fact_compaction(conn, snapshot: dict) -> dict:
         existing_facts=user_facts,
         updates=result.get("user_updates", {}),
         delete_keys=result.get("user_delete_keys", []),
+        apply=apply,
     )
     self_result = _apply_fact_updates(
         conn,
@@ -288,6 +296,7 @@ def _run_fact_compaction(conn, snapshot: dict) -> dict:
         existing_facts=self_facts,
         updates=result.get("self_updates", {}),
         delete_keys=result.get("self_delete_keys", []),
+        apply=apply,
     )
 
     return {
@@ -304,6 +313,8 @@ def _apply_fact_updates(
     existing_facts: dict,
     updates,
     delete_keys,
+    *,
+    apply: bool = True,
 ) -> dict:
     allowed_keys = {str(key) for key in existing_facts.keys()}
     normalized_updates = _normalize_fact_updates(updates, allowed_keys)
@@ -319,16 +330,19 @@ def _apply_fact_updates(
     for key, value in normalized_updates.items():
         if value == str(existing_facts.get(key, "")).strip():
             continue
-        cur = conn.execute(
-            f"""UPDATE {table_name}
-                SET fact_value = ?, updated_at = ?
-                WHERE session_id = ? AND fact_key = ?""",
-            (value, now, session_id, key),
-        )
-        updated += cur.rowcount
+        if apply:
+            cur = conn.execute(
+                f"""UPDATE {table_name}
+                    SET fact_value = ?, updated_at = ?
+                    WHERE session_id = ? AND fact_key = ?""",
+                (value, now, session_id, key),
+            )
+            updated += max(0, int(cur.rowcount))
+        else:
+            updated += 1
 
-    deleted = 0
-    if normalized_delete_keys:
+    deleted = len(normalized_delete_keys)
+    if apply and normalized_delete_keys:
         placeholders = ",".join("?" for _ in normalized_delete_keys)
         cur = conn.execute(
             f"""DELETE FROM {table_name}
