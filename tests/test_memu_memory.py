@@ -9,7 +9,7 @@ os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
-from pupu.agent import chat, _maybe_batch_review
+from pupu.agent import REVIEW_INTERVAL, chat, _maybe_batch_review
 from pupu.facts_report import format_facts_report
 from pupu.important_event_report import format_important_events_report
 import pupu.proactive as proactive
@@ -129,16 +129,43 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("用户喜欢星露谷", report)
         self.assertIn("memU 长期记忆 1 条", report)
 
-    def test_adapter_does_not_build_summary_entries(self):
+    def test_adapter_builds_summary_entries(self):
         entries = _build_review_entries(
-            summary="this summary should not enter memU",
+            summary="用户和仆仆在2026年5月19日晚上讨论星露谷接入。",
             user_facts={"nickname": "xiaofu"},
             self_facts={},
             important_events=[],
         )
 
-        self.assertEqual([kind for kind, _text, _extra in entries], ["user_fact"])
-        self.assertEqual(entries[0][1], "nickname: xiaofu")
+        self.assertEqual([kind for kind, _text, _extra in entries], ["summary", "user_fact"])
+        self.assertEqual(entries[0][1], "用户和仆仆在2026年5月19日晚上讨论星露谷接入。")
+        self.assertEqual(entries[1][1], "nickname: xiaofu")
+
+    def test_adapter_absolutizes_important_event_text_for_memu(self):
+        entries = _build_review_entries(
+            summary="",
+            user_facts={},
+            self_facts={},
+            important_events=[
+                {
+                    "source_event_key": "watch-yurucamp",
+                    "title": "今晚一起看摇曳露营",
+                    "kind": "promise",
+                    "event_time": "2026-05-12",
+                    "time_text": "今晚",
+                    "details": "用户答应今晚和仆仆一起看摇曳露营",
+                    "followup_hint": "晚上可以询问用户是否开始看摇曳露营",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+
+        self.assertEqual(entries[0][0], "important_event")
+        text = entries[0][1]
+        self.assertIn("2026年5月12日", text)
+        self.assertIn("2026年5月12日晚上一起看摇曳露营", text)
+        self.assertIn("2026年5月12日晚上可以询问用户是否开始看摇曳露营", text)
+        self.assertNotIn("今晚", text)
 
     def test_system_prompt_can_include_recalled_memories(self):
         prompt = build_system_prompt(
@@ -236,7 +263,7 @@ class MemuMemoryTests(unittest.TestCase):
         mock_recall.assert_called_once()
 
     def test_batch_review_syncs_long_term_memory_to_memu(self):
-        for i in range(8):
+        for i in range(REVIEW_INTERVAL):
             self._save_chat_turn(i)
         set_familiarity(0, session_id=self.session_id)
 
@@ -272,14 +299,14 @@ class MemuMemoryTests(unittest.TestCase):
         sync_kwargs = mock_sync.call_args.kwargs
         self.assertEqual(sync_kwargs["context_session"], self.session_id)
         self.assertEqual(sync_kwargs["identity_session"], self.session_id)
-        self.assertEqual(sync_kwargs["summary"], "")
+        self.assertEqual(sync_kwargs["summary"], "用户和仆仆聊了星露谷接入。")
         self.assertEqual(sync_kwargs["user_facts"]["游戏"], "用户想在星露谷里和仆仆互动")
         mock_record.assert_called_once()
         self.assertEqual(mock_record.call_args.kwargs["status"], "success")
         self.assertEqual(mock_record.call_args.kwargs["memu_ids"], ["m1", "m2"])
 
     def test_batch_review_memu_failure_keeps_core_review_state(self):
-        for i in range(8):
+        for i in range(REVIEW_INTERVAL):
             self._save_chat_turn(i)
         set_familiarity(0, session_id=self.session_id)
 
@@ -343,7 +370,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["deleted"], 2)
         self.assertEqual(set(deleted_ids), {"b", "c"})
 
-    def test_rebuild_skips_context_summaries_and_syncs_identity_memory(self):
+    def test_rebuild_syncs_context_summaries_and_identity_memory(self):
         context_id = self.session_id + "_context"
         identity_id = self.session_id + "_identity"
         reset_session(context_id)
@@ -363,11 +390,16 @@ class MemuMemoryTests(unittest.TestCase):
                     report = rebuild_memu_session(identity_id, context_id)
 
         self.assertIn("写入", report)
-        self.assertEqual(len(captured), 1)
+        self.assertIn("迁移旧摘要 1 条", report)
+        self.assertEqual(len(captured), 2)
         self.assertEqual(captured[0]["context_session"], context_id)
         self.assertEqual(captured[0]["identity_session"], identity_id)
-        self.assertEqual(captured[0]["summary"], "")
-        self.assertEqual(captured[0]["user_facts"], {"name": "小夫"})
+        self.assertEqual(captured[0]["summary"], "群聊摘要")
+        self.assertEqual(captured[0]["user_facts"], {})
+        self.assertEqual(captured[1]["context_session"], context_id)
+        self.assertEqual(captured[1]["identity_session"], identity_id)
+        self.assertEqual(captured[1]["summary"], "")
+        self.assertEqual(captured[1]["user_facts"], {"name": "小夫"})
 
 
 if __name__ == "__main__":

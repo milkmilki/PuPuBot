@@ -52,6 +52,18 @@ class LLMProviderTests(unittest.TestCase):
             self.assertEqual(os.environ["PUPU_CHAT_PROVIDER"], "xiaoshuoai")
             self.assertEqual(llm.get_provider_name("chat"), "xiaoshuoai")
 
+    def test_judge_temperature_defaults_low_and_can_be_overridden(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PUPU_JUDGE_TEMPERATURE", None)
+            self.assertEqual(llm.role_temperature("judge"), 0.1)
+            self.assertIsNone(llm.role_temperature("chat"))
+
+        with patch.dict(os.environ, {"PUPU_JUDGE_TEMPERATURE": "0.25"}, clear=False):
+            self.assertEqual(llm.role_temperature("judge"), 0.25)
+
+        with patch.dict(os.environ, {"PUPU_JUDGE_TEMPERATURE": "bad"}, clear=False):
+            self.assertEqual(llm.role_temperature("judge"), 0.1)
+
     def test_xiaoshuoai_provider_is_created_from_env(self):
         with patch.dict(
             os.environ,
@@ -105,6 +117,35 @@ class LLMProviderTests(unittest.TestCase):
             base_url="https://api.deepseek.com/anthropic",
         )
         self.assertEqual(fake_client.messages.create.call_args.kwargs["model"], "deepseek-v4-pro")
+
+    def test_deepseek_provider_accepts_temperature_argument(self):
+        fake_client = Mock()
+        text_block = Mock()
+        text_block.type = "text"
+        text_block.text = "ok"
+        fake_client.messages.create.return_value = Mock(stop_reason="end_turn", content=[text_block])
+        with patch("pupu.llm.anthropic.Anthropic", return_value=fake_client):
+            with patch.dict(
+                os.environ,
+                {
+                    "PUPU_CHAT_PROVIDER": "deepseek",
+                    "PUPU_DEEPSEEK_API_KEY": "test-key",
+                    "PUPU_DEEPSEEK_MODEL": "deepseek-v4-pro",
+                },
+                clear=False,
+            ):
+                provider = llm.get_provider("chat")
+
+        result = provider.chat_complete(
+            model="claude-opus-4-6",
+            system="system",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=20,
+            temperature=0.2,
+        )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(fake_client.messages.create.call_args.kwargs["temperature"], 0.2)
 
     def test_deepseek_provider_supports_tool_calls_via_anthropic_loop(self):
         tool_block = Mock()
@@ -188,6 +229,27 @@ class LLMProviderTests(unittest.TestCase):
             {"effort": "max"},
         )
 
+    def test_judge_json_task_passes_low_temperature_to_provider(self):
+        class FakeProvider:
+            def json_task(self, **kwargs):
+                self.kwargs = kwargs
+                return "{}"
+
+        provider = FakeProvider()
+        with patch.dict(os.environ, {"PUPU_JUDGE_TEMPERATURE": "0.12"}, clear=False):
+            with patch("pupu.llm.get_provider", return_value=provider):
+                text = llm.json_task(
+                    role="judge",
+                    model="judge-model",
+                    system="system",
+                    user_content="input",
+                    max_tokens=20,
+                    task_name="batch_review",
+                )
+
+        self.assertEqual(text, "{}")
+        self.assertEqual(provider.kwargs["temperature"], 0.12)
+
     def test_openai_compatible_provider_posts_chat_completion(self):
         provider = OpenAICompatibleProvider(
             name="xiaoshuoai",
@@ -224,6 +286,29 @@ class LLMProviderTests(unittest.TestCase):
                 {"role": "user", "content": "hi"},
             ],
         )
+
+    def test_openai_compatible_provider_allows_per_call_temperature(self):
+        provider = OpenAICompatibleProvider(
+            name="xiaoshuoai",
+            endpoint="https://example.test/chat/completions",
+            api_key="test-key",
+            model="novel-model",
+            temperature=0.7,
+        )
+        fake_response = Mock()
+        fake_response.raise_for_status.return_value = None
+        fake_response.json.return_value = {"choices": [{"message": {"content": "{}"}}]}
+
+        with patch("pupu.llm_providers.httpx.post", return_value=fake_response) as post:
+            provider.json_task(
+                model="ignored-model",
+                system="system",
+                user_content="input",
+                max_tokens=20,
+                temperature=0.1,
+            )
+
+        self.assertEqual(post.call_args.kwargs["json"]["temperature"], 0.1)
 
     def test_openai_compatible_provider_accepts_sse_response_text(self):
         provider = OpenAICompatibleProvider(

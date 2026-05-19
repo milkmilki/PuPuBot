@@ -112,6 +112,7 @@ class AnthropicProvider:
         max_tokens: int,
         tools: list[dict] | None = None,
         tool_handler: ToolHandler | None = None,
+        temperature: float | None = None,
         request_overrides: dict | None = None,
         **_: object,
     ) -> str:
@@ -122,6 +123,8 @@ class AnthropicProvider:
             "messages": messages,
             "tools": tools or None,
         }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
         if request_overrides:
             create_kwargs.update(request_overrides)
         response = self.client.messages.create(**create_kwargs)
@@ -156,6 +159,8 @@ class AnthropicProvider:
                 "messages": messages,
                 "tools": tools or None,
             }
+            if temperature is not None:
+                create_kwargs["temperature"] = temperature
             if request_overrides:
                 create_kwargs.update(request_overrides)
             response = self.client.messages.create(**create_kwargs)
@@ -201,6 +206,7 @@ class AnthropicProvider:
         system: str,
         user_content: str,
         max_tokens: int,
+        temperature: float | None = None,
         request_overrides: dict | None = None,
         **_: object,
     ) -> str:
@@ -210,6 +216,8 @@ class AnthropicProvider:
             "system": system,
             "messages": [{"role": "user", "content": user_content}],
         }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
         if request_overrides:
             create_kwargs.update(request_overrides)
         response = self.client.messages.create(**create_kwargs)
@@ -250,7 +258,14 @@ class OpenAICompatibleProvider:
     reasoning_effort: str = ""
     thinking_enabled: bool = False
 
-    def _build_payload(self, *, system: str, messages: list[dict], max_tokens: int) -> dict:
+    def _build_payload(
+        self,
+        *,
+        system: str,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float | None = None,
+    ) -> dict:
         payload = {
             "model": self.model,
             "messages": [
@@ -258,7 +273,7 @@ class OpenAICompatibleProvider:
                 *_openai_messages(messages),
             ],
             "max_tokens": max_tokens,
-            "temperature": self.temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "stream": False,
         }
         if self.reasoning_effort:
@@ -275,10 +290,16 @@ class OpenAICompatibleProvider:
         system: str,
         messages: list[dict],
         max_tokens: int,
+        temperature: float | None = None,
         **_: object,
     ) -> str:
         self._validate_config()
-        payload = self._build_payload(system=system, messages=messages, max_tokens=max_tokens)
+        payload = self._build_payload(
+            system=system,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
         return self._post_chat_completion(payload, task_name="chat")
 
     def json_task(
@@ -288,6 +309,7 @@ class OpenAICompatibleProvider:
         system: str,
         user_content: str,
         max_tokens: int,
+        temperature: float | None = None,
         task_name: str = "json_task",
         **_: object,
     ) -> str:
@@ -296,6 +318,7 @@ class OpenAICompatibleProvider:
             system=system,
             messages=[{"role": "user", "content": user_content}],
             max_tokens=max_tokens,
+            temperature=temperature,
         )
         return self._post_chat_completion(payload, task_name=task_name)
 

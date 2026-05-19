@@ -34,6 +34,32 @@ class ReviewFollowupTests(unittest.TestCase):
         self.session_id = "test_review_followups"
         reset_session(self.session_id)
 
+    def test_important_event_relative_time_is_absolutized(self):
+        important_events = normalize_review_important_events(
+            [
+                {
+                    "source_event_key": "watch-yurucamp",
+                    "title": "今晚一起看摇曳露营",
+                    "kind": "promise",
+                    "event_time": "",
+                    "time_text": "今晚",
+                    "details": "用户答应今晚和仆仆一起看摇曳露营",
+                    "followup_hint": "晚上可以询问用户是否开始看摇曳露营",
+                    "confidence": 0.9,
+                }
+            ],
+            now=datetime(2026, 5, 12, 15, 0, 0),
+        )
+
+        event = important_events[0]
+        self.assertEqual(event["event_time"], "2026-05-12")
+        self.assertIn("2026年5月12日晚上", event["title"])
+        self.assertEqual(event["time_text"], "2026年5月12日晚上")
+        self.assertIn("2026年5月12日晚上", event["details"])
+        self.assertIn("2026年5月12日晚上", event["followup_hint"])
+        for field in ("title", "time_text", "details", "followup_hint"):
+            self.assertNotIn("今晚", event[field])
+
     def test_birthday_date_only_task_draft_creates_task_and_links_event(self):
         important_events = normalize_review_important_events(
             [

@@ -9,7 +9,7 @@ import threading
 import time
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -769,6 +769,57 @@ def _parse_memory_payload(value: object) -> dict[str, Any]:
     return {"kind": "other", "text": text}
 
 
+def _event_date_label(value: date) -> str:
+    return f"{value.year}年{value.month}月{value.day}日"
+
+
+def _parse_event_date(value: object) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except Exception:
+        return None
+
+
+def _absolutize_event_text(text: str, event_date: date | None) -> str:
+    value = str(text or "").strip()
+    if not value or not event_date:
+        return value
+    label = _event_date_label(event_date)
+    replacements = [
+        ("今天晚上", f"{label}晚上"),
+        ("今晚", f"{label}晚上"),
+        ("今夜", f"{label}晚上"),
+        ("今天早上", f"{label}早上"),
+        ("今早", f"{label}早上"),
+        ("今天上午", f"{label}上午"),
+        ("今天中午", f"{label}中午"),
+        ("今天下午", f"{label}下午"),
+        ("今天", label),
+        ("今日", label),
+        ("明天晚上", f"{label}晚上"),
+        ("明晚", f"{label}晚上"),
+        ("明天早上", f"{label}早上"),
+        ("明早", f"{label}早上"),
+        ("明天", label),
+        ("后天晚上", f"{label}晚上"),
+        ("后天", label),
+    ]
+    for needle, replacement in replacements:
+        value = value.replace(needle, replacement)
+    if label not in value and any(word in value for word in ("早上", "上午", "中午", "下午", "晚上", "夜里", "夜晚")):
+        if value.startswith(("早上", "上午", "中午", "下午", "晚上", "夜里", "夜晚")):
+            return label + value
+        return f"{label}，{value}"
+    return value
+
+
 def _categories_for(kind: str) -> list[str]:
     if kind == "user_fact":
         return ["personal_info", "preferences"]
@@ -814,15 +865,23 @@ def _build_review_entries(
     important_events: list[dict] | None = None,
 ) -> list[tuple[str, str, dict[str, Any]]]:
     entries: list[tuple[str, str, dict[str, Any]]] = []
+    summary_text = " ".join(str(summary or "").split())
+    if summary_text:
+        entries.append(("summary", summary_text, {}))
     for key, value in (user_facts or {}).items():
         entries.append(("user_fact", f"{key}: {value}", {"key": key}))
     for key, value in (self_facts or {}).items():
         entries.append(("self_fact", f"{key}: {value}", {"key": key}))
     for event in important_events or []:
-        title = str(event.get("title") or "").strip()
-        details = str(event.get("details") or "").strip()
-        followup = str(event.get("followup_hint") or "").strip()
-        event_text = "; ".join(part for part in (title, details, followup) if part)
+        event_date = _parse_event_date(event.get("event_time"))
+        event_label = _event_date_label(event_date) if event_date else ""
+        title = _absolutize_event_text(str(event.get("title") or "").strip(), event_date)
+        details = _absolutize_event_text(str(event.get("details") or "").strip(), event_date)
+        followup = _absolutize_event_text(str(event.get("followup_hint") or "").strip(), event_date)
+        text_parts = [part for part in (title, details, followup) if part]
+        if event_label and event_label not in " ".join(text_parts):
+            text_parts.insert(0, event_label)
+        event_text = "; ".join(text_parts)
         if event_text:
             entries.append(
                 (
@@ -1235,17 +1294,16 @@ def rebuild_memu_session(identity_session: str, context_session: str | None = No
     removed = clear_memu_session(identity_session)
     conn = get_conn()
     try:
-        summary_sessions = [context_session]
-        if identity_session != context_session:
-            summary_sessions.append(identity_session)
-        skipped_summaries = sum(
-            int(row["count"] or 0)
-            for session_id in summary_sessions
+        summaries = [
+            dict(row)
             for row in conn.execute(
-                "SELECT COUNT(*) AS count FROM summaries WHERE session_id = ?",
-                (session_id,),
+                """SELECT summary, start_msg_id, end_msg_id, created_at
+                   FROM summaries
+                   WHERE session_id = ?
+                   ORDER BY created_at ASC, id ASC""",
+                (context_session,),
             ).fetchall()
-        )
+        ]
         user_facts = {
             row["fact_key"]: row["fact_value"]
             for row in conn.execute(
@@ -1277,15 +1335,36 @@ def rebuild_memu_session(identity_session: str, context_session: str | None = No
     _log(
         "rebuild loaded "
         f"identity={identity_session} context={context_session} removed={removed} "
-        f"summaries_skipped={skipped_summaries} user_facts={len(user_facts)} self_facts={len(self_facts)} "
+        f"summaries={len(summaries)} user_facts={len(user_facts)} self_facts={len(self_facts)} "
         f"important_events={len(events)}"
     )
     ids: list[str] = []
-    if skipped_summaries:
+    failures = 0
+    for index, row in enumerate(summaries, start=1):
+        summary_text = str(row.get("summary") or "").strip()
+        if not summary_text:
+            continue
+        start_msg_id = int(row.get("start_msg_id") or 0)
+        end_msg_id = int(row.get("end_msg_id") or 0)
         _log(
-            "rebuild skip summaries "
-            f"identity={identity_session} context={context_session} count={skipped_summaries}"
+            "rebuild sync summary "
+            f"index={index}/{len(summaries)} context={context_session} "
+            f"range={start_msg_id}..{end_msg_id}"
         )
+        result = sync_review_memory(
+            context_session=context_session,
+            identity_session=identity_session,
+            start_msg_id=start_msg_id,
+            end_msg_id=end_msg_id,
+            summary=summary_text,
+            user_facts={},
+            self_facts={},
+            important_events=[],
+        )
+        ids.extend(result.ids)
+        if result.status not in {"success", "empty"}:
+            failures += 1
+
     result = sync_review_memory(
         context_session=context_session,
         identity_session=identity_session,
@@ -1297,15 +1376,16 @@ def rebuild_memu_session(identity_session: str, context_session: str | None = No
         important_events=events,
     )
     ids.extend(result.ids)
-    failures = 0 if result.status in {"success", "empty"} else 1
+    if result.status not in {"success", "empty"}:
+        failures += 1
     _log(
         "rebuild done "
         f"identity={identity_session} context={context_session} removed={removed} "
-        f"written={len(ids)} failures={failures} summaries_skipped={skipped_summaries}"
+        f"written={len(ids)} failures={failures} summaries={len(summaries)}"
     )
     return (
         f"memU 重建完成：清理 {removed} 项，写入 {len(ids)} 项，"
-        f"失败 {failures} 批，跳过旧摘要 {skipped_summaries} 条。"
+        f"失败 {failures} 批，迁移旧摘要 {len(summaries)} 条。"
     )
 
 

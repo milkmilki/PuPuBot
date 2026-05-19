@@ -22,6 +22,24 @@ from .tools import manage_scheduled_task
 
 console = Console()
 
+CLI_HELP_TEXT = """PuPu CLI 可用命令
+
+基础：
+/help（/commands /帮助 /命令 /指令）：查看这份帮助
+/quit（/exit /q）：退出
+/score：查看好感度
+/history：查看最近聊天记录
+/tasks（/定时任务）：查看定时任务
+
+记忆：
+/important（/events /important_events /重要事件 /记忆事件）：查看重要事件记忆
+/facts（/fact /memory_facts /长期记忆 /事实记忆）：查看长期事实记忆
+/recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
+/memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引
+/tidy（/cleanup /整理记忆 /整理）：整理长期记忆和定时任务
+/reset：重置当前会话记忆、好感度和聊天记录
+"""
+
 
 def _cli_scheduler_loop():
     from pupu.scheduler import cli_scheduled_tasks_tick
@@ -46,7 +64,7 @@ def print_banner():
     console.print(
         Panel(
             f"[bold]仆仆[/bold] — 好感度: Lv.{score_info['level']}\n"
-            f"输入消息开始聊天 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /facts 长期 facts | /tidy 整理记忆",
+            f"输入消息开始聊天 | /help 命令 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /facts 长期 facts | /tidy 整理记忆",
             style="cyan",
         )
     )
@@ -55,6 +73,9 @@ def print_banner():
 def handle_command(cmd: str) -> bool:
     """Handle slash commands. Returns True if handled."""
     command_name, _, command_arg = cmd.partition(" ")
+    if command_name in ("/help", "/commands", "/帮助", "/命令", "/指令"):
+        console.print(CLI_HELP_TEXT)
+        return False
     if cmd in ("/quit", "/exit", "/q"):
         console.print("[dim]再见。[/dim]")
         return True

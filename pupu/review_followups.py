@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+import re
+from datetime import date, datetime, time, timedelta
 
 from .storage import (
     MAX_SCHEDULED_TASKS_PER_SESSION,
@@ -28,11 +29,83 @@ REPEAT_ALIASES = {
     "每年": "yearly",
 }
 
+ABSOLUTE_DATE_RE = re.compile(r"\d{4}[-年]\d{1,2}(?:[-月]\d{1,2})?")
+TIME_OF_DAY_WORDS = ("早上", "上午", "中午", "下午", "晚上", "夜里", "夜晚")
 
-def normalize_review_important_events(value) -> list[dict]:
+
+def _date_label(value: date) -> str:
+    return f"{value.year}年{value.month}月{value.day}日"
+
+
+def _parse_event_date(value: str) -> date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except Exception:
+        pass
+    try:
+        return date.fromisoformat(text[:10])
+    except Exception:
+        return None
+
+
+def _relative_date_from_text(text: str, now: datetime) -> date | None:
+    value = str(text or "")
+    if any(token in value for token in ("后天",)):
+        return now.date() + timedelta(days=2)
+    if any(token in value for token in ("明天", "明晚", "明早")):
+        return now.date() + timedelta(days=1)
+    if any(token in value for token in ("昨天", "昨晚", "昨日")):
+        return now.date() - timedelta(days=1)
+    if any(token in value for token in ("今天", "今晚", "今夜", "今早", "今日")):
+        return now.date()
+    return None
+
+
+def _replace_relative_dates(text: str, now: datetime, event_date: date | None = None) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    today = now.date()
+    replacements = [
+        ("今天晚上", f"{_date_label(today)}晚上"),
+        ("今晚", f"{_date_label(today)}晚上"),
+        ("今夜", f"{_date_label(today)}晚上"),
+        ("今天早上", f"{_date_label(today)}早上"),
+        ("今早", f"{_date_label(today)}早上"),
+        ("今天上午", f"{_date_label(today)}上午"),
+        ("今天中午", f"{_date_label(today)}中午"),
+        ("今天下午", f"{_date_label(today)}下午"),
+        ("今天", _date_label(today)),
+        ("今日", _date_label(today)),
+        ("明天晚上", f"{_date_label(today + timedelta(days=1))}晚上"),
+        ("明晚", f"{_date_label(today + timedelta(days=1))}晚上"),
+        ("明天早上", f"{_date_label(today + timedelta(days=1))}早上"),
+        ("明早", f"{_date_label(today + timedelta(days=1))}早上"),
+        ("明天", _date_label(today + timedelta(days=1))),
+        ("后天晚上", f"{_date_label(today + timedelta(days=2))}晚上"),
+        ("后天", _date_label(today + timedelta(days=2))),
+        ("昨天晚上", f"{_date_label(today - timedelta(days=1))}晚上"),
+        ("昨晚", f"{_date_label(today - timedelta(days=1))}晚上"),
+        ("昨天", _date_label(today - timedelta(days=1))),
+    ]
+    for needle, replacement in replacements:
+        value = value.replace(needle, replacement)
+    if event_date and not ABSOLUTE_DATE_RE.search(value) and any(word in value for word in TIME_OF_DAY_WORDS):
+        label = _date_label(event_date)
+        if value.startswith(TIME_OF_DAY_WORDS):
+            return label + value
+        return f"{label}，{value}"
+    return value
+
+
+def normalize_review_important_events(value, *, now: datetime | None = None) -> list[dict]:
     if not isinstance(value, list):
         return []
 
+    now = now or datetime.now()
     cleaned = []
     for item in value:
         if not isinstance(item, dict):
@@ -44,6 +117,16 @@ def normalize_review_important_events(value) -> list[dict]:
         time_text = str(item.get("time_text", "")).strip()
         details = str(item.get("details", "")).strip()
         followup_hint = str(item.get("followup_hint", "")).strip()
+        event_date = _parse_event_date(event_time) or _relative_date_from_text(
+            " ".join(part for part in (time_text, title, details, followup_hint) if part),
+            now,
+        )
+        if not event_time and event_date:
+            event_time = event_date.isoformat()
+        title = _replace_relative_dates(title, now, event_date)
+        time_text = _replace_relative_dates(time_text, now, event_date)
+        details = _replace_relative_dates(details, now, event_date)
+        followup_hint = _replace_relative_dates(followup_hint, now, event_date)
         source_event_key = derive_source_event_key(
             item.get("source_event_key"),
             title=title,

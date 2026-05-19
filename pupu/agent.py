@@ -48,10 +48,10 @@ from .review_followups import (
 )
 from .tools import TOOL_DEFINITIONS, execute_tool, is_admin_tool
 
-REVIEW_INTERVAL = 8
+REVIEW_INTERVAL = 10
 REVIEW_IDLE_SECONDS = 600
 REVIEW_SOURCE = CHAT
-CHAT_HISTORY_LIMIT = 30
+CHAT_HISTORY_LIMIT = 10
 PROMPT_SUMMARY_LIMIT = 2
 PROMPT_IMPORTANT_EVENT_LIMIT = 6
 BATCH_REVIEW_MAX_TOKENS = 10000
@@ -669,7 +669,7 @@ def _maybe_batch_review_unlocked(
                     identity_session=identity_session,
                     start_msg_id=batch[0]["id"],
                     end_msg_id=batch[-1]["id"],
-                    summary="",
+                    summary=summary,
                     user_facts=user_facts,
                     self_facts=self_facts,
                     important_events=important_events,

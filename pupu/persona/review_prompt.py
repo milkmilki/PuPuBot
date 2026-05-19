@@ -1,7 +1,7 @@
 """Batch review prompt used by the judge model."""
 
 _BATCH_REVIEW_HEADER = """你是仆仆的记忆整理器。阅读下面这段对话，只返回一个 JSON 对象，包含：
-- summary: 120字内摘要，只保留聊了什么、做了什么、重要情绪和重要事件"""
+- summary: 120字内摘要，只记录具体发生的事：谁在什么时间/场景说了什么、做了什么、约定了什么、结果是什么"""
 
 _FAMILIARITY_DELTA_INSTRUCTIONS = """
 - familiarity_delta: 这 8 轮对关系分数的总变化，整数；没有明显变化就给 0"""
@@ -11,6 +11,35 @@ _BATCH_REVIEW_FIELDS = """
 - self_facts: 仆仆自己主动说过的设定；没有就返回 {}
 - important_events: 值得长期记住、以后可能自然跟进的事；没有就返回 []
 - task_updates: 对定时任务的统一更新；没有就返回 []"""
+
+_CONCRETE_MEMORY_RULES = """
+
+具体记录规则（非常重要）：
+- 任何要写入 summary、important_events、user_facts、self_facts 的内容，都必须能回答“谁在什么时间/场景做了什么/说了什么/答应了什么”
+- summary 要像事件流水账的浓缩版，可以用分号串起 1-3 件具体事；不要写“关系升温、进行了亲密互动、氛围很好、日常陪伴”这类抽象判断
+- important_events 的 title/details/followup_hint 必须包含具体对象、具体时间、具体行为或后续动作；不要只写“重要约定”“一次互动”“情绪事件”
+- user_facts/self_facts 只记录稳定长期事实；临时状态、当天偏好、一次性动作不要放进 facts，例如“今天喝冰美式”“刚才在画画”“今晚看动画”通常不要写成 fact
+- 如果事件发生在本轮对话里但没有更具体时间，用 Current local time 标注到具体日期，例如“2026年5月19日这轮对话中”
+- 不要凭空补没说过的细节；如果缺少人物、时间或动作，宁可不记，也不要写成空泛记忆
+
+好例子：
+- summary: “2026年5月19日晚上，用户说自己在画图，仆仆等用户画完后一起看《摇曳露营》；仆仆提醒用户画完后按播放键。”
+- important_event.title: “2026年5月19日晚上约好一起看《摇曳露营》”
+- important_event.details: “用户在2026年5月19日晚上答应画完图后和仆仆一起看《摇曳露营》，仆仆强调用户跑不掉。”
+
+坏例子：
+- “用户和仆仆关系更亲近”
+- “双方进行了温馨互动”
+- “用户有陪伴需求”
+- “仆仆和用户有一个重要约定”"""
+
+_ABSOLUTE_TIME_RULES = """
+
+时间必须绝对化：
+- 输入里会给 Current local time，请用它把“今天/今晚/明天/明晚/后天/刚才/最近”等相对时间换成具体日期或具体日期下的场景
+- event_time 能推断日期时必须写 ISO 日期或 ISO 时间，例如 2026-05-12 或 2026-05-12T20:00:00
+- summary、facts、title、time_text、details、followup_hint 里不要保留“今天、今晚、明天、明晚、后天、刚才、最近”这类相对说法；改写成“2026年5月12日晚上”这类具体日期
+- 例如不要写“今晚一起看摇曳露营”，要写“2026年5月12日晚上一起看摇曳露营”"""
 
 _FAMILIARITY_SCORING_RULES = """
 
@@ -33,9 +62,9 @@ important_events 只保留真正重要的事，例如：
 - title
 - kind: birthday / anniversary / exam / trip / meeting / deadline / promise / health / project / other
 - event_time: 有明确时间就给 ISO 日期或 ISO 时间，否则给空字符串
-- time_text: 原始时间线索，如“明天”“下周三晚上”
-- details
-- followup_hint
+- time_text: 绝对化后的时间文本，如“2026年5月20日”“2026年5月19日晚上”
+- details: 写清谁、何时、做了什么/说好了什么
+- followup_hint: 写清之后在什么时间或场景可以怎么自然跟进
 - confidence: 0 到 1 之间的小数
 
 task_updates 用来创建、取消或改时间，不再输出 task_drafts。
@@ -69,6 +98,8 @@ def build_batch_review_prompt(include_familiarity_delta: bool = True) -> str:
     if include_familiarity_delta:
         prompt += _FAMILIARITY_DELTA_INSTRUCTIONS
     prompt += _BATCH_REVIEW_FIELDS
+    prompt += _CONCRETE_MEMORY_RULES
+    prompt += _ABSOLUTE_TIME_RULES
     prompt += (
         _FAMILIARITY_SCORING_RULES
         if include_familiarity_delta

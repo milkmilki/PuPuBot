@@ -21,6 +21,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 MODEL = os.environ.get("PUPU_MODEL", "claude-opus-4-6")
 JUDGE_MODEL = os.environ.get("PUPU_JUDGE_MODEL", "claude-haiku-4-5-20251001")
+DEFAULT_JUDGE_TEMPERATURE = 0.1
 
 _client = None
 _providers: dict[str, object] = {}
@@ -78,6 +79,19 @@ def set_provider_name(role: str, provider_name: str) -> None:
     _last_provider_used.pop(role, None)
 
 
+def role_temperature(role: str) -> float | None:
+    env_name = f"PUPU_{role.upper()}_TEMPERATURE"
+    raw = os.environ.get(env_name, "").strip()
+    if raw:
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except Exception:
+            print(f"[pupu][llm] ignore invalid {env_name}={raw!r}; expected 0..1")
+    if role == "judge":
+        return DEFAULT_JUDGE_TEMPERATURE
+    return None
+
+
 def get_provider(role: str):
     name = get_provider_name(role)
     if name == "gemini":
@@ -130,6 +144,7 @@ def chat_complete(
     tool_exposure: str = "chat",
 ) -> str:
     configured_provider = get_provider_name(role)
+    temperature = role_temperature(role)
     try:
         provider = get_provider(role)
         text = provider.chat_complete(
@@ -137,6 +152,7 @@ def chat_complete(
             system=system,
             messages=messages,
             max_tokens=max_tokens,
+            temperature=temperature,
             tools=tools,
             tool_handler=tool_handler,
             session_id=session_id,
@@ -158,6 +174,7 @@ def chat_complete(
             system=system,
             messages=messages,
             max_tokens=max_tokens,
+            temperature=temperature,
             tools=tools,
             tool_handler=tool_handler,
             session_id=session_id,
@@ -179,6 +196,7 @@ def json_task(
     task_name: str,
 ) -> str:
     configured_provider = get_provider_name(role)
+    temperature = role_temperature(role)
     try:
         provider = get_provider(role)
         text = provider.json_task(
@@ -186,6 +204,7 @@ def json_task(
             system=system,
             user_content=user_content,
             max_tokens=max_tokens,
+            temperature=temperature,
             task_name=task_name,
         )
         _last_provider_used[role] = provider_label(role, model)
@@ -202,6 +221,7 @@ def json_task(
             system=system,
             user_content=user_content,
             max_tokens=max_tokens,
+            temperature=temperature,
             task_name=task_name,
         )
         _last_provider_used[role] = f"anthropic:{model} fallback_from={configured_provider}"
@@ -271,6 +291,7 @@ class _DeepSeekAnthropicProvider:
         system: str,
         messages: list[dict],
         max_tokens: int,
+        temperature: float | None = None,
         tools: list[dict] | None = None,
         tool_handler=None,
         session_id: str = "default",
@@ -284,6 +305,7 @@ class _DeepSeekAnthropicProvider:
             system=system,
             messages=messages,
             max_tokens=max_tokens,
+            temperature=temperature,
             tools=tools,
             tool_handler=tool_handler,
             request_overrides=self._request_overrides,
@@ -300,6 +322,7 @@ class _DeepSeekAnthropicProvider:
         system: str,
         user_content: str,
         max_tokens: int,
+        temperature: float | None = None,
         task_name: str = "json_task",
     ) -> str:
         model = self._default_model
@@ -308,6 +331,7 @@ class _DeepSeekAnthropicProvider:
             system=system,
             user_content=user_content,
             max_tokens=max_tokens,
+            temperature=temperature,
             request_overrides=self._request_overrides,
             task_name=task_name,
         )
@@ -389,6 +413,7 @@ def preflight_model_providers() -> None:
 
 
 __all__ = [
+    "DEFAULT_JUDGE_TEMPERATURE",
     "JUDGE_MODEL",
     "MODEL",
     "ProviderError",
@@ -404,5 +429,6 @@ __all__ = [
     "last_provider_label",
     "preflight_model_providers",
     "provider_label",
+    "role_temperature",
     "set_provider_name",
 ]

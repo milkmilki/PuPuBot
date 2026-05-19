@@ -29,6 +29,7 @@ from pupu.memory import (
     set_familiarity,
     update_familiarity,
 )
+from pupu.persona import build_batch_review_prompt
 
 from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED
 
@@ -56,6 +57,14 @@ class BatchReviewTests(unittest.TestCase):
             conn.commit()
         finally:
             conn.close()
+
+    def test_batch_review_prompt_requires_concrete_event_memory(self):
+        prompt = build_batch_review_prompt()
+
+        self.assertIn("谁在什么时间/场景做了什么", prompt)
+        self.assertIn("关系升温、进行了亲密互动、氛围很好", prompt)
+        self.assertIn("summary、facts、title、time_text", prompt)
+        self.assertIn("2026年5月19日这轮对话中", prompt)
 
     def test_summary_progress_counts_completed_chat_turns(self):
         for i in range(3):
