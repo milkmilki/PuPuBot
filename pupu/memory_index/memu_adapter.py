@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..persona.core import get_pupu_name
 from ..storage.db import get_conn, get_data_dir
 
 DEFAULT_TOP_K = 6
@@ -27,6 +28,38 @@ _op_lock = threading.Lock()
 _disabled_reasons_logged: set[str] = set()
 _config_logged = False
 _sqlite_backend_patched = False
+
+
+def _current_character_name() -> str:
+    return get_pupu_name().strip() or "仆仆"
+
+
+def _replace_default_character_name(text: str, character_name: str | None = None) -> str:
+    value = str(text or "")
+    name = str(character_name or _current_character_name()).strip()
+    if name and name != "仆仆":
+        value = value.replace("仆仆", name)
+    return value
+
+
+def _speaker_label(role: object, character_name: str | None = None) -> str:
+    return "用户" if str(role or "") == "user" else str(character_name or _current_character_name())
+
+
+def _format_history_for_recall(
+    history: list[dict] | None,
+    *,
+    character_name: str | None = None,
+    limit: int = 6,
+) -> str:
+    name = str(character_name or _current_character_name())
+    lines = []
+    for item in (history or [])[-limit:]:
+        content = _replace_default_character_name(item.get("content") or "", name).strip()
+        if not content:
+            continue
+        lines.append(f"{_speaker_label(item.get('role'), name)}: {content}")
+    return "\n".join(lines)
 
 
 class PuPuMemoryScope(BaseModel):
@@ -1060,24 +1093,37 @@ def _build_review_entries(
     important_events: list[dict] | None = None,
 ) -> list[tuple[str, str, dict[str, Any]]]:
     entries: list[tuple[str, str, dict[str, Any]]] = []
-    summary_text = " ".join(str(summary or "").split())
+    character_name = _current_character_name()
+    summary_text = " ".join(_replace_default_character_name(summary, character_name).split())
     if summary_text:
-        entries.append(("summary", summary_text, {}))
+        entries.append(("summary", f"对话摘要（用户 / {character_name}）: {summary_text}", {}))
     for key, value in (user_facts or {}).items():
-        entries.append(("user_fact", f"{key}: {value}", {"key": key}))
+        text = _replace_default_character_name(f"{key}: {value}", character_name)
+        entries.append(("user_fact", f"用户 | {text}", {"key": key}))
     for key, value in (self_facts or {}).items():
-        entries.append(("self_fact", f"{key}: {value}", {"key": key}))
+        text = _replace_default_character_name(f"{key}: {value}", character_name)
+        entries.append(("self_fact", f"{character_name} | {text}", {"key": key}))
     for event in important_events or []:
         event_date = _parse_event_date(event.get("event_time"))
         event_label = _event_date_label(event_date) if event_date else ""
-        title = _absolutize_event_text(str(event.get("title") or "").strip(), event_date)
-        details = _absolutize_event_text(str(event.get("details") or "").strip(), event_date)
-        followup = _absolutize_event_text(str(event.get("followup_hint") or "").strip(), event_date)
+        title = _replace_default_character_name(
+            _absolutize_event_text(str(event.get("title") or "").strip(), event_date),
+            character_name,
+        )
+        details = _replace_default_character_name(
+            _absolutize_event_text(str(event.get("details") or "").strip(), event_date),
+            character_name,
+        )
+        followup = _replace_default_character_name(
+            _absolutize_event_text(str(event.get("followup_hint") or "").strip(), event_date),
+            character_name,
+        )
         text_parts = [part for part in (title, details, followup) if part]
         if event_label and event_label not in " ".join(text_parts):
             text_parts.insert(0, event_label)
         event_text = "; ".join(text_parts)
         if event_text:
+            event_text = f"相关人物: 用户、{character_name}; {event_text}"
             entries.append(
                 (
                     "important_event",
@@ -1243,10 +1289,10 @@ def recall_memories(
         )
         return []
 
-    recent = "\n".join(
-        f"{item.get('role', '')}: {item.get('content', '')}" for item in (history or [])[-6:]
-    )
-    full_query = (recent + "\n" + query).strip()
+    character_name = _current_character_name()
+    recent = _format_history_for_recall(history, character_name=character_name)
+    current_query = f"用户: {_replace_default_character_name(query, character_name)}".strip()
+    full_query = (recent + "\n" + current_query).strip()
     messages = [{"role": "user", "content": {"text": full_query}}]
     where = {"identity_session": identity_session}
     _log(

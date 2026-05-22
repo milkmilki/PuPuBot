@@ -30,6 +30,7 @@ from pupu.memory_index.memu_adapter import (
     _build_review_entries,
     _canonical_memory_payload_for_hash,
     _extract_item_id,
+    _format_history_for_recall,
     _format_items,
     _memorize_config,
     _retrieve_item_config,
@@ -131,60 +132,81 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("memU 长期记忆 1 条", report)
 
     def test_adapter_builds_summary_entries(self):
-        entries = _build_review_entries(
-            summary="用户和仆仆在2026年5月19日晚上讨论星露谷接入。",
-            user_facts={"nickname": "xiaofu"},
-            self_facts={},
-            important_events=[],
-        )
+        with patch("pupu.memory_index.memu_adapter.get_pupu_name", return_value="璐璐"):
+            entries = _build_review_entries(
+                summary="用户和仆仆在2026年5月19日晚上讨论星露谷接入。",
+                user_facts={"nickname": "xiaofu"},
+                self_facts={},
+                important_events=[],
+            )
 
         self.assertEqual([kind for kind, _text, _extra in entries], ["summary", "user_fact"])
-        self.assertEqual(entries[0][1], "用户和仆仆在2026年5月19日晚上讨论星露谷接入。")
-        self.assertEqual(entries[1][1], "nickname: xiaofu")
+        self.assertEqual(
+            entries[0][1],
+            "对话摘要（用户 / 璐璐）: 用户和璐璐在2026年5月19日晚上讨论星露谷接入。",
+        )
+        self.assertEqual(entries[1][1], "用户 | nickname: xiaofu")
+
+    def test_recall_history_uses_user_and_character_name(self):
+        text = _format_history_for_recall(
+            [
+                {"role": "user", "content": "我想画画"},
+                {"role": "assistant", "content": "我想买二手屏"},
+            ],
+            character_name="璐璐",
+        )
+
+        self.assertIn("用户: 我想画画", text)
+        self.assertIn("璐璐: 我想买二手屏", text)
 
     def test_adapter_absolutizes_important_event_text_for_memu(self):
-        entries = _build_review_entries(
-            summary="",
-            user_facts={},
-            self_facts={},
-            important_events=[
-                {
-                    "source_event_key": "watch-yurucamp",
-                    "title": "今晚一起看摇曳露营",
-                    "kind": "promise",
-                    "event_time": "2026-05-12",
-                    "time_text": "今晚",
-                    "details": "用户答应今晚和仆仆一起看摇曳露营",
-                    "followup_hint": "晚上可以询问用户是否开始看摇曳露营",
-                    "confidence": 0.9,
-                }
-            ],
-        )
+        with patch("pupu.memory_index.memu_adapter.get_pupu_name", return_value="璐璐"):
+            entries = _build_review_entries(
+                summary="",
+                user_facts={},
+                self_facts={},
+                important_events=[
+                    {
+                        "source_event_key": "watch-yurucamp",
+                        "title": "今晚一起看摇曳露营",
+                        "kind": "promise",
+                        "event_time": "2026-05-12",
+                        "time_text": "今晚",
+                        "details": "用户答应今晚和仆仆一起看摇曳露营",
+                        "followup_hint": "晚上可以询问用户是否开始看摇曳露营",
+                        "confidence": 0.9,
+                    }
+                ],
+            )
 
         self.assertEqual(entries[0][0], "important_event")
         text = entries[0][1]
         self.assertIn("2026年5月12日", text)
         self.assertIn("2026年5月12日晚上一起看摇曳露营", text)
+        self.assertIn("用户答应2026年5月12日晚上和璐璐一起看摇曳露营", text)
         self.assertIn("2026年5月12日晚上可以询问用户是否开始看摇曳露营", text)
+        self.assertIn("相关人物: 用户、璐璐", text)
         self.assertNotIn("今晚", text)
+        self.assertNotIn("仆仆", text)
 
     def test_system_prompt_can_include_recalled_memories(self):
-        prompt = build_system_prompt(
-            50,
-            user_facts={},
-            summaries=[],
-            self_facts={},
-            important_events=[],
-            recalled_memories=[
-                {
-                    "kind": "user_fact",
-                    "text": "用户最近在玩星露谷，也聊过杀戮尖塔2。",
-                }
-            ],
-        )
+        with patch("pupu.persona.builder.get_pupu_name", return_value="璐璐"):
+            prompt = build_system_prompt(
+                50,
+                user_facts={},
+                summaries=[],
+                self_facts={},
+                important_events=[],
+                recalled_memories=[
+                    {
+                        "kind": "user_fact",
+                        "text": "用户最近在玩星露谷，也聊过杀戮尖塔2。",
+                    }
+                ],
+            )
 
         self.assertIn("本轮自然想起的记忆", prompt)
-        self.assertIn("[user_fact] 用户最近在玩星露谷", prompt)
+        self.assertIn("[user_fact | 用户] 用户最近在玩星露谷", prompt)
 
     def test_chat_uses_memu_recall_and_two_recent_summaries(self):
         upsert_user_facts({"旧事实": "不应该被直接读取"}, self.session_id)
@@ -248,19 +270,20 @@ class MemuMemoryTests(unittest.TestCase):
         ]
         period = {"name": "白天", "topics": ["聊点轻松的"]}
 
-        with patch("pupu.proactive.is_memu_long_term_enabled", return_value=True):
-            with patch("pupu.proactive.get_recent_messages", return_value=recent):
-                with patch("pupu.proactive.recall_memories", return_value=recalled) as mock_recall:
-                    with patch("pupu.proactive.get_self_facts", side_effect=AssertionError("old self_facts read")):
-                        with patch("pupu.proactive.get_user_facts", side_effect=AssertionError("old user_facts read")):
-                            with patch(
-                                "pupu.proactive.get_important_events",
-                                side_effect=AssertionError("old important_events read"),
-                            ):
-                                prompt = proactive._build_proactive_prompt(80, period)
+        with patch("pupu.proactive.get_pupu_name", return_value="璐璐"):
+            with patch("pupu.proactive.is_memu_long_term_enabled", return_value=True):
+                with patch("pupu.proactive.get_recent_messages", return_value=recent):
+                    with patch("pupu.proactive.recall_memories", return_value=recalled) as mock_recall:
+                        with patch("pupu.proactive.get_self_facts", side_effect=AssertionError("old self_facts read")):
+                            with patch("pupu.proactive.get_user_facts", side_effect=AssertionError("old user_facts read")):
+                                with patch(
+                                    "pupu.proactive.get_important_events",
+                                    side_effect=AssertionError("old important_events read"),
+                                ):
+                                    prompt = proactive._build_proactive_prompt(80, period)
 
-        self.assertIn("recalled memories", prompt)
-        self.assertIn("[user_fact] 用户最近在赶项目", prompt)
+        self.assertIn("自然想起的长期记忆（用户 / 璐璐）", prompt)
+        self.assertIn("[user_fact | 用户] 用户最近在赶项目", prompt)
         mock_recall.assert_called_once()
 
     def test_proactive_context_uses_thirty_recent_messages_and_two_summaries(self):
@@ -293,18 +316,19 @@ class MemuMemoryTests(unittest.TestCase):
         ]
         period = {"name": "白天", "topics": ["聊点轻松的"]}
 
-        with patch("pupu.proactive.is_memu_long_term_enabled", return_value=False):
-            with patch("pupu.proactive._load_proactive_context", return_value=(recent, summaries)):
-                with patch("pupu.proactive.get_self_facts", return_value={}):
-                    with patch("pupu.proactive.get_user_facts", return_value={}):
-                        with patch("pupu.proactive.get_important_events", return_value=[]):
-                            prompt = proactive._build_proactive_prompt(80, period)
+        with patch("pupu.proactive.get_pupu_name", return_value="璐璐"):
+            with patch("pupu.proactive.is_memu_long_term_enabled", return_value=False):
+                with patch("pupu.proactive._load_proactive_context", return_value=(recent, summaries)):
+                    with patch("pupu.proactive.get_self_facts", return_value={}):
+                        with patch("pupu.proactive.get_user_facts", return_value={}):
+                            with patch("pupu.proactive.get_important_events", return_value=[]):
+                                prompt = proactive._build_proactive_prompt(80, period)
 
         self.assertIn("## 之前聊过的摘要", prompt)
         self.assertIn("summary-two-recent", prompt)
         self.assertIn("summary-three-latest", prompt)
         self.assertIn("用户: 第一条最近消息", prompt)
-        self.assertIn("你: 第二条最近回复", prompt)
+        self.assertIn("璐璐: 第二条最近回复", prompt)
 
     def test_batch_review_syncs_long_term_memory_to_memu(self):
         for i in range(REVIEW_INTERVAL):

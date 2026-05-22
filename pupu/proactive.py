@@ -21,7 +21,7 @@ from .memory import (
 )
 from .memory_index import is_memu_long_term_enabled, recall_memories
 from .message_sources import PROACTIVE
-from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT
+from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT, get_pupu_name
 from .sessions import OWNER_SESSION
 
 PROACTIVE_HISTORY_LIMIT = 30
@@ -120,6 +120,13 @@ def _truncate_debug(text: str, limit: int = 240) -> str:
     return text[:limit] + "...(truncated)"
 
 
+def _replace_default_character_name(text: object, character_name: str) -> str:
+    value = str(text or "")
+    if character_name and character_name != "仆仆":
+        value = value.replace("仆仆", character_name)
+    return value
+
+
 def _load_proactive_context() -> tuple[list[dict], list[dict]]:
     return (
         get_recent_messages(PROACTIVE_HISTORY_LIMIT, OWNER_SESSION),
@@ -131,56 +138,79 @@ def _format_recent_context(recent: list[dict]) -> str:
     if not recent:
         return "（暂无历史对话）"
 
+    character_name = get_pupu_name()
     lines = []
     for message in recent:
-        who = "用户" if message.get("role") == "user" else "你"
-        content = str(message.get("content") or "").strip()
+        who = "用户" if message.get("role") == "user" else character_name
+        content = _replace_default_character_name(
+            message.get("content") or "",
+            character_name,
+        ).strip()
         if content:
             lines.append(f"{who}: {content}")
     return "\n".join(lines) if lines else "（暂无历史对话）"
 
 
 def _format_summary_context(summaries: list[dict]) -> str:
+    character_name = get_pupu_name()
     lines = []
     for item in summaries:
-        summary = str(item.get("summary") or "").strip()
+        summary = _replace_default_character_name(
+            item.get("summary") or "",
+            character_name,
+        ).strip()
         if summary:
             lines.append(f"- {summary}")
     return "\n".join(lines) if lines else "（暂无摘要）"
 
 
 def _build_proactive_memu_query(score: int, period: dict, recent: list[dict]) -> str:
+    character_name = get_pupu_name()
     recent_lines = []
     for item in recent[-4:]:
-        role = "user" if item.get("role") == "user" else "assistant"
-        content = str(item.get("content") or "").replace("\n", " ").strip()
+        role = "用户" if item.get("role") == "user" else character_name
+        content = _replace_default_character_name(
+            item.get("content") or "",
+            character_name,
+        ).replace("\n", " ").strip()
         if content:
             recent_lines.append(f"{role}: {content[:120]}")
-    recent_text = " | ".join(recent_lines) or "none"
+    recent_text = " | ".join(recent_lines) or "无"
     return (
-        f"Proactive memory recall. Current period: {period['name']}."
-        f" Familiarity score: {score}."
-        f" Recent chat: {recent_text}."
-        " Recall long-term memories naturally relevant to the current situation, recent status,"
-        " unresolved topics, or things worth gently following up."
+        f"主动消息记忆召回。当前实例名是{character_name}，对话对象统一称为用户。"
+        f" 当前时段：{period['name']}。好感度：{score}。"
+        f" 最近聊天：{recent_text}。"
+        " 请召回和当前情境、用户近况、未解决话题、值得自然跟进的事相关的长期记忆。"
     )
 
 
 def _format_recalled_memories_section(memories: list[dict]) -> str:
+    character_name = get_pupu_name()
     lines = []
     for item in memories:
-        text = str(item.get("text") or "").strip()
+        text = _replace_default_character_name(
+            item.get("text") or "",
+            character_name,
+        ).strip()
         if not text:
             continue
         kind = str(item.get("kind") or "memory").strip()
+        if kind == "user_fact":
+            subject = "用户"
+        elif kind == "self_fact":
+            subject = character_name
+        elif kind in {"summary", "important_event"}:
+            subject = f"用户 / {character_name}"
+        else:
+            subject = "相关记忆"
         score = item.get("score")
         score_text = f" score={float(score):.3f}" if isinstance(score, (int, float)) else ""
         created_at = item.get("created_at")
         created_text = f" created_at={created_at}" if created_at else ""
-        lines.append(f"- [{kind}] {text}{score_text}{created_text}")
+        lines.append(f"- [{kind} | {subject}] {text}{score_text}{created_text}")
     if not lines:
         return ""
-    return "## recalled memories\n" + "\n".join(lines)
+    return f"## 自然想起的长期记忆（用户 / {character_name}）\n" + "\n".join(lines)
 
 
 def _recall_proactive_memories(score: int, period: dict, recent: list[dict]) -> list[dict]:
@@ -223,8 +253,9 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
         idle_desc = "无历史" if idle_minutes is None else f"{idle_minutes}分钟"
         now_str = datetime.now().strftime("%H:%M")
 
+        character_name = get_pupu_name()
         system_prompt = (
-            "你是仆仆的主动消息调度决策器。"
+            f"你是{character_name}的主动消息调度决策器。"
             "你只负责判断当前是否应该主动找用户聊天。"
             "规则：若当前适合主动找用户，输出 SEND；否则输出 WAIT。"
             "禁止输出解释、标点或其他文字。"
@@ -261,6 +292,7 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
 def _build_proactive_prompt(score: int, period: dict) -> str:
     level = score_to_level(score)
     level_desc = FAMILIARITY_PROMPTS[level]
+    character_name = get_pupu_name()
 
     recent, summaries = _load_proactive_context()
     recent_ctx = _format_recent_context(recent)
@@ -271,6 +303,7 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
     if is_memu_long_term_enabled():
         recalled_memories = _recall_proactive_memories(score, period, recent)
         prompt = PROACTIVE_PROMPT.format(
+            character_name=character_name,
             persona_level=level_desc,
             self_facts_section="",
             user_facts_section="",
@@ -295,17 +328,22 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
 
     sf_section = ""
     if self_facts:
-        sf_section = "关于你自己（你之前说过的设定）：\n" + "\n".join(
-            f"- {k}：{v}" for k, v in self_facts.items()
+        sf_section = f"关于{character_name}自己（{character_name}之前说过的设定）：\n" + "\n".join(
+            f"- {character_name} | {_replace_default_character_name(k, character_name)}："
+            f"{_replace_default_character_name(v, character_name)}"
+            for k, v in self_facts.items()
         )
 
     uf_section = ""
     if user_facts:
-        uf_section = "你对这个人的了解：\n" + "\n".join(
-            f"- {k}：{v}" for k, v in user_facts.items()
+        uf_section = "关于用户的长期记忆：\n" + "\n".join(
+            f"- 用户 | {_replace_default_character_name(k, character_name)}："
+            f"{_replace_default_character_name(v, character_name)}"
+            for k, v in user_facts.items()
         )
 
     prompt = PROACTIVE_PROMPT.format(
+        character_name=character_name,
         persona_level=level_desc,
         self_facts_section=sf_section,
         user_facts_section=uf_section,
@@ -317,7 +355,9 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
     )
     important_events_section = format_important_events_section(
         important_events,
-        heading="## 你最近会自然记着的事",
+        heading=f"## {character_name}最近会自然记着的事",
+        subject_label=f"用户 / {character_name}",
+        character_name=character_name,
     )
     if important_events_section:
         prompt += (
