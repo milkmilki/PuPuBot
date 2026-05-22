@@ -15,6 +15,7 @@ from .memory import (
     get_last_message_time,
     get_recent_messages,
     get_self_facts,
+    get_summaries,
     get_user_facts,
     save_message,
 )
@@ -22,6 +23,9 @@ from .memory_index import is_memu_long_term_enabled, recall_memories
 from .message_sources import PROACTIVE
 from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT
 from .sessions import OWNER_SESSION
+
+PROACTIVE_HISTORY_LIMIT = 30
+PROACTIVE_SUMMARY_LIMIT = 2
 
 TIME_PERIODS = [
     {"name": "凌晨到早上", "start": 0, "end": 9, "topics": [
@@ -116,6 +120,35 @@ def _truncate_debug(text: str, limit: int = 240) -> str:
     return text[:limit] + "...(truncated)"
 
 
+def _load_proactive_context() -> tuple[list[dict], list[dict]]:
+    return (
+        get_recent_messages(PROACTIVE_HISTORY_LIMIT, OWNER_SESSION),
+        get_summaries(OWNER_SESSION, limit=PROACTIVE_SUMMARY_LIMIT),
+    )
+
+
+def _format_recent_context(recent: list[dict]) -> str:
+    if not recent:
+        return "（暂无历史对话）"
+
+    lines = []
+    for message in recent:
+        who = "用户" if message.get("role") == "user" else "你"
+        content = str(message.get("content") or "").strip()
+        if content:
+            lines.append(f"{who}: {content}")
+    return "\n".join(lines) if lines else "（暂无历史对话）"
+
+
+def _format_summary_context(summaries: list[dict]) -> str:
+    lines = []
+    for item in summaries:
+        summary = str(item.get("summary") or "").strip()
+        if summary:
+            lines.append(f"- {summary}")
+    return "\n".join(lines) if lines else "（暂无摘要）"
+
+
 def _build_proactive_memu_query(score: int, period: dict, recent: list[dict]) -> str:
     recent_lines = []
     for item in recent[-4:]:
@@ -183,14 +216,9 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
             f"[pupu][proactive] phase=judge start score={score} "
             f"period={period['name']} idle_minutes={idle_minutes}"
         )
-        recent = get_recent_messages(4, OWNER_SESSION)
-        if recent:
-            recent_text = "\n".join(
-                f"{'用户' if m['role'] == 'user' else '你'}: {m['content'][:60]}"
-                for m in recent[-6:]
-            )
-        else:
-            recent_text = "（暂无历史对话）"
+        recent, summaries = _load_proactive_context()
+        recent_text = _format_recent_context(recent)
+        summary_text = _format_summary_context(summaries)
 
         idle_desc = "无历史" if idle_minutes is None else f"{idle_minutes}分钟"
         now_str = datetime.now().strftime("%H:%M")
@@ -207,6 +235,7 @@ def _model_should_proactively_reach_out(score: int, period: dict, idle_minutes: 
             f"当前时段: {period['name']}\n"
             f"当前好感度: {score}\n"
             f"距离上次聊天: {idle_desc}\n"
+            f"最近摘要:\n{summary_text}\n"
             f"最近聊天:\n{recent_text}\n"
             "现在是否要主动找用户？只输出 SEND 或 WAIT。"
         )
@@ -233,14 +262,9 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
     level = score_to_level(score)
     level_desc = FAMILIARITY_PROMPTS[level]
 
-    recent = get_recent_messages(4, OWNER_SESSION)
-    recent_ctx = "（还没怎么聊过）"
-    if recent:
-        lines = []
-        for m in recent[-5:]:
-            who = "用户" if m["role"] == "user" else "你"
-            lines.append(f"{who}: {m['content'][:80]}")
-        recent_ctx = "\n".join(lines)
+    recent, summaries = _load_proactive_context()
+    recent_ctx = _format_recent_context(recent)
+    summary_ctx = _format_summary_context(summaries)
 
     topic = random.choice(period["topics"])
 
@@ -250,6 +274,7 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
             persona_level=level_desc,
             self_facts_section="",
             user_facts_section="",
+            summary_context=summary_ctx,
             time_period=period["name"],
             time_desc=f"{datetime.now().strftime('%H:%M')}",
             topic_hint=topic,
@@ -284,6 +309,7 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
         persona_level=level_desc,
         self_facts_section=sf_section,
         user_facts_section=uf_section,
+        summary_context=summary_ctx,
         time_period=period["name"],
         time_desc=f"{datetime.now().strftime('%H:%M')}",
         topic_hint=topic,

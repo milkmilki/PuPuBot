@@ -263,6 +263,49 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("[user_fact] 用户最近在赶项目", prompt)
         mock_recall.assert_called_once()
 
+    def test_proactive_context_uses_thirty_recent_messages_and_two_summaries(self):
+        recent = [{"role": "user", "content": "最近消息"}]
+        summaries = [{"summary": "最近摘要"}]
+
+        with patch("pupu.proactive.get_recent_messages", return_value=recent) as mock_recent:
+            with patch("pupu.proactive.get_summaries", return_value=summaries) as mock_summaries:
+                loaded_recent, loaded_summaries = proactive._load_proactive_context()
+
+        self.assertEqual(loaded_recent, recent)
+        self.assertEqual(loaded_summaries, summaries)
+        mock_recent.assert_called_once_with(
+            proactive.PROACTIVE_HISTORY_LIMIT,
+            proactive.OWNER_SESSION,
+        )
+        mock_summaries.assert_called_once_with(
+            proactive.OWNER_SESSION,
+            limit=proactive.PROACTIVE_SUMMARY_LIMIT,
+        )
+
+    def test_proactive_prompt_includes_recent_summaries_and_full_recent_context(self):
+        recent = [
+            {"role": "user", "content": "第一条最近消息"},
+            {"role": "assistant", "content": "第二条最近回复"},
+        ]
+        summaries = [
+            {"summary": "summary-two-recent"},
+            {"summary": "summary-three-latest"},
+        ]
+        period = {"name": "白天", "topics": ["聊点轻松的"]}
+
+        with patch("pupu.proactive.is_memu_long_term_enabled", return_value=False):
+            with patch("pupu.proactive._load_proactive_context", return_value=(recent, summaries)):
+                with patch("pupu.proactive.get_self_facts", return_value={}):
+                    with patch("pupu.proactive.get_user_facts", return_value={}):
+                        with patch("pupu.proactive.get_important_events", return_value=[]):
+                            prompt = proactive._build_proactive_prompt(80, period)
+
+        self.assertIn("## 之前聊过的摘要", prompt)
+        self.assertIn("summary-two-recent", prompt)
+        self.assertIn("summary-three-latest", prompt)
+        self.assertIn("用户: 第一条最近消息", prompt)
+        self.assertIn("你: 第二条最近回复", prompt)
+
     def test_batch_review_syncs_long_term_memory_to_memu(self):
         for i in range(REVIEW_INTERVAL):
             self._save_chat_turn(i)

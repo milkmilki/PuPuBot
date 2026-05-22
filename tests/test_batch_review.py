@@ -66,6 +66,14 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn("summary、facts、title、time_text", prompt)
         self.assertIn("2026年5月19日这轮对话中", prompt)
 
+    def test_batch_review_prompt_uses_instance_name_for_subject_rules(self):
+        prompt = build_batch_review_prompt(character_name="璐璐")
+
+        self.assertIn("你是璐璐的记忆整理器", prompt)
+        self.assertIn("所有输出主语都必须强制改写为“用户”或“璐璐”", prompt)
+        self.assertIn("不要把璐璐写成“仆仆”", prompt)
+        self.assertNotIn("不要把璐璐写成“璐璐”", prompt)
+
     def test_summary_progress_counts_completed_chat_turns(self):
         for i in range(3):
             self._save_chat_turn(i)
@@ -254,7 +262,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(count, 0)
 
     def test_batch_review_uses_json_task_provider_output(self):
-        for i in range(8):
+        for i in range(10):
             self._save_chat_turn(i)
         create_scheduled_task(
             self.session_id,
@@ -309,13 +317,43 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(events[0]["source_event_key"], "promise-test")
         self.assertEqual(list_scheduled_tasks(self.session_id), [])
 
+    def test_batch_review_input_uses_instance_name_instead_of_pupu(self):
+        for i in range(10):
+            self._save_chat_turn(i)
+
+        raw = """{
+          "summary": "2026年5月21日，璐璐说自己想买二手屏。",
+          "familiarity_delta": 0,
+          "user_facts": {},
+          "self_facts": {},
+          "important_events": [],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+
+        with (
+            patch("pupu.agent.get_pupu_name", return_value="璐璐"),
+            patch("pupu.agent.json_task", return_value=raw) as mock_json_task,
+        ):
+            _maybe_batch_review(self.session_id)
+
+        review_input = mock_json_task.call_args.kwargs["user_content"]
+        review_system = mock_json_task.call_args.kwargs["system"]
+
+        self.assertIn("用户: user-0", review_input)
+        self.assertIn("璐璐: assistant-0", review_input)
+        self.assertNotIn("Pupu:", review_input)
+        self.assertIn("你是璐璐的记忆整理器", review_system)
+        self.assertIn("不要把璐璐写成“仆仆”", review_system)
+
     def test_batch_review_splits_context_summary_and_identity_memory(self):
         context_id = self.session_id + "_context"
         identity_id = self.session_id + "_identity"
         reset_session(context_id)
         reset_session(identity_id)
         set_familiarity(0, session_id=identity_id)
-        for i in range(8):
+        for i in range(10):
             save_message("user", f"user-{i}", context_id, source=CHAT)
             save_message("assistant", f"assistant-{i}", context_id, source=CHAT)
 
@@ -341,7 +379,7 @@ class BatchReviewTests(unittest.TestCase):
 
     def test_batch_review_omits_familiarity_delta_after_score_reaches_100(self):
         set_familiarity(100, session_id=self.session_id)
-        for i in range(8):
+        for i in range(10):
             self._save_chat_turn(i)
 
         raw = """{

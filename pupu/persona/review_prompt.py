@@ -1,5 +1,7 @@
 """Batch review prompt used by the judge model."""
 
+from .core import get_pupu_name
+
 _BATCH_REVIEW_HEADER = """你是仆仆的记忆整理器。阅读下面这段对话，只返回一个 JSON 对象，包含：
 - summary: 120字内摘要，只记录具体发生的事：谁在什么时间/场景说了什么、做了什么、约定了什么、结果是什么"""
 
@@ -32,6 +34,16 @@ _CONCRETE_MEMORY_RULES = """
 - “双方进行了温馨互动”
 - “用户有陪伴需求”
 - “仆仆和用户有一个重要约定”"""
+
+_SUBJECT_RULES_TEMPLATE = """
+
+主语消歧规则（非常重要）：
+- 输入里的“用户:”行表示用户说的话；“{character_name}:”行表示{character_name}说的话。
+- “用户:”行里的“我/我的/自己”指用户；“你/你的”通常指{character_name}。
+- “{character_name}:”行里的“我/我的/自己”指{character_name}；“你/你的”通常指用户。
+- summary、facts、important_events、task_updates 的 title/details/followup_hint/instruction 里不要直接使用“我、你、我们、对方、她、他”等模糊主语。
+- 所有输出主语都必须强制改写为“用户”或“{character_name}”。例如“我想买二手屏”如果来自“{character_name}:”行，要写成“{character_name}想买二手屏”；如果来自“用户:”行，要写成“用户想买二手屏”。
+- 不要把{character_name}写成“仆仆”，除非当前实例名本来就是仆仆。"""
 
 _ABSOLUTE_TIME_RULES = """
 
@@ -93,7 +105,21 @@ task_updates 规则：
 只返回 JSON，不要解释，不要 markdown。"""
 
 
-def build_batch_review_prompt(include_familiarity_delta: bool = True) -> str:
+def _character_name(value: str | None = None) -> str:
+    name = str(value or "").strip() or get_pupu_name()
+    return name.strip() or "仆仆"
+
+
+def _render_character_name(text: str, character_name: str) -> str:
+    return text.replace("仆仆", character_name)
+
+
+def build_batch_review_prompt(
+    include_familiarity_delta: bool = True,
+    *,
+    character_name: str | None = None,
+) -> str:
+    name = _character_name(character_name)
     prompt = _BATCH_REVIEW_HEADER
     if include_familiarity_delta:
         prompt += _FAMILIARITY_DELTA_INSTRUCTIONS
@@ -106,6 +132,8 @@ def build_batch_review_prompt(include_familiarity_delta: bool = True) -> str:
         else _FULL_FAMILIARITY_RULES
     )
     prompt += _BATCH_REVIEW_BODY
+    prompt = _render_character_name(prompt, name)
+    prompt += _SUBJECT_RULES_TEMPLATE.format(character_name=name)
     return prompt
 
 

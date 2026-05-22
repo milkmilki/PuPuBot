@@ -38,7 +38,7 @@ from .memory import (
 from .memory_index import is_memu_long_term_enabled, recall_memories, sync_review_memory
 from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
 from .message_sources import CHAT
-from .persona import build_batch_review_prompt, build_system_prompt
+from .persona import build_batch_review_prompt, build_system_prompt, get_pupu_name
 from .review_followups import (
     apply_review_task_updates,
     normalize_review_important_events,
@@ -160,11 +160,16 @@ def _parse_batch_review_result(raw_text: str) -> dict:
     raise ValueError("unable to parse batch review response as JSON object")
 
 
-def _build_fallback_summary(batch: list[dict]) -> str:
+def _build_fallback_summary(
+    batch: list[dict],
+    *,
+    character_name: str | None = None,
+) -> str:
+    assistant_name = str(character_name or "").strip() or get_pupu_name()
     turn_snippets = []
     current_turn = []
     for message in batch:
-        speaker = "User" if message["role"] == "user" else "Pupu"
+        speaker = "用户" if message["role"] == "user" else assistant_name
         text = " ".join(str(message["content"]).split())
         current_turn.append(f"{speaker}:{text[:80]}")
         if message["role"] == "assistant":
@@ -175,15 +180,12 @@ def _build_fallback_summary(batch: list[dict]) -> str:
         turn_snippets.append(" / ".join(current_turn))
 
     if not turn_snippets:
-        return (
-            "A few sparse interactions happened in this batch, "
-            "but there was not enough content to summarize cleanly."
-        )
+        return "这轮对话内容较少，没有足够信息形成具体摘要。"
 
     preview = " ; ".join(turn_snippets[:4])
     if len(turn_snippets) > 4:
-        preview += f" ; plus {len(turn_snippets) - 4} more turns"
-    return f"Conversation batch summary: {preview}"[:220]
+        preview += f" ; 另有 {len(turn_snippets) - 4} 轮对话"
+    return f"对话批次摘要：{preview}"[:220]
 
 
 def _compact_review_field(value: object, limit: int = REVIEW_TASK_FIELD_LIMIT) -> str:
@@ -504,8 +506,9 @@ def _maybe_batch_review_unlocked(
         )
 
         active_tasks_text = _format_active_scheduled_tasks_for_review(context_session)
+        character_name = get_pupu_name()
         conversation_text = "\n".join(
-            f"{'User' if item['role'] == 'user' else 'Pupu'}: {item['content']}"
+            f"{'用户' if item['role'] == 'user' else character_name}: {item['content']}"
             for item in batch
         )
         conversation_text = (
@@ -517,7 +520,8 @@ def _maybe_batch_review_unlocked(
         familiarity_score = get_familiarity(identity_session)
         include_familiarity_delta = familiarity_score < 100
         review_prompt = build_batch_review_prompt(
-            include_familiarity_delta=include_familiarity_delta
+            include_familiarity_delta=include_familiarity_delta,
+            character_name=character_name,
         )
         print(
             "[pupu] batch review request: "
@@ -553,7 +557,7 @@ def _maybe_batch_review_unlocked(
             print(f"[pupu] batch review json parse failed: {exc}")
             print(f"[pupu] batch review raw_full={raw}")
             result = {
-                "summary": _build_fallback_summary(batch),
+                "summary": _build_fallback_summary(batch, character_name=character_name),
                 "familiarity_delta": 0,
                 "user_facts": {},
                 "self_facts": {},
@@ -562,7 +566,10 @@ def _maybe_batch_review_unlocked(
             }
             print("[pupu] batch review fallback summary enabled")
 
-        summary = result.get("summary") or _build_fallback_summary(batch)
+        summary = result.get("summary") or _build_fallback_summary(
+            batch,
+            character_name=character_name,
+        )
         save_summary(summary, batch[0]["id"], batch[-1]["id"], context_session)
         print(
             "[pupu] batch review summary saved: "
