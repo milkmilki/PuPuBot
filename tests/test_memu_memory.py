@@ -131,6 +131,21 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("用户喜欢星露谷", report)
         self.assertIn("memU 长期记忆 1 条", report)
 
+    def test_memu_report_maps_stale_default_character_name(self):
+        items = [
+            {
+                "id": "m1",
+                "summary": '{"kind":"self_fact","text":"仆仆 | 喜好: 被用户叫姐姐"}',
+            }
+        ]
+
+        with patch("pupu.memory_index.memu_adapter.get_pupu_name", return_value="璐璐"):
+            with patch("pupu.memory_index.memu_adapter._list_items", return_value=items):
+                report = _format_items(self.session_id, {"self_fact"}, "empty")
+
+        self.assertIn("璐璐 | 喜好: 被用户叫姐姐", report)
+        self.assertNotIn("仆仆", report)
+
     def test_adapter_builds_summary_entries(self):
         with patch("pupu.memory_index.memu_adapter.get_pupu_name", return_value="璐璐"):
             entries = _build_review_entries(

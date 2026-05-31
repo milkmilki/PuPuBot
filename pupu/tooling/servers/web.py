@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings
 from urllib.parse import quote_plus
 
@@ -27,6 +28,17 @@ SEARCH_HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
+DEFAULT_SEARCH_CHAIN = ("tavily", "ddg_html")
+PROVIDER_ALIASES = {
+    "duckduckgo": "ddg_html",
+    "duckduckgo_html": "ddg_html",
+    "ddg": "ddg_html",
+    "bing": "bing_html",
+    "bing_html_page": "bing_html",
+    "legacy": "legacy_ddgs",
+    "duckduckgo_search": "legacy_ddgs",
+    "modern_ddgs": "ddgs",
 }
 
 
@@ -57,6 +69,96 @@ def _normalize_results(results: list[dict[str, str]], max_results: int) -> list[
         if len(normalized) >= max_results:
             break
     return normalized
+
+
+def _env_list(name: str) -> list[str]:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return []
+    return [part.strip().lower() for part in raw.split(",") if part.strip()]
+
+
+def _normalize_provider_name(name: str) -> str:
+    value = str(name or "").strip().lower().replace("-", "_")
+    return PROVIDER_ALIASES.get(value, value)
+
+
+def _search_provider_chain() -> list[str]:
+    primary = _normalize_provider_name(os.environ.get("PUPU_WEB_SEARCH_PROVIDER", ""))
+    fallbacks = [_normalize_provider_name(name) for name in _env_list("PUPU_WEB_SEARCH_FALLBACKS")]
+
+    configured = [name for name in [primary, *fallbacks] if name]
+    if not configured:
+        configured = list(DEFAULT_SEARCH_CHAIN)
+
+    chain: list[str] = []
+    seen: set[str] = set()
+    for name in configured:
+        if name in seen:
+            continue
+        seen.add(name)
+        chain.append(name)
+    return chain
+
+
+def _search_with_tavily(query: str, max_results: int) -> tuple[list[dict[str, str]], str]:
+    api_key = (
+        os.environ.get("PUPU_TAVILY_API_KEY", "").strip()
+        or os.environ.get("TAVILY_API_KEY", "").strip()
+    )
+    if not api_key:
+        raise RuntimeError("Tavily API key is not configured (PUPU_TAVILY_API_KEY)")
+
+    payload: dict[str, object] = {
+        "query": query,
+        "max_results": max_results,
+        "search_depth": os.environ.get("PUPU_TAVILY_SEARCH_DEPTH", "basic").strip() or "basic",
+        "topic": os.environ.get("PUPU_TAVILY_TOPIC", "general").strip() or "general",
+        "include_answer": False,
+        "include_raw_content": False,
+    }
+    raw_days = os.environ.get("PUPU_TAVILY_DAYS", "").strip()
+    if raw_days:
+        try:
+            payload["days"] = max(1, int(raw_days))
+        except ValueError:
+            print(f"[pupu][search] ignore invalid PUPU_TAVILY_DAYS={raw_days!r}")
+    time_range = os.environ.get("PUPU_TAVILY_TIME_RANGE", "").strip()
+    if time_range:
+        payload["time_range"] = time_range
+
+    resp = httpx.post(
+        "https://api.tavily.com/search",
+        headers={
+            **SEARCH_HEADERS,
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=20,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    raw_results = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(raw_results, list):
+        raise RuntimeError("Tavily response did not contain a results list")
+
+    results: list[dict[str, str]] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        href = str(item.get("url") or item.get("href") or "").strip()
+        body = str(item.get("content") or item.get("snippet") or "").strip()
+        published = str(item.get("published_date") or item.get("published_at") or "").strip()
+        if published and published not in body:
+            body = f"{body}\n发布时间: {published}" if body else f"发布时间: {published}"
+        results.append({"title": title, "href": href, "body": body})
+
+    normalized = _normalize_results(results, max_results)
+    if results and not normalized:
+        raise RuntimeError("Tavily returned results without URLs")
+    return normalized, "tavily"
 
 
 def _search_with_modern_ddgs(query: str, max_results: int) -> tuple[list[dict[str, str]], str]:
@@ -174,25 +276,33 @@ def web_search(query: str, max_results: int = 5) -> str:
         if not query:
             return "搜索词不能为空"
 
-        backends = [
-            _search_with_modern_ddgs,
-            _search_with_duckduckgo_html,
-            _search_with_bing_html,
-            _search_with_legacy_ddgs,
-        ]
+        provider_map = {
+            "tavily": _search_with_tavily,
+            "ddgs": _search_with_modern_ddgs,
+            "ddg_html": _search_with_duckduckgo_html,
+            "bing_html": _search_with_bing_html,
+            "legacy_ddgs": _search_with_legacy_ddgs,
+        }
+        chain = _search_provider_chain()
 
         errors: list[str] = []
-        for backend in backends:
+        for provider_name in chain:
+            backend = provider_map.get(provider_name)
+            if backend is None:
+                errors.append(f"{provider_name}: unknown provider")
+                print(f"[pupu][search] provider={provider_name} skipped reason=unknown")
+                continue
             try:
                 results, backend_name = backend(query, max_results)
                 print(
-                    f"[pupu][search] backend={backend_name} query={query!r} results={len(results)}"
+                    f"[pupu][search] provider={provider_name} backend={backend_name} "
+                    f"query={query!r} results={len(results)}"
                 )
                 return _format_search_results(results)
             except Exception as exc:
-                errors.append(f"{backend.__name__}: {exc}")
+                errors.append(f"{provider_name}: {exc}")
                 print(
-                    f"[pupu][search] backend={backend.__name__} query={query!r} failed error={exc}"
+                    f"[pupu][search] provider={provider_name} query={query!r} failed error={exc}"
                 )
 
         return "搜索出错了：" + " | ".join(errors[:3])
@@ -217,7 +327,12 @@ def fetch_url(url: str) -> str:
 
 
 def _handle_web_search(tool_input: dict, _context: ToolContext) -> str:
-    return web_search(tool_input["query"])
+    max_results = tool_input.get("max_results", 5)
+    try:
+        max_results = int(max_results)
+    except (TypeError, ValueError):
+        max_results = 5
+    return web_search(tool_input["query"], max_results=max(1, min(max_results, 10)))
 
 
 def _handle_fetch_url(tool_input: dict, _context: ToolContext) -> str:
@@ -231,14 +346,18 @@ WEB_SERVER = BuiltinToolServer(
         ToolSpec(
             server="web",
             name="search",
-            description="Search the web using DuckDuckGo-style search. Use this when you need current information, news, or anything you do not know yet.",
+            description="Search the web using the configured provider chain. Use this when you need current information, news, or anything you do not know yet.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "description": "The search query",
-                    }
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (1-10). Defaults to 5.",
+                    },
                 },
                 "required": ["query"],
             },

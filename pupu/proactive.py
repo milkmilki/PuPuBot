@@ -22,6 +22,7 @@ from .memory import (
 from .memory_index import is_memu_long_term_enabled, recall_memories
 from .message_sources import PROACTIVE
 from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT, get_pupu_name
+from .proactive_control import is_proactive_enabled
 from .sessions import OWNER_SESSION
 
 PROACTIVE_HISTORY_LIMIT = 30
@@ -445,9 +446,15 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
 
 async def proactive_loop(send_func):
     """Main proactive messaging loop. send_func(text) should send a private message to owner."""
+    if not is_proactive_enabled():
+        print("[pupu] proactive messaging stopped (disabled by switch)")
+        return
     print("[pupu] proactive messaging started")
     try:
         while True:
+            if not is_proactive_enabled():
+                print("[pupu][proactive] loop stop=disabled_by_switch")
+                break
             score = get_familiarity(OWNER_SESSION)
             freq = get_proactive_freq(score)
 

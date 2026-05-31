@@ -1336,7 +1336,7 @@ def recall_memories(
         payload_extra = item_extra.get("pupu_payload_extra") if isinstance(item_extra, dict) else None
         if isinstance(payload_extra, dict):
             payload = {**payload_extra, **payload}
-        text = str(payload.get("text") or "").strip()
+        text = _replace_default_character_name(payload.get("text") or "", character_name).strip()
         kind = str(payload.get("kind") or item.get("memory_type") or "other")
         score = item.get("score")
         source_range = ""
@@ -1423,10 +1423,12 @@ def _format_items(identity_session: str, kinds: set[str], empty_text: str) -> st
         return empty_text
 
     lines = [f"memU 长期记忆 {len(rows)} 条"]
+    character_name = _current_character_name()
     for index, (payload, item) in enumerate(rows, start=1):
         score = item.get("score")
         score_text = f" score={float(score):.3f}" if isinstance(score, (int, float)) else ""
-        lines.append(f"{index}. [{payload.get('kind')}] {payload.get('text')}{score_text}")
+        text = _replace_default_character_name(payload.get("text") or "", character_name)
+        lines.append(f"{index}. [{payload.get('kind')}] {text}{score_text}")
     return "\n".join(lines)
 
 

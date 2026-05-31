@@ -6,12 +6,12 @@ import asyncio
 import os
 
 from nonebot import on_command
-from nonebot.adapters import Event, Message
+from nonebot.adapters import Bot, Event, Message
 from nonebot.params import CommandArg
 
 import httpx
 
-from pupu.config import load_arbiter_base_url, load_arbiter_timeout_seconds
+from pupu.config import load_arbiter_base_url, load_arbiter_timeout_seconds, load_owner_ids
 
 from pupu.facts_report import format_facts_report
 from pupu.important_event_report import format_important_events_report
@@ -41,11 +41,13 @@ from pupu.proactive import (
     _minutes_since_last_chat,
     _model_should_proactively_reach_out,
     generate_proactive_message,
+    proactive_loop,
 )
+from pupu.proactive_control import is_proactive_enabled, set_proactive_enabled
 from pupu.tools import manage_scheduled_task
 from pupu.tts import get_tts_config, get_tts_status
 
-from .common import is_owner, resolve_sessions
+from .common import is_owner, log, resolve_sessions, send_private_segments, split_message
 from . import state
 
 TIDY_USAGE = "用法：/tidy [check|apply]"
@@ -82,6 +84,8 @@ HELP_TEXT = f"""PuPu 可用命令
 
 主动消息：
 /proactive（/主动 /主动消息）：手动触发一次主动消息检查（管理员）
+/proactive status：查看主动消息开关和后台循环状态（管理员）
+/proactive on / /proactive off：开启或关闭主动消息，并写回当前实例配置（管理员）
 /proactive force（/proactive now /proactive run /proactive 强制 /proactive 立即）：强制执行一次主动消息流程（管理员）
 
 群仲裁：
@@ -315,13 +319,72 @@ async def handle_voice(event: Event, args: Message = CommandArg()):
     )
 
 
+async def _start_proactive_loop_from_command(bot: Bot) -> str:
+    if state.proactive_task is not None and not state.proactive_task.done():
+        return "主动消息已开启，后台循环正在运行。"
+
+    owner_qq = None
+    for owner_id in load_owner_ids():
+        if owner_id.isdigit():
+            owner_qq = owner_id
+            break
+
+    if not owner_qq:
+        return "主动消息已开启，但没有配置数字 owner QQ，后台循环暂时无法投递。"
+    if bot is None or not hasattr(bot, "send_private_msg"):
+        return "主动消息已开启；当前适配器无法立即启动后台循环，重连或重启后生效。"
+
+    async def send_to_owner(text: str):
+        segments = split_message(text)
+        await send_private_segments(bot, int(owner_qq), segments)
+        log("send", "私聊", str(owner_qq), text)
+
+    state.proactive_task = asyncio.create_task(proactive_loop(send_to_owner))
+    return "主动消息已开启，后台循环已启动。"
+
+
 @proactive_cmd.handle()
-async def handle_proactive(event: Event, args: Message = CommandArg()):
+async def handle_proactive(event: Event, bot: Bot, args: Message = CommandArg()):
     user_id = event.get_user_id()
     if not is_owner(user_id):
         await proactive_cmd.finish("只有管理员才能手动触发主动消息。")
 
-    force = args.extract_plain_text().strip().lower() in {"force", "now", "run", "强制", "立即"}
+    action = args.extract_plain_text().strip().lower()
+    if action in {"status", "状态", "狀態"}:
+        enabled = is_proactive_enabled()
+        running = state.proactive_task is not None and not state.proactive_task.done()
+        await proactive_cmd.finish(
+            "主动消息："
+            + ("已开启" if enabled else "已关闭")
+            + "\n后台循环："
+            + ("运行中" if running else "未运行")
+            + "\n用法：/proactive on | /proactive off | /proactive force"
+        )
+        return
+
+    if action in {"on", "enable", "enabled", "open", "start", "1", "true", "yes", "开启", "打开", "开"}:
+        set_proactive_enabled(True)
+        await proactive_cmd.finish(await _start_proactive_loop_from_command(bot))
+        return
+
+    if action in {"off", "disable", "disabled", "close", "stop", "0", "false", "no", "关闭", "关"}:
+        set_proactive_enabled(False)
+        if state.proactive_task is not None and not state.proactive_task.done():
+            state.proactive_task.cancel()
+        state.proactive_task = None
+        await proactive_cmd.finish("主动消息已关闭。")
+        return
+
+    force_actions = {"force", "now", "run", "强制", "立即"}
+    if action and action not in force_actions:
+        await proactive_cmd.finish("用法：/proactive [status|on|off|force]")
+        return
+
+    if not is_proactive_enabled():
+        await proactive_cmd.finish("主动消息当前已关闭。发送 /proactive on 可以重新开启。")
+        return
+
+    force = action in force_actions
     score = get_familiarity(state.OWNER_SESSION)
     freq = get_proactive_freq(score)
     period = _get_current_period()

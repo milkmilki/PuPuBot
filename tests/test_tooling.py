@@ -60,7 +60,7 @@ class ToolingRegistryTests(unittest.TestCase):
             session_id="test_tooling_registry",
         )
         self.assertIn("当前没有待执行的定时任务", result)
-        self.assertIn("总结进度：0/8，还差 8 轮触发自动总结", result)
+        self.assertIn("总结进度：0/10，还差 10 条消息触发自动总结", result)
 
     def test_scheduled_task_list_uses_display_indices(self):
         first_id = create_scheduled_task(

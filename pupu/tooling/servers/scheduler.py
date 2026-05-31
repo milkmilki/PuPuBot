@@ -54,7 +54,7 @@ def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
         summary_line = (
             "总结进度："
             f"{progress['pending']}/{progress['interval']}，"
-            f"还差 {progress['remaining']} 轮触发自动总结"
+            f"还差 {progress['remaining']} 条消息触发自动总结"
         )
 
         rows = list_scheduled_tasks(session_id)
@@ -67,7 +67,7 @@ def manage_scheduled_task(session_id: str, tool_input: dict) -> str:
             run_at = _parse_local_run_at(str(row["run_at"]))
             overdue = ""
             if run_at is not None and run_at < datetime.now():
-                overdue = " [注意] 这个时间早于当前时间，会被立刻触发；如果年份填错了请先取消再重建"
+                overdue = " [注意] 这个时间早于当前时间；1小时内会补触发，超过1小时会跳过"
             interval = (
                 f" interval={row['interval_seconds']}"
                 if row.get("interval_seconds")

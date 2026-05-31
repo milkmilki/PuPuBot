@@ -9,7 +9,7 @@ os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from plugins.pupu_support import state
-from plugins.pupu_support.buffering import buffer_message, debounce_flush
+from plugins.pupu_support.buffering import act_as_selected_speaker, buffer_message, debounce_flush
 from pupu.sessions import OWNER_SESSION
 
 
@@ -123,7 +123,7 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         created_coro = mock_create.call_args.args[0]
         created_coro.close()
 
-    async def test_open_group_silent_when_not_selected(self):
+    async def test_open_group_debounce_drops_without_local_reply(self):
         sid = "group_100"
         state.msg_buffers[sid] = {
             "texts": ["[user(QQ:1)] hi"],
@@ -141,19 +141,15 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch("plugins.pupu_support.buffering.load_open_group_debounce_seconds", return_value=0):
-            with patch("plugins.pupu_support.buffering.get_familiarity", return_value=100):
-                with patch("plugins.pupu_support.buffering.save_message") as mock_save:
-                    with patch(
-                        "plugins.pupu_support.buffering._open_group_selected_speaker",
-                        new=AsyncMock(return_value=False),
-                    ):
-                        with patch("plugins.pupu_support.buffering.chat") as mock_chat:
-                            await debounce_flush(sid)
+            with patch("plugins.pupu_support.buffering.save_message") as mock_save:
+                with patch("plugins.pupu_support.buffering.chat") as mock_chat:
+                    await debounce_flush(sid)
 
-        mock_save.assert_called_once_with("user", "[user(QQ:1)] hi", sid)
+        mock_save.assert_not_called()
         mock_chat.assert_not_called()
+        self.assertNotIn(sid, state.msg_buffers)
 
-    async def test_open_group_selected_uses_context_and_identity(self):
+    async def test_open_group_selected_speaker_uses_context_and_identity(self):
         sid = "group_100"
         state.msg_buffers[sid] = {
             "texts": ["[user(QQ:1)] hi"],
@@ -170,16 +166,16 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
             "last_message_id": "10",
         }
 
-        with patch("plugins.pupu_support.buffering.load_open_group_debounce_seconds", return_value=0):
-            with patch("plugins.pupu_support.buffering.get_familiarity", return_value=100):
+        with patch("plugins.pupu_support.buffering.get_familiarity", return_value=100):
+            with patch("plugins.pupu_support.buffering.compute_reply_delay", return_value=(0, None)):
                 with patch("plugins.pupu_support.buffering.save_message"):
-                    with patch(
-                        "plugins.pupu_support.buffering._open_group_selected_speaker",
-                        new=AsyncMock(return_value=True),
-                    ):
-                        with patch("plugins.pupu_support.buffering.chat", return_value="reply") as mock_chat:
-                            with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
-                                await debounce_flush(sid)
+                    with patch("plugins.pupu_support.buffering.chat", return_value="reply") as mock_chat:
+                        with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
+                            with patch(
+                                "plugins.pupu_support.buffering._post_self_reply_observe",
+                                new=AsyncMock(),
+                            ):
+                                await act_as_selected_speaker(sid)
 
         _args, kwargs = mock_chat.call_args
         self.assertEqual(kwargs["context_session"], sid)

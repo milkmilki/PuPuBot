@@ -8,6 +8,13 @@ TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
+from pupu.memory import (
+    create_scheduled_task,
+    get_due_scheduled_tasks,
+    init_db,
+    list_scheduled_tasks,
+    reset_session,
+)
 from pupu.scheduler import _is_wait_followup_task, _latest_message_is_user, _onebot_send
 from pupu.sessions import OWNER_SESSION
 
@@ -67,6 +74,62 @@ class SchedulerGuardTests(unittest.TestCase):
             self.assertFalse(_latest_message_is_user(OWNER_SESSION))
         with patch("pupu.scheduler.get_recent_messages", return_value=[]):
             self.assertFalse(_latest_message_is_user(OWNER_SESSION))
+
+
+class SchedulerDueWindowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+
+    def setUp(self):
+        self.session_id = f"test_scheduler_due_{self._testMethodName}"
+        reset_session(self.session_id)
+
+    def test_due_task_within_one_hour_is_returned(self):
+        task_id = create_scheduled_task(
+            self.session_id,
+            "near due",
+            "near due instruction",
+            "2026-05-01T09:00:00",
+            "once",
+            None,
+        )
+
+        tasks = get_due_scheduled_tasks("2026-05-01T10:00:00", 20)
+
+        self.assertIn(task_id, [int(task["id"]) for task in tasks])
+
+    def test_due_task_older_than_one_hour_is_skipped_and_removed(self):
+        task_id = create_scheduled_task(
+            self.session_id,
+            "stale due",
+            "stale due instruction",
+            "2026-05-01T08:59:59",
+            "once",
+            None,
+        )
+
+        tasks = get_due_scheduled_tasks("2026-05-01T10:00:00", 20)
+
+        self.assertNotIn(task_id, [int(task["id"]) for task in tasks])
+        self.assertEqual(list_scheduled_tasks(self.session_id), [])
+
+    def test_missed_recurring_task_advances_without_triggering(self):
+        task_id = create_scheduled_task(
+            self.session_id,
+            "daily stale due",
+            "daily stale due instruction",
+            "2026-05-01T08:00:00",
+            "daily",
+            None,
+        )
+
+        tasks = get_due_scheduled_tasks("2026-05-01T10:00:00", 20)
+        remaining = list_scheduled_tasks(self.session_id)
+
+        self.assertNotIn(task_id, [int(task["id"]) for task in tasks])
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["run_at"], "2026-05-02T08:00:00")
 
 
 if __name__ == "__main__":

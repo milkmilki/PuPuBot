@@ -5,12 +5,13 @@ from __future__ import annotations
 import calendar
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..message_sources import WAIT_FOLLOWUP
 from .db import get_conn
 
 MAX_SCHEDULED_TASKS_PER_SESSION = 30
+SCHEDULED_TASK_GRACE_SECONDS = 3600
 
 _GENERIC_TASK_QUERY_WORDS = {
     "提醒",
@@ -421,15 +422,125 @@ def _match_tokens(value: str) -> list[str]:
     return [token for token in re.split(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", value) if len(token) >= 2]
 
 
+def _parse_run_at_iso(value: str) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        if moment.tzinfo is not None:
+            moment = moment.astimezone().replace(tzinfo=None)
+        return moment
+    except Exception:
+        return None
+
+
+def _compute_next_run_after(
+    old_run_at: str,
+    repeat_kind: str,
+    interval_seconds: int | None,
+    after: datetime,
+) -> str | None:
+    normalized_repeat = (repeat_kind or "once").lower()
+    if normalized_repeat == "once":
+        return None
+    next_run = _parse_run_at_iso(old_run_at)
+    if next_run is None:
+        next_run = after
+
+    def _advance(moment: datetime) -> datetime | None:
+        if normalized_repeat == "daily":
+            return moment + timedelta(days=1)
+        if normalized_repeat == "weekly":
+            return moment + timedelta(weeks=1)
+        if normalized_repeat == "monthly":
+            return _add_months(moment, 1)
+        if normalized_repeat == "yearly":
+            return _add_months(moment, 12)
+        if normalized_repeat == "interval":
+            seconds = int(interval_seconds) if interval_seconds else 3600
+            seconds = max(60, min(seconds, 86400 * 7))
+            return moment + timedelta(seconds=seconds)
+        return None
+
+    for _ in range(5000):
+        if next_run > after:
+            return next_run.isoformat(timespec="seconds")
+        advanced = _advance(next_run)
+        if advanced is None:
+            return None
+        next_run = advanced
+    return None
+
+
+def _skip_missed_scheduled_task(conn, row, now: datetime) -> None:
+    task_id = int(row["id"])
+    old_run_at = str(row["run_at"])
+    repeat_kind = str(row["repeat_kind"] or "once").lower()
+    next_at = _compute_next_run_after(
+        old_run_at,
+        repeat_kind,
+        row["interval_seconds"],
+        now,
+    )
+    if _debug_enabled():
+        print(
+            "[pupu][scheduled-debug] due_missed_skip "
+            f"task_id={task_id} session={row['session_id']} run_at={old_run_at} "
+            f"repeat={repeat_kind} next_at={next_at}"
+        )
+    if next_at is None:
+        cursor = conn.execute(
+            "DELETE FROM scheduled_tasks WHERE id = ? AND run_at = ?",
+            (task_id, old_run_at),
+        )
+        if cursor.rowcount > 0:
+            conn.execute(
+                """
+                UPDATE important_events
+                SET status = 'missed', linked_task_id = NULL
+                WHERE linked_task_id = ?
+                """,
+                (task_id,),
+            )
+        return
+    conn.execute(
+        "UPDATE scheduled_tasks SET run_at = ? WHERE id = ? AND run_at = ?",
+        (next_at, task_id, old_run_at),
+    )
+
+
+def _expire_missed_scheduled_tasks(
+    conn,
+    before: datetime,
+    cutoff_iso: str,
+    limit: int,
+) -> int:
+    rows = conn.execute(
+        """SELECT id, session_id, title, instruction, run_at, repeat_kind, interval_seconds
+           FROM scheduled_tasks
+           WHERE enabled = 1 AND run_at < ?
+           ORDER BY run_at ASC
+           LIMIT ?""",
+        (cutoff_iso, max(1, int(limit))),
+    ).fetchall()
+    for row in rows:
+        _skip_missed_scheduled_task(conn, row, before)
+    if rows:
+        conn.commit()
+    return len(rows)
+
+
 def get_due_scheduled_tasks(before_iso: str, limit: int = 10) -> list[dict]:
+    before = _parse_run_at_iso(before_iso) or datetime.now()
+    cutoff = before - timedelta(seconds=SCHEDULED_TASK_GRACE_SECONDS)
+    cutoff_iso = cutoff.isoformat(timespec="seconds")
     conn = get_conn()
+    missed_count = _expire_missed_scheduled_tasks(conn, before, cutoff_iso, max(limit * 5, 50))
     raw_rows = conn.execute(
         """SELECT id, session_id, title, instruction, run_at, repeat_kind, interval_seconds
            FROM scheduled_tasks
-           WHERE enabled = 1 AND run_at <= ?
+           WHERE enabled = 1 AND run_at >= ? AND run_at <= ?
            ORDER BY run_at ASC
            LIMIT ?""",
-        (before_iso, limit),
+        (cutoff_iso, before.isoformat(timespec="seconds"), limit),
     ).fetchall()
     # sqlite3.Row has no .get(); use subscript. Filter legacy wait_followup titles always.
     rows = [
@@ -437,14 +548,15 @@ def get_due_scheduled_tasks(before_iso: str, limit: int = 10) -> list[dict]:
         for row in raw_rows
         if not str(row["title"] or "").strip().lower().startswith(WAIT_FOLLOWUP)
     ]
-    if _debug_enabled() and raw_rows:
+    if _debug_enabled() and (raw_rows or missed_count):
         preview = "; ".join(
             f"id={row['id']} session={row['session_id']} run_at={row['run_at']} repeat={row['repeat_kind']} title={str(row['title'])[:18]}"
             for row in raw_rows
         )
         print(
             "[pupu][scheduled-debug] due_fetch "
-            f"before={before_iso} limit={limit} count={len(raw_rows)} tasks=[{preview}]"
+            f"before={before.isoformat(timespec='seconds')} cutoff={cutoff_iso} "
+            f"limit={limit} count={len(raw_rows)} missed={missed_count} tasks=[{preview}]"
         )
     conn.close()
     return [dict(row) for row in rows]
@@ -514,16 +626,6 @@ def _compute_next_run_at_iso(
     repeat_kind: str,
     interval_seconds: int | None,
 ) -> str | None:
-    from datetime import timedelta
-
-    def _add_months(moment: datetime, months: int) -> datetime:
-        total_month = (moment.year * 12 + (moment.month - 1)) + months
-        year = total_month // 12
-        month = total_month % 12 + 1
-        last_day = calendar.monthrange(year, month)[1]
-        day = min(moment.day, last_day)
-        return moment.replace(year=year, month=month, day=day)
-
     normalized_repeat = (repeat_kind or "once").lower()
     if normalized_repeat == "once":
         return None
@@ -542,3 +644,12 @@ def _compute_next_run_at_iso(
     else:
         return None
     return next_run.isoformat(timespec="seconds")
+
+
+def _add_months(moment: datetime, months: int) -> datetime:
+    total_month = (moment.year * 12 + (moment.month - 1)) + months
+    year = total_month // 12
+    month = total_month % 12 + 1
+    last_day = calendar.monthrange(year, month)[1]
+    day = min(moment.day, last_day)
+    return moment.replace(year=year, month=month, day=day)

@@ -15,6 +15,8 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -37,6 +39,12 @@ def _ensure_instance_env(inst: Path) -> None:
     os.environ.setdefault("PUPU_PERSONA_PATH", str(inst / "persona.json"))
     (inst / "data").mkdir(parents=True, exist_ok=True)
     (inst / "data" / "logs").mkdir(parents=True, exist_ok=True)
+
+
+def _load_instance_dotenv(inst: Path) -> None:
+    env_file = inst / ".env.qq"
+    if env_file.is_file():
+        load_dotenv(env_file, override=True)
 
 
 def _read_instance_config(inst: Path) -> dict:
@@ -123,6 +131,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(2)
 
     _ensure_instance_env(inst)
+    _load_instance_dotenv(inst)
     os.chdir(REPO_ROOT)
 
     from pupu.llm import preflight_model_providers

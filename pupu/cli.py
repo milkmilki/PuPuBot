@@ -15,7 +15,6 @@ from .facts_report import format_facts_report
 from .important_event_report import format_important_events_report
 from .llm import preflight_model_providers
 from .logging_utils import setup_runtime_logging
-from .maintenance import maybe_run_daily_memu_tidy
 from .memory import get_familiarity_info, get_recent_messages, init_db, reset_session
 from .memory_index import (
     clear_memu_session,
@@ -23,6 +22,7 @@ from .memory_index import (
     rebuild_memu_session,
     run_memu_maintenance,
 )
+from .proactive_control import is_proactive_enabled, set_proactive_enabled
 from .tools import manage_scheduled_task
 
 console = Console()
@@ -44,6 +44,7 @@ CLI_HELP_TEXT = """PuPu CLI 可用命令
 /recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
 /memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引
 /tidy（/cleanup /整理记忆 /整理）：整理 memU 长期记忆（facts / important_events），默认执行 apply，也可用 /tidy check
+/proactive [status|on|off]：查看、开启或关闭主动消息开关
 /reset：重置当前会话记忆、好感度和聊天记录
 """
 
@@ -59,9 +60,6 @@ def _cli_scheduler_loop():
             backup_report = maybe_run_daily_backup()
             if backup_report:
                 print(f"[pupu] auto backup\n{backup_report}")
-            memu_tidy_report = maybe_run_daily_memu_tidy()
-            if memu_tidy_report:
-                print(f"[pupu] auto memu tidy\n{memu_tidy_report}")
         except Exception as e:
             print(f"[pupu] cli scheduler: {e}")
 
@@ -136,6 +134,19 @@ def handle_command(cmd: str) -> bool:
         with console.status(status_text):
             report = run_memu_maintenance(OWNER_SESSION, mode=tidy_mode)
         console.print(report)
+        return False
+    elif command_name in ("/proactive", "/主动", "/主动消息"):
+        action = command_arg.strip().lower()
+        if action in {"", "status", "状态", "狀態"}:
+            console.print("主动消息：" + ("已开启" if is_proactive_enabled() else "已关闭"))
+        elif action in {"on", "enable", "enabled", "open", "start", "1", "true", "yes", "开启", "打开", "开"}:
+            set_proactive_enabled(True)
+            console.print("主动消息已开启。QQ 后台循环会在连接后运行；CLI 里只保存开关。")
+        elif action in {"off", "disable", "disabled", "close", "stop", "0", "false", "no", "关闭", "关"}:
+            set_proactive_enabled(False)
+            console.print("主动消息已关闭。")
+        else:
+            console.print("用法：/proactive [status|on|off]")
         return False
     elif command_name in ("/recall", "/memu_recall", "/召回"):
         query = command_arg.strip()

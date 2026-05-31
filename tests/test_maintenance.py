@@ -239,7 +239,7 @@ class MaintenanceTests(unittest.TestCase):
             self.assertIsNone(maybe_run_daily_maintenance(datetime(2026, 4, 26, 8, 0, 0)))
             mock_run.assert_not_called()
 
-    def test_maybe_run_daily_memu_tidy_runs_once_after_three(self):
+    def test_maybe_run_daily_memu_tidy_runs_once_during_three_oclock_hour(self):
         tidy_result = {
             "mode": "apply",
             "scanned": 3,
@@ -278,6 +278,10 @@ class MaintenanceTests(unittest.TestCase):
 
         with patch("pupu.maintenance.run_memu_tidy", return_value=tidy_result) as mock_run:
             self.assertIsNone(maybe_run_daily_memu_tidy(datetime(2026, 4, 26, 8, 0, 0)))
+            mock_run.assert_not_called()
+
+        with patch("pupu.maintenance.run_memu_tidy", return_value=tidy_result) as mock_run:
+            self.assertIsNone(maybe_run_daily_memu_tidy(datetime(2026, 4, 27, 21, 0, 0)))
             mock_run.assert_not_called()
 
     def test_run_memory_maintenance_forwards_memu_mode(self):

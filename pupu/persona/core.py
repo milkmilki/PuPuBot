@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 _DEFAULT_CORE_PERSONA = (
@@ -62,6 +63,16 @@ def _persona_file_path() -> Path | None:
     return Path(raw)
 
 
+def _instance_config_path() -> Path | None:
+    raw = os.environ.get("PUPU_CONFIG_PATH")
+    if raw:
+        return Path(raw)
+    inst = os.environ.get("PUPU_INSTANCE_DIR")
+    if inst:
+        return Path(inst) / "instance.json"
+    return None
+
+
 def _load_persona_json() -> dict | None:
     path = _persona_file_path()
     if path is None or not path.is_file():
@@ -72,6 +83,24 @@ def _load_persona_json() -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _load_instance_json() -> dict | None:
+    path = _instance_config_path()
+    if path is None or not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _name_from_core_persona(core_persona: str | None) -> str:
+    text = str(core_persona or "")
+    match = re.search(r"你叫\s*([^，,。；;\s、]+)", text)
+    return match.group(1).strip() if match else ""
 
 
 def get_core_persona() -> str:
@@ -91,10 +120,29 @@ def get_seed_self_facts() -> dict[str, str]:
 
 def get_pupu_name() -> str:
     data = _load_persona_json()
+    persona_name = ""
     if data is not None:
         name = data.get("name")
         if isinstance(name, str) and name.strip():
-            return name.strip()
+            persona_name = name.strip()
+
+    if persona_name and persona_name != _DEFAULT_NAME:
+        return persona_name
+
+    inst = _load_instance_json()
+    if inst is not None:
+        display_name = inst.get("display_name")
+        if isinstance(display_name, str) and display_name.strip():
+            return display_name.strip()
+
+    core_name = _name_from_core_persona(
+        data.get("core_persona") if data is not None else _DEFAULT_CORE_PERSONA
+    )
+    if core_name:
+        return core_name
+
+    if persona_name:
+        return persona_name
     return _DEFAULT_NAME
 
 

@@ -61,7 +61,7 @@ def maybe_run_daily_maintenance(now: datetime | None = None) -> str | None:
 
 def maybe_run_daily_memu_tidy(now: datetime | None = None) -> str | None:
     current = now or datetime.now()
-    if current.hour < MAINTENANCE_HOUR:
+    if current.hour != MAINTENANCE_HOUR:
         return None
 
     run_date = current.date().isoformat()

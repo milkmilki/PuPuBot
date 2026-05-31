@@ -11,6 +11,7 @@ from pupu.config import load_open_group_ids, load_owner_ids, load_peer_config
 from pupu.familiarity import PROACTIVE_THRESHOLD
 from pupu.memory import get_familiarity
 from pupu.proactive import proactive_loop
+from pupu.proactive_control import is_proactive_enabled
 from pupu.richmsg import parse_onebot_message
 from pupu.scheduler import onebot_scheduled_tasks_loop
 
@@ -158,8 +159,13 @@ if HAS_ONEBOT:
         except Exception as exc:
             print(f"[pupu] register owner wait_followup sender failed: {exc}")
 
-        if state.proactive_task is not None:
+        if not is_proactive_enabled():
+            print("[pupu] proactive messaging disabled (switch: PUPU_PROACTIVE_ENABLED=false)")
             return
+
+        if state.proactive_task is not None and not state.proactive_task.done():
+            return
+        state.proactive_task = None
 
         owner_qq = None
         for oid in load_owner_ids():

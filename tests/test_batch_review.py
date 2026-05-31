@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 import unittest
-from datetime import datetime, timedelta
 from unittest.mock import patch
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
@@ -47,17 +46,6 @@ class BatchReviewTests(unittest.TestCase):
         save_message("user", f"user-{index}", self.session_id, source=CHAT)
         save_message("assistant", f"assistant-{index}", self.session_id, source=CHAT)
 
-    def _set_chat_timestamps(self, moment: datetime):
-        conn = _get_conn()
-        try:
-            conn.execute(
-                "UPDATE messages SET timestamp = ? WHERE session_id = ? AND source = 'chat'",
-                (moment.isoformat(timespec="seconds"), self.session_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-
     def test_batch_review_prompt_requires_concrete_event_memory(self):
         prompt = build_batch_review_prompt()
 
@@ -74,7 +62,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn("不要把璐璐写成“仆仆”", prompt)
         self.assertNotIn("不要把璐璐写成“璐璐”", prompt)
 
-    def test_summary_progress_counts_completed_chat_turns(self):
+    def test_summary_progress_counts_chat_messages(self):
         for i in range(3):
             self._save_chat_turn(i)
 
@@ -89,11 +77,11 @@ class BatchReviewTests(unittest.TestCase):
 
         progress = get_summary_trigger_progress(self.session_id, review_interval=8)
 
-        self.assertEqual(progress["pending"], 3)
-        self.assertEqual(progress["remaining"], 5)
+        self.assertEqual(progress["pending"], 6)
+        self.assertEqual(progress["remaining"], 2)
         self.assertFalse(progress["ready"])
 
-    def test_review_candidate_batch_uses_full_turns_and_skips_internal_sources(self):
+    def test_review_candidate_batch_uses_message_count_and_skips_internal_sources(self):
         for i in range(10):
             self._save_chat_turn(i)
             if i == 2:
@@ -110,14 +98,15 @@ class BatchReviewTests(unittest.TestCase):
             source=CHAT,
         )
 
-        self.assertEqual(sum(1 for item in batch if item["role"] == "assistant"), 8)
+        self.assertEqual(len(batch), 8)
+        self.assertEqual(sum(1 for item in batch if item["role"] == "assistant"), 4)
         self.assertTrue(batch)
         self.assertTrue(all(item["source"] == CHAT for item in batch))
         self.assertEqual(batch[0]["content"], "user-0")
-        self.assertEqual(batch[-1]["content"], "assistant-7")
+        self.assertEqual(batch[-1]["content"], "assistant-3")
 
     def test_saved_summary_advances_review_cursor_by_batch_end(self):
-        for i in range(10):
+        for i in range(4):
             self._save_chat_turn(i)
 
         batch = get_review_candidate_batch(
@@ -134,8 +123,8 @@ class BatchReviewTests(unittest.TestCase):
             source=CHAT,
         )
 
-        self.assertEqual(progress["pending"], 2)
-        self.assertEqual(progress["remaining"], 6)
+        self.assertEqual(progress["pending"], 0)
+        self.assertEqual(progress["remaining"], 8)
         self.assertEqual(next_batch, [])
 
     def test_pending_review_last_message_time_uses_unsummarized_chat_only(self):
@@ -405,33 +394,18 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(get_familiarity(self.session_id), 100)
         self.assertEqual(summaries[-1]["summary"], "满好感后只整理记忆。")
 
-    def test_idle_batch_review_triggers_below_interval(self):
+    def test_batch_review_skips_below_interval_even_after_time_passes(self):
         for i in range(3):
             self._save_chat_turn(i)
-        self._set_chat_timestamps(datetime.now() - timedelta(seconds=700))
-
-        raw = """{
-          "summary": "短对话停下来后也被总结。",
-          "familiarity_delta": 0,
-          "user_facts": {},
-          "self_facts": {},
-          "important_events": [],
-          "task_updates": []
-        }"""
-
-        from pupu.agent import _maybe_batch_review
-
-        with patch("pupu.agent.json_task", return_value=raw) as mock_json_task:
-            _maybe_batch_review(self.session_id)
-
-        summaries = get_summaries(self.session_id, limit=3)
-        mock_json_task.assert_called_once()
-        self.assertEqual(summaries[-1]["summary"], "短对话停下来后也被总结。")
-
-    def test_idle_batch_review_skips_recent_pending(self):
-        for i in range(3):
-            self._save_chat_turn(i)
-        self._set_chat_timestamps(datetime.now())
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "UPDATE messages SET timestamp = ? WHERE session_id = ? AND source = 'chat'",
+                ("2026-04-26T10:00:00", self.session_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         from pupu.agent import _maybe_batch_review
 
@@ -441,9 +415,8 @@ class BatchReviewTests(unittest.TestCase):
         mock_json_task.assert_not_called()
         self.assertEqual(get_summaries(self.session_id, limit=3), [])
 
-    def test_idle_batch_review_ignores_half_turn(self):
+    def test_single_message_counts_but_waits_for_interval(self):
         save_message("user", "lonely user message", self.session_id, source=CHAT)
-        self._set_chat_timestamps(datetime.now() - timedelta(seconds=700))
 
         from pupu.agent import _maybe_batch_review
 
@@ -451,15 +424,18 @@ class BatchReviewTests(unittest.TestCase):
             _maybe_batch_review(self.session_id)
 
         mock_json_task.assert_not_called()
+        progress = get_summary_trigger_progress(self.session_id, review_interval=10)
+        self.assertEqual(progress["pending"], 1)
+        self.assertEqual(progress["remaining"], 9)
 
-    def test_pending_review_sessions_lists_sessions_with_complete_turns(self):
+    def test_pending_review_sessions_lists_sessions_with_any_chat_message(self):
         self._save_chat_turn(1)
         other_session = self.session_id + "_other"
         reset_session(other_session)
-        save_message("user", "half", other_session, source=CHAT)
+        save_message("user", "single", other_session, source=CHAT)
 
         self.assertIn(self.session_id, list_pending_review_sessions(source=CHAT))
-        self.assertNotIn(other_session, list_pending_review_sessions(source=CHAT))
+        self.assertIn(other_session, list_pending_review_sessions(source=CHAT))
 
     def test_run_due_batch_reviews_scans_pending_sessions(self):
         self._save_chat_turn(1)

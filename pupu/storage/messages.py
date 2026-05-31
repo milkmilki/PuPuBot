@@ -71,6 +71,7 @@ def count_pending_review_turns(
     *,
     context_session: str | None = None,
 ) -> int:
+    # Compatibility name: for batch review, one chat message now counts as one turn.
     session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     row = conn.execute(
@@ -78,7 +79,6 @@ def count_pending_review_turns(
            FROM messages
            WHERE session_id = ?
              AND source = ?
-             AND role = 'assistant'
              AND id > ?""",
         (session_id, source, after_msg_id),
     ).fetchone()
@@ -100,23 +100,22 @@ def get_review_candidate_batch(
     after_msg_id = get_oldest_unsummarized_msg_id(session_id)
 
     conn = get_conn()
-    assistant_rows = conn.execute(
+    message_rows = conn.execute(
         """SELECT id
            FROM messages
            WHERE session_id = ?
              AND source = ?
-             AND role = 'assistant'
              AND id > ?
            ORDER BY id ASC
            LIMIT ?""",
         (session_id, source, after_msg_id, interval),
     ).fetchall()
 
-    if len(assistant_rows) < minimum:
+    if len(message_rows) < minimum:
         conn.close()
         return []
 
-    end_msg_id = assistant_rows[-1]["id"]
+    end_msg_id = message_rows[-1]["id"]
     rows = conn.execute(
         """SELECT id, role, content, source
            FROM messages
@@ -165,7 +164,6 @@ def list_pending_review_sessions(source: str = CHAT) -> list[str]:
              GROUP BY session_id
            ) s ON s.session_id = m.session_id
            WHERE m.source = ?
-             AND m.role = 'assistant'
              AND m.id > COALESCE(s.last_reviewed_id, 0)
            GROUP BY m.session_id
            ORDER BY m.session_id ASC""",

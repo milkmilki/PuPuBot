@@ -20,7 +20,6 @@ from .memory import (
     has_successful_memu_sync,
     get_important_events,
     get_oldest_unsummarized_msg_id,
-    get_pending_review_last_message_time,
     get_recent_messages,
     get_review_candidate_batch,
     get_self_facts,
@@ -49,7 +48,6 @@ from .review_followups import (
 from .tools import TOOL_DEFINITIONS, execute_tool, is_admin_tool
 
 REVIEW_INTERVAL = 10
-REVIEW_IDLE_SECONDS = 600
 REVIEW_SOURCE = CHAT
 CHAT_HISTORY_LIMIT = 10
 PROMPT_SUMMARY_LIMIT = 2
@@ -224,19 +222,6 @@ def _format_active_scheduled_tasks_for_review(
     if len(rows) > limit:
         lines.append(f"- 还有 {len(rows) - limit} 条未列出")
     return "\n".join(lines)
-
-
-def _seconds_since_iso(value: str | None, now: datetime | None = None) -> int | None:
-    if not value:
-        return None
-    try:
-        moment = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if moment.tzinfo is not None:
-            moment = moment.astimezone().replace(tzinfo=None)
-    except Exception:
-        return None
-    current = now or datetime.now()
-    return max(0, int((current - moment).total_seconds()))
 
 
 def _format_turn_timestamp() -> str:
@@ -439,69 +424,54 @@ def _maybe_batch_review_unlocked(
     context_session: str | None = None,
     identity_session: str | None = None,
 ):
-    """Every REVIEW_INTERVAL completed chat turns, summarize + judge familiarity + extract facts."""
+    """Every REVIEW_INTERVAL chat messages, summarize + judge familiarity + extract facts."""
     context_session = str(context_session or session_id or "default")
     identity_session = str(identity_session or session_id or "default")
     try:
         print(
             "[pupu] batch review check: "
             f"context={context_session}, identity={identity_session}, "
-            f"interval={REVIEW_INTERVAL}, idle={REVIEW_IDLE_SECONDS}s"
+            f"interval={REVIEW_INTERVAL}"
         )
         last_reviewed = get_oldest_unsummarized_msg_id(context_session)
-        pending_turns = count_pending_review_turns(
+        pending_messages = count_pending_review_turns(
             session_id=context_session,
             after_msg_id=last_reviewed,
             source=REVIEW_SOURCE,
         )
-        last_pending_time = get_pending_review_last_message_time(
-            session_id=context_session,
-            after_msg_id=last_reviewed,
-            source=REVIEW_SOURCE,
-        )
-        idle_seconds = _seconds_since_iso(last_pending_time)
         print(
             "[pupu] batch review context: "
-            f"last_reviewed_id={last_reviewed}, pending_turns={pending_turns}, "
-                f"idle_seconds={idle_seconds}"
+            f"last_reviewed_id={last_reviewed}, pending_messages={pending_messages}"
         )
 
         trigger = ""
-        review_turns = 0
-        if pending_turns >= REVIEW_INTERVAL:
-            trigger = "turns"
-            review_turns = REVIEW_INTERVAL
-        elif (
-            pending_turns > 0
-            and idle_seconds is not None
-            and idle_seconds >= REVIEW_IDLE_SECONDS
-        ):
-            trigger = "idle"
-            review_turns = pending_turns
+        review_messages = 0
+        if pending_messages >= REVIEW_INTERVAL:
+            trigger = "messages"
+            review_messages = REVIEW_INTERVAL
 
         if not trigger:
             print(
                 "[pupu] batch review skip: "
-                f"need={REVIEW_INTERVAL}, got={pending_turns}, "
-                f"idle_need={REVIEW_IDLE_SECONDS}, idle_got={idle_seconds}"
+                f"need={REVIEW_INTERVAL}, got={pending_messages}"
             )
             return
 
         batch = get_review_candidate_batch(
             session_id=context_session,
-            review_interval=review_turns,
+            review_interval=review_messages,
             source=REVIEW_SOURCE,
-            min_turns=review_turns,
+            min_turns=review_messages,
         )
         if not batch:
             print("[pupu] batch review skip: candidate batch unavailable")
             return
 
-        batch_turns = sum(1 for item in batch if item["role"] == "assistant")
+        batch_turns = len(batch)
         print(
             "[pupu] batch review trigger: "
-            f"trigger={trigger}, turns={batch_turns}, pending_turns={pending_turns}, "
-            f"idle_seconds={idle_seconds}, messages={len(batch)}, "
+            f"trigger={trigger}, messages_count={batch_turns}, pending_messages={pending_messages}, "
+            f"messages={len(batch)}, "
             f"msg_id_range={batch[0]['id']}..{batch[-1]['id']}"
         )
 
@@ -697,7 +667,7 @@ def _maybe_batch_review_unlocked(
 
         print(
             "[pupu] batch review done: "
-            f"trigger={trigger}, turns={batch_turns}, summary_chars={len(summary)}, "
+            f"trigger={trigger}, messages_count={batch_turns}, summary_chars={len(summary)}, "
             f"familiarity_delta={familiarity_delta}, "
             f"important_events={len(important_events)}, "
             f"task_updates={len(task_updates)}"
