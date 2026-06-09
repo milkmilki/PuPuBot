@@ -7,7 +7,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from .agent import chat, run_due_batch_reviews
+from .agent import chat
 from .backup import maybe_run_daily_backup
 from .dialogue_loop import register_sender
 from .sessions import OWNER_SESSION
@@ -56,7 +56,6 @@ def _cli_scheduler_loop():
         time.sleep(45)
         try:
             cli_scheduled_tasks_tick()
-            run_due_batch_reviews()
             backup_report = maybe_run_daily_backup()
             if backup_report:
                 print(f"[pupu] auto backup\n{backup_report}")

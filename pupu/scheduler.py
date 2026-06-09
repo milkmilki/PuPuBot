@@ -147,11 +147,6 @@ async def onebot_scheduled_tasks_loop(bot) -> None:
                 for task in get_due_scheduled_tasks(now_iso, 10)
                 if not _is_wait_followup_task(task)
             ]
-        if _sched_debug():
-            print(
-                "[pupu][scheduled-debug] scheduler_poll "
-                f"now={now_iso} due_count={len(tasks)}"
-            )
         if tasks:
             brief = "; ".join(
                 f"id={task['id']} session={task['session_id']} run_at={task['run_at']} repeat={task.get('repeat_kind')} title={str(task.get('title') or '')[:18]}"
