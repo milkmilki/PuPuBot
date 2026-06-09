@@ -204,6 +204,36 @@ def get_important_events(
     return items[:limit]
 
 
+def get_recent_important_events(
+    session_id: str,
+    limit: int | None = None,
+    statuses: tuple[str, ...] = ("active", "scheduled"),
+    *,
+    identity_session: str | None = None,
+) -> list[dict]:
+    """Return report-ordered important events; ``limit=None`` returns all."""
+    session_id = _resolve_identity_session(session_id, identity_session)
+    conn = get_conn()
+    try:
+        placeholders = ",".join("?" for _ in statuses)
+        sql = f"""
+            SELECT id, session_id, source_event_key, title, kind, event_time, time_text,
+                   details, followup_hint, confidence, status, linked_task_id,
+                   last_seen_at, created_at
+            FROM important_events
+            WHERE session_id = ? AND status IN ({placeholders})
+            ORDER BY last_seen_at DESC, created_at DESC, id DESC
+            """
+        params: tuple[object, ...] = (session_id, *statuses)
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (*params, int(limit))
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
 def link_important_event_task(
     session_id: str,
     source_event_key: str,

@@ -1,14 +1,16 @@
 import os
 from pathlib import Path
+from datetime import datetime, timedelta
 import unittest
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
+os.environ["PUPU_MEMU_ENABLED"] = "false"
 
 from pupu.important_event_report import format_important_events_report
-from pupu.memory import init_db, reset_session, upsert_important_events
+from pupu.memory import _get_conn, init_db, reset_session, upsert_important_events
 
 
 class ImportantEventReportTests(unittest.TestCase):
@@ -44,6 +46,53 @@ class ImportantEventReportTests(unittest.TestCase):
         self.assertIn("confidence=0.95", report)
         self.assertIn("key=birthday-2026-04-27", report)
         self.assertIn("用户明天生日", report)
+
+    def test_report_includes_all_events_with_newest_first(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "old-event",
+                    "title": "Old event",
+                    "kind": "promise",
+                    "time_text": "old",
+                    "details": "older",
+                    "confidence": 0.8,
+                },
+                {
+                    "source_event_key": "new-event",
+                    "title": "New event",
+                    "kind": "milestone",
+                    "time_text": "new",
+                    "details": "newer",
+                    "confidence": 1.0,
+                },
+            ],
+        )
+        old_time = (datetime.now() - timedelta(days=1)).isoformat()
+        new_time = datetime.now().isoformat()
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "UPDATE important_events SET last_seen_at = ?, created_at = ? "
+                "WHERE session_id = ? AND source_event_key = ?",
+                (old_time, old_time, self.session_id, "old-event"),
+            )
+            conn.execute(
+                "UPDATE important_events SET last_seen_at = ?, created_at = ? "
+                "WHERE session_id = ? AND source_event_key = ?",
+                (new_time, new_time, self.session_id, "new-event"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        report = format_important_events_report(self.session_id)
+
+        self.assertIn("重要事件 2 条", report)
+        self.assertIn("Old event", report)
+        self.assertIn("New event", report)
+        self.assertLess(report.index("New event"), report.index("Old event"))
 
 
 if __name__ == "__main__":

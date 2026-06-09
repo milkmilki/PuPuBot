@@ -28,6 +28,7 @@ from .important_events import (
     derive_source_event_key,
     get_important_event_by_key,
     get_important_events,
+    get_recent_important_events,
     link_important_event_task,
     upsert_important_events,
 )
@@ -67,6 +68,7 @@ __all__ = [
     "get_familiarity_info",
     "get_important_event_by_key",
     "get_important_events",
+    "get_recent_important_events",
     "get_last_message_time",
     "get_last_user_message_time",
     "has_successful_memu_sync",

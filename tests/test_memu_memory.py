@@ -418,14 +418,10 @@ class MemuMemoryTests(unittest.TestCase):
         mock_record.assert_called_once()
         self.assertEqual(mock_record.call_args.kwargs["status"], "failed")
 
-    def test_reports_prefer_memu_when_enabled_and_fallback_when_disabled(self):
+    def test_reports_use_memu_for_facts_but_local_store_for_events(self):
         with patch("pupu.facts_report.format_memu_facts_report", return_value="memu facts"):
             self.assertEqual(format_facts_report(self.session_id), "memu facts")
-        with patch(
-            "pupu.important_event_report.format_memu_important_events_report",
-            return_value="memu events",
-        ):
-            self.assertEqual(format_important_events_report(self.session_id), "memu events")
+        self.assertNotEqual(format_important_events_report(self.session_id), "memu events")
 
         upsert_user_facts({"游戏": "星露谷"}, self.session_id)
         with patch("pupu.facts_report.format_memu_facts_report", return_value=None):
