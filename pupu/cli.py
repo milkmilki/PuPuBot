@@ -28,6 +28,7 @@ from .tools import manage_scheduled_task
 console = Console()
 
 TIDY_USAGE = "用法：/tidy [check|apply]"
+DAILY_BACKUP_CHECK_INTERVAL_SECONDS = 30 * 60
 
 CLI_HELP_TEXT = """PuPu CLI 可用命令
 
@@ -52,13 +53,17 @@ CLI_HELP_TEXT = """PuPu CLI 可用命令
 def _cli_scheduler_loop():
     from pupu.scheduler import cli_scheduled_tasks_tick
 
+    last_backup_check = 0.0
     while True:
         time.sleep(45)
         try:
             cli_scheduled_tasks_tick()
-            backup_report = maybe_run_daily_backup()
-            if backup_report:
-                print(f"[pupu] auto backup\n{backup_report}")
+            now = time.monotonic()
+            if now - last_backup_check >= DAILY_BACKUP_CHECK_INTERVAL_SECONDS:
+                last_backup_check = now
+                backup_report = maybe_run_daily_backup()
+                if backup_report:
+                    print(f"[pupu] auto backup\n{backup_report}")
         except Exception as e:
             print(f"[pupu] cli scheduler: {e}")
 

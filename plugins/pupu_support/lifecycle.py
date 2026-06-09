@@ -11,6 +11,8 @@ from pupu.maintenance import maybe_run_daily_memu_tidy
 
 from . import state
 
+MAINTENANCE_LOOP_INTERVAL_SECONDS = 30 * 60
+
 
 async def maintenance_loop():
     while True:
@@ -25,7 +27,7 @@ async def maintenance_loop():
             raise
         except Exception as exc:
             print(f"[pupu] maintenance loop failed: {exc}")
-        await asyncio.sleep(45)
+        await asyncio.sleep(MAINTENANCE_LOOP_INTERVAL_SECONDS)
 
 
 driver = get_driver()
