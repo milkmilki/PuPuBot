@@ -1397,6 +1397,108 @@ def _list_items(identity_session: str, limit: int = 200) -> list[dict[str, Any]]
     return limited
 
 
+def sync_missing_memu_important_events(
+    identity_session: str,
+    events: list[dict[str, Any]],
+    *,
+    context_session: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Ensure structured important_events have corresponding memU items."""
+    identity_session = str(identity_session)
+    context_session = str(context_session or identity_session)
+    if not is_memu_long_term_enabled():
+        return {
+            "status": "disabled",
+            "checked": len(events or []),
+            "present": 0,
+            "missing": 0,
+            "synced": 0,
+            "error": "",
+        }
+
+    keyed_events = [
+        event
+        for event in (events or [])
+        if str(event.get("source_event_key") or "").strip()
+    ]
+    try:
+        items = _list_items(identity_session, limit=10000)
+    except Exception as exc:
+        _log(
+            "important_events sync check failed "
+            f"identity={identity_session} error={type(exc).__name__}: {_preview(exc, 500)}"
+        )
+        return {
+            "status": "unavailable",
+            "checked": len(keyed_events),
+            "present": 0,
+            "missing": 0,
+            "synced": 0,
+            "error": str(exc),
+        }
+
+    memu_keys: set[str] = set()
+    for item in items:
+        payload = _parse_memory_payload(item.get("summary") or item.get("content"))
+        if str(payload.get("kind") or "") != "important_event":
+            continue
+        key = str(payload.get("source_event_key") or "").strip()
+        if key:
+            memu_keys.add(key)
+
+    missing_events = [
+        event
+        for event in keyed_events
+        if str(event.get("source_event_key") or "").strip() not in memu_keys
+    ]
+    if not missing_events:
+        return {
+            "status": "ok",
+            "checked": len(keyed_events),
+            "present": len(keyed_events),
+            "missing": 0,
+            "synced": 0,
+            "error": "",
+        }
+    if dry_run:
+        return {
+            "status": "missing",
+            "checked": len(keyed_events),
+            "present": len(keyed_events) - len(missing_events),
+            "missing": len(missing_events),
+            "synced": 0,
+            "missing_keys": [event.get("source_event_key") for event in missing_events],
+            "error": "",
+        }
+
+    _log(
+        "important_events sync missing "
+        f"identity={identity_session} context={context_session} "
+        f"missing={len(missing_events)} keys="
+        f"{_json_compact([event.get('source_event_key') for event in missing_events[:20]])}"
+    )
+    result = sync_review_memory(
+        context_session=context_session,
+        identity_session=identity_session,
+        start_msg_id=0,
+        end_msg_id=0,
+        summary="",
+        user_facts={},
+        self_facts={},
+        important_events=missing_events,
+    )
+    status = "synced" if result.status in {"success", "empty"} else result.status
+    return {
+        "status": status,
+        "checked": len(keyed_events),
+        "present": len(keyed_events) - len(missing_events),
+        "missing": len(missing_events),
+        "synced": len(result.ids),
+        "error": result.error,
+    }
+
+
 def _format_items(identity_session: str, kinds: set[str], empty_text: str) -> str:
     try:
         items = _list_items(identity_session)

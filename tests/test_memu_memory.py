@@ -23,6 +23,7 @@ from pupu.memory import (
     save_summary,
     set_familiarity,
     upsert_self_facts,
+    upsert_important_events,
     upsert_user_facts,
 )
 from pupu.memory_index.memu_adapter import (
@@ -35,6 +36,7 @@ from pupu.memory_index.memu_adapter import (
     _memorize_config,
     _retrieve_item_config,
     is_memu_long_term_enabled,
+    sync_missing_memu_important_events,
 )
 from pupu.memory_index import rebuild_memu_session, run_memu_maintenance, run_memu_tidy
 from pupu.message_sources import CHAT
@@ -421,11 +423,49 @@ class MemuMemoryTests(unittest.TestCase):
     def test_reports_use_memu_for_facts_but_local_store_for_events(self):
         with patch("pupu.facts_report.format_memu_facts_report", return_value="memu facts"):
             self.assertEqual(format_facts_report(self.session_id), "memu facts")
-        self.assertNotEqual(format_important_events_report(self.session_id), "memu events")
+        self.assertNotEqual(format_important_events_report(self.session_id, sync_memu=False), "memu events")
 
         upsert_user_facts({"游戏": "星露谷"}, self.session_id)
         with patch("pupu.facts_report.format_memu_facts_report", return_value=None):
             self.assertIn("游戏: 星露谷", format_facts_report(self.session_id))
+
+    def test_sync_missing_memu_important_events_backfills_by_source_key(self):
+        events = [
+            {
+                "source_event_key": "already-there",
+                "title": "Already there",
+                "details": "present",
+                "confidence": 1.0,
+            },
+            {
+                "source_event_key": "missing-event",
+                "title": "Missing event",
+                "details": "needs sync",
+                "confidence": 0.9,
+            },
+        ]
+        memu_items = [
+            {
+                "id": "m1",
+                "summary": '{"kind":"important_event","source_event_key":"already-there","text":"present"}',
+            }
+        ]
+
+        with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_adapter._list_items", return_value=memu_items):
+                with patch(
+                    "pupu.memory_index.memu_adapter.sync_review_memory",
+                    return_value=MemuWriteResult(status="success", ids=["new-id"]),
+                ) as mock_sync:
+                    result = sync_missing_memu_important_events(self.session_id, events)
+
+        self.assertEqual(result["status"], "synced")
+        self.assertEqual(result["checked"], 2)
+        self.assertEqual(result["missing"], 1)
+        self.assertEqual(result["synced"], 1)
+        sync_kwargs = mock_sync.call_args.kwargs
+        self.assertEqual(len(sync_kwargs["important_events"]), 1)
+        self.assertEqual(sync_kwargs["important_events"][0]["source_event_key"], "missing-event")
 
     def legacy_memu_maintenance_deletes_duplicates_and_low_value_items(self):
         deleted_ids = []
@@ -494,8 +534,12 @@ class MemuMemoryTests(unittest.TestCase):
                         )
                         or 1,
                     ):
-                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response) as mock_json:
-                            result = run_memu_tidy(self.session_id, mode="apply")
+                        with patch(
+                            "pupu.memory_index.memu_tidy._sync_legacy_sources_after_tidy",
+                            return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
+                        ):
+                            with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response) as mock_json:
+                                result = run_memu_tidy(self.session_id, mode="apply")
 
         self.assertEqual(result["deleted"], 2)
         self.assertEqual(result["legacy_deleted"], 1)
@@ -527,13 +571,80 @@ class MemuMemoryTests(unittest.TestCase):
             with patch("pupu.memory_index.memu_tidy._list_items", return_value=items):
                 with patch("pupu.memory_index.memu_tidy._get_service") as mock_get_service:
                     with patch("pupu.memory_index.memu_tidy._delete_legacy_source") as mock_delete_legacy:
-                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response):
-                            result = run_memu_tidy(self.session_id, mode="check")
+                        with patch(
+                            "pupu.memory_index.memu_tidy._check_legacy_source_sync",
+                            return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
+                        ):
+                            with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response):
+                                result = run_memu_tidy(self.session_id, mode="check")
 
         self.assertEqual(result["deleted"], 0)
         self.assertEqual(result["legacy_deleted"], 0)
         mock_get_service.assert_not_called()
         mock_delete_legacy.assert_not_called()
+
+    def test_memu_tidy_check_reports_missing_source_sync_without_writing(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "missing-source-event",
+                    "title": "Missing source event",
+                    "kind": "milestone",
+                    "details": "not in memU yet",
+                    "confidence": 1.0,
+                    "status": "active",
+                }
+            ],
+        )
+
+        with patch("pupu.memory_index.memu_tidy.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_tidy._list_items", return_value=[]):
+                with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+                    with patch("pupu.memory_index.memu_adapter._list_items", return_value=[]):
+                        with patch("pupu.memory_index.memu_adapter.sync_review_memory") as mock_sync:
+                            with patch("pupu.memory_index.memu_tidy.json_task", return_value='{"drop_ids":[]}'):
+                                result = run_memu_tidy(self.session_id, mode="check")
+
+        self.assertEqual(result["source_sync"]["status"], "missing")
+        self.assertEqual(result["source_sync"]["checked"], 1)
+        self.assertEqual(result["source_sync"]["missing"], 1)
+        self.assertEqual(result["source_sync"]["synced"], 0)
+        mock_sync.assert_not_called()
+
+    def test_memu_tidy_apply_backfills_missing_source_events_after_cleanup(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "missing-source-event",
+                    "title": "Missing source event",
+                    "kind": "milestone",
+                    "details": "not in memU yet",
+                    "confidence": 1.0,
+                    "status": "active",
+                }
+            ],
+        )
+
+        with patch("pupu.memory_index.memu_tidy.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_tidy._list_items", return_value=[]):
+                with patch("pupu.memory_index.memu_tidy._get_service"):
+                    with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+                        with patch("pupu.memory_index.memu_adapter._list_items", return_value=[]):
+                            with patch(
+                                "pupu.memory_index.memu_adapter.sync_review_memory",
+                                return_value=MemuWriteResult(status="success", ids=["synced-event"]),
+                            ) as mock_sync:
+                                with patch("pupu.memory_index.memu_tidy.json_task", return_value='{"drop_ids":[]}'):
+                                    result = run_memu_tidy(self.session_id, mode="apply")
+
+        self.assertEqual(result["source_sync"]["status"], "synced")
+        self.assertEqual(result["source_sync"]["checked"], 1)
+        self.assertEqual(result["source_sync"]["missing"], 1)
+        self.assertEqual(result["source_sync"]["synced"], 1)
+        sync_kwargs = mock_sync.call_args.kwargs
+        self.assertEqual(sync_kwargs["important_events"][0]["source_event_key"], "missing-source-event")
 
     def test_rebuild_syncs_context_summaries_and_identity_memory(self):
         context_id = self.session_id + "_context"

@@ -94,6 +94,25 @@ class ImportantEventReportTests(unittest.TestCase):
         self.assertIn("New event", report)
         self.assertLess(report.index("New event"), report.index("Old event"))
 
+    def test_report_does_not_show_memu_sync_status(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "event-a",
+                    "title": "Event A",
+                    "kind": "milestone",
+                    "details": "A",
+                    "confidence": 1.0,
+                }
+            ],
+        )
+
+        report = format_important_events_report(self.session_id)
+
+        self.assertNotIn("memU", report)
+        self.assertIn("Event A", report)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -431,6 +431,46 @@ def analyze_memu_tidy(
     }
 
 
+def _load_active_legacy_important_events(identity_session: str) -> list[dict[str, Any]]:
+    from ..storage.db import get_conn
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT source_event_key, title, kind, event_time, time_text,
+                      details, followup_hint, confidence, status, linked_task_id
+               FROM important_events
+               WHERE session_id = ? AND status IN ('active', 'scheduled')
+               ORDER BY last_seen_at DESC, created_at DESC, id DESC""",
+            (identity_session,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _sync_status_note(status: dict[str, Any]) -> str:
+    value = str(status.get("status") or "unknown")
+    checked = int(status.get("checked") or 0)
+    missing = int(status.get("missing") or 0)
+    synced = int(status.get("synced") or 0)
+    return f"{value}:checked={checked},missing={missing},synced={synced}"
+
+
+def _check_legacy_source_sync(identity_session: str) -> dict[str, Any]:
+    events = _load_active_legacy_important_events(identity_session)
+    from .memu_adapter import sync_missing_memu_important_events
+
+    return sync_missing_memu_important_events(identity_session, events, dry_run=True)
+
+
+def _sync_legacy_sources_after_tidy(identity_session: str) -> dict[str, Any]:
+    events = _load_active_legacy_important_events(identity_session)
+    from .memu_adapter import sync_missing_memu_important_events
+
+    return sync_missing_memu_important_events(identity_session, events)
+
+
 def _run_memu_tidy_unlocked(
     identity_session: str,
     *,
@@ -466,10 +506,12 @@ def _run_memu_tidy_unlocked(
         }
 
     if mode == "check":
+        sync_status = _check_legacy_source_sync(identity_session)
         note = (
             f"memU mode=check, scanned={analysis['scanned']}, candidates={len(candidates)}, "
             f"reasons={analysis['reason_counts']}"
         )
+        note += f", source_sync={_sync_status_note(sync_status)}"
         if analysis.get("judge_failures"):
             note += f", judge_failures={analysis['judge_failures']}"
         if analysis.get("unknown_drop_ids"):
@@ -495,6 +537,7 @@ def _run_memu_tidy_unlocked(
             "judge_notes": analysis.get("judge_notes") or [],
             "judge_failures": int(analysis.get("judge_failures") or 0),
             "unknown_drop_ids": int(analysis.get("unknown_drop_ids") or 0),
+            "source_sync": sync_status,
             "note": note,
             "status": analysis.get("status") or "ok",
         }
@@ -565,11 +608,13 @@ def _run_memu_tidy_unlocked(
     if candidates:
         with _op_lock:
             deleted, failed, legacy_deleted = _run(_delete(candidates))
+    sync_status = _sync_legacy_sources_after_tidy(identity_session)
 
     note = (
         f"memU mode=apply, scanned={analysis['scanned']}, candidates={len(candidates)}, "
         f"reasons={analysis['reason_counts']}, deleted={deleted}, "
-        f"legacy_deleted={legacy_deleted}, failed={failed}"
+        f"legacy_deleted={legacy_deleted}, failed={failed}, "
+        f"source_sync={_sync_status_note(sync_status)}"
     )
     if analysis.get("judge_failures"):
         note += f", judge_failures={analysis['judge_failures']}"
@@ -596,6 +641,7 @@ def _run_memu_tidy_unlocked(
         "judge_notes": analysis.get("judge_notes") or [],
         "judge_failures": int(analysis.get("judge_failures") or 0),
         "unknown_drop_ids": int(analysis.get("unknown_drop_ids") or 0),
+        "source_sync": sync_status,
         "note": note,
         "status": analysis.get("status") or "ok",
     }
@@ -722,6 +768,8 @@ def format_memu_tidy_report(
         lines.append(f"- judge_failures: {int(result.get('judge_failures') or 0)}")
     if result.get("unknown_drop_ids"):
         lines.append(f"- unknown_drop_ids: {int(result.get('unknown_drop_ids') or 0)}")
+    if result.get("source_sync"):
+        lines.append(f"- source_sync: {_sync_status_note(result['source_sync'])}")
     preview = _format_candidate_preview(_result_candidate_items(result))
     if preview:
         lines.append(f"- preview: {preview}")

@@ -5,7 +5,12 @@ from __future__ import annotations
 from .memory import get_recent_important_events
 
 
-def format_important_events_report(session_id: str, limit: int | None = None) -> str:
+def format_important_events_report(
+    session_id: str,
+    limit: int | None = None,
+    *,
+    sync_memu: bool | None = None,
+) -> str:
     events = get_recent_important_events(session_id, limit=limit)
     if not events:
         return "当前没有重要事件记忆。"
