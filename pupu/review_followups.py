@@ -159,6 +159,81 @@ def normalize_review_important_events(value, *, now: datetime | None = None) -> 
     return cleaned
 
 
+def normalize_review_event_updates(value, *, now: datetime | None = None) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+
+    now = now or datetime.now()
+    cleaned = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("action") or "").strip().lower()
+        if action not in {"append_step", "create_thread"}:
+            continue
+        title = str(item.get("title") or "").strip()
+        thread_key = str(item.get("thread_key") or item.get("source_event_key") or "").strip()
+        kind = str(item.get("kind") or "").strip().lower()
+        event_time = str(item.get("event_time") or item.get("occurred_at") or "").strip()
+        time_text = str(item.get("time_text") or "").strip()
+        summary = str(item.get("summary") or item.get("details") or "").strip()
+        cause = str(item.get("cause") or "").strip()
+        reflection = str(item.get("reflection") or "").strip()
+        followup_hint = str(item.get("followup_hint") or "").strip()
+        step_type = str(item.get("step_type") or "").strip().lower()
+        if step_type not in {"time", "user", "instance", "system"}:
+            step_type = "user"
+        event_date = _parse_event_date(event_time) or _relative_date_from_text(
+            " ".join(part for part in (time_text, title, summary, cause, followup_hint) if part),
+            now,
+        )
+        if not event_time and event_date:
+            event_time = event_date.isoformat()
+        title = _replace_relative_dates(title, now, event_date)
+        time_text = _replace_relative_dates(time_text, now, event_date)
+        summary = _replace_relative_dates(summary, now, event_date)
+        cause = _replace_relative_dates(cause, now, event_date)
+        reflection = _replace_relative_dates(reflection, now, event_date)
+        followup_hint = _replace_relative_dates(followup_hint, now, event_date)
+        if step_type == "time" and summary and not any(marker in summary for marker in ("可能", "推测", "大概", "也许")):
+            summary = "推测：" + summary
+        try:
+            confidence = float(item.get("confidence", 0.0))
+        except Exception:
+            confidence = 0.0
+        confidence = max(0.0, min(1.0, confidence))
+        if not (thread_key or title or summary):
+            continue
+        source_event_key = derive_source_event_key(
+            thread_key,
+            title=title or summary,
+            kind=kind,
+            event_time=event_time,
+            time_text=time_text,
+        )
+        cleaned.append(
+            {
+                "action": action,
+                "thread_key": source_event_key,
+                "source_event_key": source_event_key,
+                "title": title or summary[:40] or "未命名事件",
+                "kind": kind,
+                "event_time": event_time,
+                "time_text": time_text,
+                "summary": summary,
+                "details": summary,
+                "cause": cause,
+                "reflection": reflection,
+                "followup_hint": followup_hint,
+                "merge_hint": str(item.get("merge_hint") or followup_hint).strip(),
+                "step_type": step_type,
+                "confidence": confidence,
+                "status": str(item.get("status") or "active").strip() or "active",
+            }
+        )
+    return cleaned
+
+
 def normalize_review_task_drafts(value) -> list[dict]:
     if not isinstance(value, list):
         return []
@@ -254,6 +329,14 @@ def save_review_important_events(
     important_events: list[dict],
 ) -> dict[str, dict]:
     rows = upsert_important_events(identity_session, important_events)
+    return {str(row["source_event_key"]): row for row in rows}
+
+
+def save_review_event_updates(
+    identity_session: str,
+    event_updates: list[dict],
+) -> dict[str, dict]:
+    rows = upsert_important_events(identity_session, event_updates)
     return {str(row["source_event_key"]): row for row in rows}
 
 

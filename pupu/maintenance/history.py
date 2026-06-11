@@ -41,6 +41,7 @@ def _list_all_session_ids(conn) -> list[str]:
         "self_facts",
         "summaries",
         "scheduled_tasks",
+        "event_threads",
     ):
         rows = conn.execute(f"SELECT DISTINCT session_id FROM {table}").fetchall()
         session_ids.update(row["session_id"] for row in rows if row["session_id"])

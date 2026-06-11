@@ -258,8 +258,8 @@ def _deepseek_provider():
     )
 
 
-def _deepseek_request_overrides() -> dict:
-    effort = os.environ.get("PUPU_DEEPSEEK_EFFORT", "").strip().lower()
+def _deepseek_request_overrides(effort_override: str = "") -> dict:
+    effort = (effort_override or os.environ.get("PUPU_DEEPSEEK_EFFORT", "")).strip().lower()
     if not effort:
         return {}
 
@@ -326,13 +326,18 @@ class _DeepSeekAnthropicProvider:
         task_name: str = "json_task",
     ) -> str:
         model = self._default_model
+        request_overrides = self._request_overrides
+        if task_name == "event_graph_migration":
+            request_overrides = _deepseek_request_overrides(
+                os.environ.get("PUPU_DEEPSEEK_EVENT_GRAPH_MIGRATION_EFFORT", "high")
+            )
         return self._provider.json_task(
             model=model,
             system=system,
             user_content=user_content,
             max_tokens=max_tokens,
             temperature=temperature,
-            request_overrides=self._request_overrides,
+            request_overrides=request_overrides,
             task_name=task_name,
         )
 

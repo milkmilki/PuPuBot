@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 
 from ..llm import MODEL, json_task
+from ..storage.important_events import apply_event_thread_maintenance
 from .parsing import _parse_json_object
 from .prompt import (
     FACTS_MAINTENANCE_PROMPT,
@@ -210,46 +211,18 @@ def _run_important_event_compaction(conn, snapshot: dict, *, apply: bool = True)
         if note:
             notes.append(note)
 
-        if apply and drop_ids:
-            placeholders = ",".join("?" for _ in drop_ids)
-            cur = conn.execute(
-                f"DELETE FROM important_events WHERE id IN ({placeholders})",
-                drop_ids,
+        if apply:
+            dropped, updated = apply_event_thread_maintenance(
+                conn,
+                snapshot["session_id"],
+                drop_ids=drop_ids,
+                updates=updates,
+                now=datetime.now().isoformat(),
             )
-            dropped_total += cur.rowcount
+            dropped_total += dropped
+            updated_total += updated
         else:
             dropped_total += len(drop_ids)
-
-        if apply:
-            for update in updates:
-                row = chunk_by_id[int(update["id"])]
-                conn.execute(
-                    """
-                    UPDATE important_events
-                    SET title = ?,
-                        kind = ?,
-                        event_time = ?,
-                        time_text = ?,
-                        details = ?,
-                        followup_hint = ?,
-                        confidence = ?,
-                        last_seen_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        update.get("title") or row["title"],
-                        update.get("kind") or row["kind"],
-                        update.get("event_time") or None,
-                        update.get("time_text") or "",
-                        update.get("details") or "",
-                        update.get("followup_hint") or "",
-                        float(update.get("confidence", row.get("confidence") or 0.0)),
-                        datetime.now().isoformat(),
-                        int(update["id"]),
-                    ),
-                )
-                updated_total += 1
-        else:
             updated_total += len(updates)
 
         if apply and (drop_ids or updates):

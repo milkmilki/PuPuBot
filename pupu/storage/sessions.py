@@ -7,10 +7,18 @@ from .db import get_conn
 
 def reset_session(session_id: str):
     conn = get_conn()
+    conn.execute(
+        """DELETE FROM event_steps
+           WHERE thread_id IN (
+               SELECT id FROM event_threads WHERE session_id = ?
+           )""",
+        (session_id,),
+    )
     for table in (
         "messages",
         "familiarity",
         "events",
+        "event_threads",
         "important_events",
         "user_facts",
         "summaries",

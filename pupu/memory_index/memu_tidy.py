@@ -432,21 +432,9 @@ def analyze_memu_tidy(
 
 
 def _load_active_legacy_important_events(identity_session: str) -> list[dict[str, Any]]:
-    from ..storage.db import get_conn
+    from ..storage.important_events import get_recent_important_events
 
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            """SELECT source_event_key, title, kind, event_time, time_text,
-                      details, followup_hint, confidence, status, linked_task_id
-               FROM important_events
-               WHERE session_id = ? AND status IN ('active', 'scheduled')
-               ORDER BY last_seen_at DESC, created_at DESC, id DESC""",
-            (identity_session,),
-        ).fetchall()
-        return [dict(row) for row in rows]
-    finally:
-        conn.close()
+    return get_recent_important_events(identity_session, limit=None)
 
 
 def _sync_status_note(status: dict[str, Any]) -> str:

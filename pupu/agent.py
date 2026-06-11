@@ -17,6 +17,7 @@ from .llm import (
 from .memory import (
     count_pending_review_turns,
     get_familiarity,
+    find_related_event_threads,
     has_successful_memu_sync,
     get_important_events,
     get_oldest_unsummarized_msg_id,
@@ -40,9 +41,11 @@ from .message_sources import CHAT
 from .persona import build_batch_review_prompt, build_system_prompt, get_pupu_name
 from .review_followups import (
     apply_review_task_updates,
+    normalize_review_event_updates,
     normalize_review_important_events,
     normalize_review_task_drafts,
     normalize_review_task_updates,
+    save_review_event_updates,
     save_review_important_events,
 )
 from .tools import TOOL_DEFINITIONS, execute_tool, is_admin_tool
@@ -86,6 +89,7 @@ def _normalize_batch_review_result(value) -> dict:
             "familiarity_delta": 0,
             "user_facts": {},
             "self_facts": {},
+            "event_updates": [],
             "important_events": [],
             "task_updates": [],
         }
@@ -111,6 +115,21 @@ def _normalize_batch_review_result(value) -> dict:
                 }
             )
 
+    event_updates = normalize_review_event_updates(value.get("event_updates", []))
+    legacy_events = normalize_review_important_events(value.get("important_events", []))
+    if not event_updates:
+        event_updates = [
+            {
+                **event,
+                "action": "create_thread",
+                "thread_key": event.get("source_event_key"),
+                "summary": event.get("details") or event.get("title"),
+                "cause": "batch review legacy important_event",
+                "step_type": "user",
+            }
+            for event in legacy_events
+        ]
+
     return {
         "summary": str(value.get("summary", "")).strip(),
         "familiarity_delta": _normalize_familiarity_delta(
@@ -118,9 +137,8 @@ def _normalize_batch_review_result(value) -> dict:
         ),
         "user_facts": _normalize_fact_map(value.get("user_facts", {})),
         "self_facts": _normalize_fact_map(value.get("self_facts", {})),
-        "important_events": normalize_review_important_events(
-            value.get("important_events", [])
-        ),
+        "event_updates": event_updates,
+        "important_events": legacy_events,
         "task_updates": task_updates,
     }
 
@@ -221,6 +239,27 @@ def _format_active_scheduled_tasks_for_review(
         )
     if len(rows) > limit:
         lines.append(f"- 还有 {len(rows) - limit} 条未列出")
+    return "\n".join(lines)
+
+
+def _format_event_thread_candidates_for_review(identity_session: str, text: str) -> str:
+    candidates = find_related_event_threads(identity_session, text, limit=6)
+    if not candidates:
+        return "候选事件线：无"
+    lines = ["候选事件线（优先把新进展归并到这些 thread_key；确实无关才 create_thread）："]
+    for item in candidates:
+        key = str(item.get("source_event_key") or "")
+        title = str(item.get("title") or "未命名事件")
+        status = str(item.get("status") or "active")
+        current = str(item.get("current_summary") or item.get("details") or "")
+        hint = str(item.get("followup_hint") or item.get("merge_hint") or "")
+        score = float(item.get("score") or 0.0)
+        line = f"- thread_key={key} | score={score:.2f} | status={status} | title={title}"
+        if current:
+            line += f" | current={_compact_review_field(current, 120)}"
+        if hint:
+            line += f" | hint={_compact_review_field(hint, 100)}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -481,9 +520,15 @@ def _maybe_batch_review_unlocked(
             f"{'用户' if item['role'] == 'user' else character_name}: {item['content']}"
             for item in batch
         )
+        event_candidates_text = _format_event_thread_candidates_for_review(
+            identity_session,
+            conversation_text,
+        )
         conversation_text = (
             f"Current local time: {datetime.now().isoformat(timespec='seconds')}\n\n"
             + active_tasks_text
+            + "\n\n"
+            + event_candidates_text
             + "\n\n待整理对话：\n"
             + conversation_text
         )
@@ -531,6 +576,7 @@ def _maybe_batch_review_unlocked(
                 "familiarity_delta": 0,
                 "user_facts": {},
                 "self_facts": {},
+                "event_updates": [],
                 "important_events": [],
                 "task_updates": [],
             }
@@ -582,16 +628,24 @@ def _maybe_batch_review_unlocked(
         else:
             print("[pupu] batch review self_facts empty")
 
-        important_events = result.get("important_events", [])
+        event_updates = result.get("event_updates", [])
+        legacy_important_events = result.get("important_events", [])
         saved_event_rows = {}
-        if important_events:
-            saved_event_rows = save_review_important_events(identity_session, important_events)
+        if event_updates:
+            saved_event_rows = save_review_event_updates(identity_session, event_updates)
+            print(
+                "[pupu] batch review event_updates saved: "
+                f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"
+            )
+        elif legacy_important_events:
+            saved_event_rows = save_review_important_events(identity_session, legacy_important_events)
             print(
                 "[pupu] batch review important_events saved: "
                 f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"
             )
         else:
-            print("[pupu] batch review important_events empty")
+            print("[pupu] batch review event_updates empty")
+        important_events = list(saved_event_rows.values())
 
         task_updates = result.get("task_updates", [])
         if task_updates:
@@ -669,7 +723,7 @@ def _maybe_batch_review_unlocked(
             "[pupu] batch review done: "
             f"trigger={trigger}, messages_count={batch_turns}, summary_chars={len(summary)}, "
             f"familiarity_delta={familiarity_delta}, "
-            f"important_events={len(important_events)}, "
+            f"event_updates={len(event_updates)}, "
             f"task_updates={len(task_updates)}"
         )
     except Exception as exc:

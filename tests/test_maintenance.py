@@ -19,12 +19,14 @@ from pupu.maintenance import (
 from pupu.memory import (
     _get_conn,
     create_scheduled_task,
+    get_event_thread_steps,
     get_self_facts,
     get_user_facts,
     init_db,
     reset_session,
     save_message,
     save_summary,
+    upsert_important_events,
     upsert_self_facts,
     upsert_user_facts,
 )
@@ -42,9 +44,11 @@ class MaintenanceTests(unittest.TestCase):
         conn = _get_conn()
         try:
             for table in (
+                "event_steps",
                 "messages",
                 "familiarity",
                 "events",
+                "event_threads",
                 "important_events",
                 "user_facts",
                 "summaries",
@@ -512,6 +516,74 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(self_facts["喜欢的游戏"], "喜欢独立游戏")
         self.assertIn("- 模型删除事实：2", report)
         self.assertIn("- 模型更新事实：1", report)
+
+    def test_model_maintenance_updates_event_threads(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "movie-plan",
+                    "title": "一起看电影",
+                    "kind": "promise",
+                    "event_time": "2026-05-01",
+                    "time_text": "五一",
+                    "details": "用户和仆仆约好一起看电影",
+                    "followup_hint": "之后可以提起这件事",
+                    "confidence": 0.8,
+                },
+                {
+                    "source_event_key": "stale-plan",
+                    "title": "过期小事",
+                    "kind": "note",
+                    "details": "一次性小事",
+                    "confidence": 0.3,
+                },
+            ],
+        )
+        conn = _get_conn()
+        try:
+            thread_ids = {
+                row["key"]: int(row["id"])
+                for row in conn.execute(
+                    "SELECT id, key FROM event_threads WHERE session_id = ?",
+                    (self.session_id,),
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+
+        raw = f"""{{
+          "drop_ids": [{thread_ids["stale-plan"]}],
+          "updates": [
+            {{
+              "id": {thread_ids["movie-plan"]},
+              "title": "五一看电影约定",
+              "details": "用户和仆仆约定五一一起看电影，之后可以自然跟进。",
+              "confidence": 0.95
+            }}
+          ],
+          "notes": "保留更重要的约定"
+        }}"""
+
+        with patch("pupu.maintenance.model_compaction.json_task", return_value=raw):
+            report = run_memory_maintenance(
+                trigger="manual",
+                include_model=True,
+                now=datetime(2026, 4, 26, 3, 0, 0),
+            )
+
+        kept, kept_steps = get_event_thread_steps(self.session_id, "movie-plan")
+        dropped, dropped_steps = get_event_thread_steps(self.session_id, "stale-plan")
+
+        self.assertEqual(kept["title"], "五一看电影约定")
+        self.assertEqual(kept["time_text"], "五一")
+        self.assertEqual(kept["followup_hint"], "之后可以提起这件事")
+        self.assertEqual(kept["confidence"], 0.95)
+        self.assertIn("五一一起看电影", kept_steps[-1]["summary"])
+        self.assertEqual(dropped["status"], "dropped")
+        self.assertEqual(dropped_steps[-1]["step_type"], "system")
+        self.assertIn("- 模型删除重要事件：1", report)
+        self.assertIn("- 模型重排重要事件：1", report)
 
 
 if __name__ == "__main__":

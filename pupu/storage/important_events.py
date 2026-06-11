@@ -1,12 +1,18 @@
-"""Persistence helpers for important conversation events."""
+"""Event-thread persistence with legacy important_events compatibility."""
 
 from __future__ import annotations
 
 import hashlib
 import re
 from datetime import datetime
+from typing import Any
 
 from .db import get_conn
+
+ACTIVE_EVENT_STATUSES = ("active", "scheduled")
+VALID_STEP_TYPES = {"time", "user", "instance", "system"}
+LEGACY_SIMPLE_MIGRATION_CAUSE = "从旧 important_events 迁移为事件线"
+LEGACY_MODEL_MIGRATION_CAUSE = "从旧 important_events 经模型迁移"
 
 
 def _resolve_identity_session(session_id: str = "default", identity_session: str | None = None) -> str:
@@ -24,6 +30,7 @@ def derive_source_event_key(
     raw = str(source_event_key or "").strip().lower()
     if raw:
         normalized = re.sub(r"\s+", "-", raw)
+        normalized = re.sub(r"[^0-9a-zA-Z_\-\u4e00-\u9fff]+", "-", normalized)
         normalized = normalized[:160].strip("-")
         if normalized:
             return normalized
@@ -39,93 +46,735 @@ def derive_source_event_key(
     return f"event-{digest}"
 
 
+def _text(value: Any, fallback: str = "") -> str:
+    return str(value if value is not None else fallback).strip()
+
+
+def _now() -> str:
+    return datetime.now().isoformat()
+
+
+def _tokens(value: str) -> set[str]:
+    text = str(value or "").lower()
+    raw_tokens = re.split(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", text)
+    out = {token for token in raw_tokens if len(token) >= 2}
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        out.update(chunk[i : i + 2] for i in range(max(0, len(chunk) - 1)))
+        out.update(chunk[i : i + 3] for i in range(max(0, len(chunk) - 2)))
+    return out
+
+
+def _search_text_from_parts(*parts: Any) -> str:
+    return " ".join(str(part or "").strip() for part in parts if str(part or "").strip())
+
+
+def _legacy_row_from_thread(row: dict[str, Any]) -> dict[str, Any]:
+    details = _text(row.get("current_summary")) or _text(row.get("search_text"))
+    if _text(row.get("current_cause")):
+        details = details or _text(row.get("current_cause"))
+    return {
+        "id": row.get("id"),
+        "session_id": row.get("session_id"),
+        "source_event_key": row.get("key"),
+        "title": row.get("title") or "未命名事件",
+        "kind": row.get("kind") or "",
+        "event_time": row.get("event_time"),
+        "time_text": row.get("time_text") or "",
+        "details": details,
+        "followup_hint": row.get("followup_hint") or "",
+        "confidence": float(row.get("confidence") or 0.0),
+        "status": row.get("status") or "active",
+        "linked_task_id": row.get("linked_task_id"),
+        "last_seen_at": row.get("updated_at"),
+        "created_at": row.get("created_at"),
+        "current_step_id": row.get("current_step_id"),
+        "current_summary": row.get("current_summary") or "",
+        "current_cause": row.get("current_cause") or "",
+        "current_reflection": row.get("current_reflection") or "",
+        "search_text": row.get("search_text") or "",
+        "merge_hint": row.get("merge_hint") or "",
+    }
+
+
+def _thread_select_sql() -> str:
+    return """
+        SELECT t.id, t.session_id, t.key, t.title, t.kind, t.status,
+               t.current_step_id, t.event_time, t.time_text, t.followup_hint,
+               t.confidence, t.linked_task_id, t.search_text, t.merge_hint,
+               t.created_at, t.updated_at,
+               s.summary AS current_summary,
+               s.cause AS current_cause,
+               s.reflection AS current_reflection
+        FROM event_threads t
+        LEFT JOIN event_steps s ON s.id = t.current_step_id
+    """
+
+
+def _fetch_thread_by_key(conn, session_id: str, key: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        _thread_select_sql() + " WHERE t.session_id = ? AND t.key = ?",
+        (session_id, key),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _fetch_thread_by_id(conn, thread_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        _thread_select_sql() + " WHERE t.id = ?",
+        (int(thread_id),),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _fetch_thread_by_legacy_id(conn, session_id: str, legacy_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        _thread_select_sql() + " WHERE t.session_id = ? AND t.id = ?",
+        (session_id, int(legacy_id)),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def _rebuild_thread_search_text(conn, thread_id: int) -> str:
+    thread = conn.execute(
+        """SELECT title, kind, event_time, time_text, followup_hint, merge_hint
+           FROM event_threads WHERE id = ?""",
+        (int(thread_id),),
+    ).fetchone()
+    if not thread:
+        return ""
+    steps = conn.execute(
+        """SELECT summary, cause, reflection
+           FROM event_steps
+           WHERE thread_id = ?
+           ORDER BY id DESC
+           LIMIT 4""",
+        (int(thread_id),),
+    ).fetchall()
+    search_text = _search_text_from_parts(
+        thread["title"],
+        thread["kind"],
+        thread["event_time"],
+        thread["time_text"],
+        thread["followup_hint"],
+        thread["merge_hint"],
+        *(
+            _search_text_from_parts(step["summary"], step["cause"], step["reflection"])
+            for step in steps
+        ),
+    )
+    conn.execute(
+        "UPDATE event_threads SET search_text = ? WHERE id = ?",
+        (search_text, int(thread_id)),
+    )
+    return search_text
+
+
+def _append_event_step(
+    conn,
+    thread_id: int,
+    *,
+    step_type: str,
+    summary: str,
+    cause: str = "",
+    reflection: str = "",
+    occurred_at: str | None = None,
+    source_msg_start_id: int | None = None,
+    source_msg_end_id: int | None = None,
+    created_at: str | None = None,
+) -> int:
+    created_at = created_at or _now()
+    normalized_type = str(step_type or "user").strip().lower()
+    if normalized_type not in VALID_STEP_TYPES:
+        normalized_type = "user"
+    summary_text = _text(summary)
+    if normalized_type == "time" and summary_text and not any(
+        marker in summary_text for marker in ("可能", "推测", "大概", "也许")
+    ):
+        summary_text = "推测：" + summary_text
+    cursor = conn.execute(
+        """INSERT INTO event_steps (
+               thread_id, step_type, summary, cause, reflection, occurred_at,
+               source_msg_start_id, source_msg_end_id, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            int(thread_id),
+            normalized_type,
+            summary_text,
+            _text(cause),
+            _text(reflection),
+            _text(occurred_at) or None,
+            source_msg_start_id,
+            source_msg_end_id,
+            created_at,
+        ),
+    )
+    step_id = int(cursor.lastrowid)
+    conn.execute(
+        "UPDATE event_threads SET current_step_id = ?, updated_at = ? WHERE id = ?",
+        (step_id, created_at, int(thread_id)),
+    )
+    _rebuild_thread_search_text(conn, int(thread_id))
+    return step_id
+
+
+def append_event_step(
+    session_id: str,
+    key: str,
+    *,
+    step_type: str,
+    summary: str,
+    cause: str = "",
+    reflection: str = "",
+    occurred_at: str | None = None,
+    source_msg_start_id: int | None = None,
+    source_msg_end_id: int | None = None,
+    identity_session: str | None = None,
+) -> dict[str, Any] | None:
+    session_id = _resolve_identity_session(session_id, identity_session)
+    normalized_key = derive_source_event_key(key)
+    conn = get_conn()
+    try:
+        thread = _fetch_thread_by_key(conn, session_id, normalized_key)
+        if not thread:
+            return None
+        _append_event_step(
+            conn,
+            int(thread["id"]),
+            step_type=step_type,
+            summary=summary,
+            cause=cause,
+            reflection=reflection,
+            occurred_at=occurred_at,
+            source_msg_start_id=source_msg_start_id,
+            source_msg_end_id=source_msg_end_id,
+        )
+        conn.commit()
+        updated = _fetch_thread_by_key(conn, session_id, normalized_key)
+        return _legacy_row_from_thread(updated) if updated else None
+    finally:
+        conn.close()
+
+
+def _upsert_thread_from_event(conn, session_id: str, event: dict[str, Any], now: str) -> dict[str, Any] | None:
+    title = _text(event.get("title"), "未命名事件")
+    kind = _text(event.get("kind")).lower()
+    event_time = _text(event.get("event_time")) or None
+    time_text = _text(event.get("time_text"))
+    details = _text(event.get("details"))
+    followup_hint = _text(event.get("followup_hint"))
+    merge_hint = _text(event.get("merge_hint")) or followup_hint
+    try:
+        confidence = max(0.0, min(1.0, float(event.get("confidence") or 0.0)))
+    except Exception:
+        confidence = 0.0
+    status = _text(event.get("status"), "active") or "active"
+    key = derive_source_event_key(
+        event.get("source_event_key") or event.get("thread_key") or event.get("key"),
+        title=title,
+        kind=kind,
+        event_time=event_time or "",
+        time_text=time_text,
+    )
+    row = _fetch_thread_by_key(conn, session_id, key)
+    if row is None:
+        search_text = _search_text_from_parts(title, kind, event_time, time_text, details, followup_hint, merge_hint)
+        cursor = conn.execute(
+            """INSERT INTO event_threads (
+                   session_id, key, title, kind, status, event_time, time_text,
+                   followup_hint, confidence, linked_task_id, search_text,
+                   merge_hint, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session_id,
+                key,
+                title,
+                kind,
+                status,
+                event_time,
+                time_text,
+                followup_hint,
+                confidence,
+                event.get("linked_task_id"),
+                search_text,
+                merge_hint,
+                now,
+                now,
+            ),
+        )
+        thread_id = int(cursor.lastrowid)
+        _append_event_step(
+            conn,
+            thread_id,
+            step_type=_text(event.get("step_type"), "user"),
+            summary=details or title,
+            cause=_text(event.get("cause")) or "事件被首次记录",
+            reflection=_text(event.get("reflection")),
+            occurred_at=event_time,
+            source_msg_start_id=event.get("source_msg_start_id"),
+            source_msg_end_id=event.get("source_msg_end_id"),
+            created_at=now,
+        )
+        return _fetch_thread_by_id(conn, thread_id)
+
+    thread_id = int(row["id"])
+    conn.execute(
+        """UPDATE event_threads
+           SET title = ?, kind = ?, event_time = ?, time_text = ?, followup_hint = ?,
+               confidence = ?, status = CASE
+                   WHEN linked_task_id IS NOT NULL THEN status
+                   ELSE ?
+               END,
+               linked_task_id = linked_task_id,
+               merge_hint = ?,
+               updated_at = ?
+           WHERE id = ?""",
+        (
+            title,
+            kind,
+            event_time,
+            time_text,
+            followup_hint,
+            confidence,
+            status,
+            merge_hint,
+            now,
+            thread_id,
+        ),
+    )
+    current_summary = _text(row.get("current_summary"))
+    if details and details != current_summary:
+        _append_event_step(
+            conn,
+            thread_id,
+            step_type=_text(event.get("step_type"), "user"),
+            summary=details,
+            cause=_text(event.get("cause")) or "事件线收到新的进展",
+            reflection=_text(event.get("reflection")),
+            occurred_at=event_time,
+            source_msg_start_id=event.get("source_msg_start_id"),
+            source_msg_end_id=event.get("source_msg_end_id"),
+            created_at=now,
+        )
+    else:
+        _rebuild_thread_search_text(conn, thread_id)
+    return _fetch_thread_by_id(conn, thread_id)
+
+
+def _event_text_for_match(event: dict[str, Any]) -> str:
+    return _search_text_from_parts(
+        event.get("title"),
+        event.get("kind"),
+        event.get("event_time"),
+        event.get("time_text"),
+        event.get("details"),
+        event.get("followup_hint"),
+        event.get("summary"),
+        event.get("cause"),
+    )
+
+
+def _best_related_thread(conn, session_id: str, event: dict[str, Any]) -> dict[str, Any] | None:
+    explicit_key = _text(event.get("thread_key") or event.get("existing_thread_key"))
+    if explicit_key:
+        row = _fetch_thread_by_key(conn, session_id, derive_source_event_key(explicit_key))
+        if row:
+            return row
+    candidates = find_related_event_threads(
+        session_id,
+        _event_text_for_match(event),
+        limit=1,
+        _conn=conn,
+    )
+    if candidates and float(candidates[0].get("score") or 0.0) >= 0.32:
+        return candidates[0]
+    return None
+
+
 def upsert_important_events(
     session_id: str,
     events: list[dict],
     *,
     identity_session: str | None = None,
 ) -> list[dict]:
+    """Legacy API: write events into event_threads/event_steps."""
     session_id = _resolve_identity_session(session_id, identity_session)
     if not events:
         return []
 
     conn = get_conn()
-    now = datetime.now().isoformat()
-    rows = []
+    now = _now()
+    rows: list[dict] = []
     try:
         for event in events:
-            source_event_key = derive_source_event_key(
-                event.get("source_event_key"),
-                title=str(event.get("title", "")),
-                kind=str(event.get("kind", "")),
-                event_time=str(event.get("event_time", "")),
-                time_text=str(event.get("time_text", "")),
-            )
-            conn.execute(
-                """
-                INSERT INTO important_events (
-                    session_id,
-                    source_event_key,
+            if not isinstance(event, dict):
+                continue
+            action = _text(event.get("action") or "upsert").lower()
+            if action == "append_step":
+                target = _best_related_thread(conn, session_id, event)
+                if not target:
+                    target = _upsert_thread_from_event(conn, session_id, event, now)
+                if target:
+                    summary = _text(event.get("summary") or event.get("details") or target.get("title"))
+                    if summary:
+                        _append_event_step(
+                            conn,
+                            int(target["id"]),
+                            step_type=_text(event.get("step_type"), "user"),
+                            summary=summary,
+                            cause=_text(event.get("cause")) or "事件线收到新的进展",
+                            reflection=_text(event.get("reflection")),
+                            occurred_at=_text(event.get("occurred_at") or event.get("event_time")) or None,
+                            source_msg_start_id=event.get("source_msg_start_id"),
+                            source_msg_end_id=event.get("source_msg_end_id"),
+                            created_at=now,
+                        )
+                    updated = _fetch_thread_by_id(conn, int(target["id"]))
+                    if updated:
+                        rows.append(_legacy_row_from_thread(updated))
+                continue
+
+            target = None
+            if not _text(event.get("source_event_key") or event.get("key") or event.get("thread_key")):
+                target = _best_related_thread(conn, session_id, event)
+            if target is not None:
+                target_key = target.get("key") or target.get("source_event_key")
+                event = {**event, "source_event_key": target_key, "action": "append_step"}
+                summary = _text(event.get("summary") or event.get("details") or event.get("title"))
+                if summary:
+                    _append_event_step(
+                        conn,
+                        int(target["id"]),
+                        step_type=_text(event.get("step_type"), "user"),
+                        summary=summary,
+                        cause=_text(event.get("cause")) or "相似事件被归并到已有事件线",
+                        reflection=_text(event.get("reflection")),
+                        occurred_at=_text(event.get("occurred_at") or event.get("event_time")) or None,
+                        source_msg_start_id=event.get("source_msg_start_id"),
+                        source_msg_end_id=event.get("source_msg_end_id"),
+                        created_at=now,
+                    )
+                updated = _fetch_thread_by_id(conn, int(target["id"]))
+            else:
+                updated = _upsert_thread_from_event(conn, session_id, event, now)
+            if updated:
+                rows.append(_legacy_row_from_thread(updated))
+        conn.commit()
+    finally:
+        conn.close()
+    return rows
+
+
+def migrate_legacy_important_events(
+    session_id: str,
+    *,
+    identity_session: str | None = None,
+) -> dict[str, Any]:
+    """Copy legacy important_events rows into event_threads/event_steps.
+
+    The old table is left intact. The migration is keyed by the normalized
+    legacy source_event_key, so running it repeatedly only fills missing
+    threads and does not create duplicate steps.
+    """
+    session_id = _resolve_identity_session(session_id, identity_session)
+    conn = get_conn()
+    now = _now()
+    result: dict[str, Any] = {
+        "legacy": 0,
+        "created": 0,
+        "skipped": 0,
+        "failed": 0,
+        "errors": [],
+    }
+    try:
+        legacy_rows = conn.execute(
+            """SELECT id, session_id, source_event_key, title, kind, event_time,
+                      time_text, details, followup_hint, confidence, status,
+                      linked_task_id, last_seen_at, created_at
+               FROM important_events
+               WHERE session_id = ?
+               ORDER BY last_seen_at ASC, created_at ASC, id ASC""",
+            (session_id,),
+        ).fetchall()
+        result["legacy"] = len(legacy_rows)
+
+        for raw in legacy_rows:
+            row = dict(raw)
+            try:
+                title = _text(row.get("title"), "未命名事件")
+                kind = _text(row.get("kind")).lower()
+                event_time = _text(row.get("event_time")) or None
+                time_text = _text(row.get("time_text"))
+                details = _text(row.get("details"))
+                followup_hint = _text(row.get("followup_hint"))
+                status = _text(row.get("status"), "active") or "active"
+                created_at = _text(row.get("created_at")) or now
+                updated_at = _text(row.get("last_seen_at")) or created_at
+                try:
+                    confidence = max(0.0, min(1.0, float(row.get("confidence") or 0.0)))
+                except Exception:
+                    confidence = 0.0
+                key = derive_source_event_key(
+                    row.get("source_event_key"),
+                    title=title,
+                    kind=kind,
+                    event_time=event_time or "",
+                    time_text=time_text,
+                )
+                if _fetch_thread_by_key(conn, session_id, key):
+                    result["skipped"] += 1
+                    continue
+
+                merge_hint = followup_hint
+                search_text = _search_text_from_parts(
                     title,
                     kind,
                     event_time,
                     time_text,
                     details,
                     followup_hint,
-                    confidence,
-                    status,
-                    linked_task_id,
-                    last_seen_at,
-                    created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id, source_event_key) DO UPDATE SET
-                    title = excluded.title,
-                    kind = excluded.kind,
-                    event_time = excluded.event_time,
-                    time_text = excluded.time_text,
-                    details = excluded.details,
-                    followup_hint = excluded.followup_hint,
-                    confidence = excluded.confidence,
-                    status = CASE
-                        WHEN important_events.linked_task_id IS NOT NULL
-                            THEN important_events.status
-                        ELSE excluded.status
-                    END,
-                    linked_task_id = important_events.linked_task_id,
-                    last_seen_at = excluded.last_seen_at
-                """,
-                (
-                    session_id,
-                    source_event_key,
-                    str(event.get("title") or "未命名事件").strip(),
-                    str(event.get("kind") or "").strip(),
-                    str(event.get("event_time") or "").strip() or None,
-                    str(event.get("time_text") or "").strip(),
-                    str(event.get("details") or "").strip(),
-                    str(event.get("followup_hint") or "").strip(),
-                    float(event.get("confidence") or 0.0),
-                    str(event.get("status") or "active").strip() or "active",
-                    event.get("linked_task_id"),
-                    now,
-                    now,
-                ),
-            )
-            row = conn.execute(
-                """
-                SELECT id, session_id, source_event_key, title, kind, event_time, time_text,
-                       details, followup_hint, confidence, status, linked_task_id,
-                       last_seen_at, created_at
-                FROM important_events
-                WHERE session_id = ? AND source_event_key = ?
-                """,
-                (session_id, source_event_key),
-            ).fetchone()
-            if row:
-                rows.append(dict(row))
+                    merge_hint,
+                )
+                cursor = conn.execute(
+                    """INSERT INTO event_threads (
+                           session_id, key, title, kind, status, event_time,
+                           time_text, followup_hint, confidence, linked_task_id,
+                           search_text, merge_hint, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        session_id,
+                        key,
+                        title,
+                        kind,
+                        status,
+                        event_time,
+                        time_text,
+                        followup_hint,
+                        confidence,
+                        row.get("linked_task_id"),
+                        search_text,
+                        merge_hint,
+                        created_at,
+                        updated_at,
+                    ),
+                )
+                _append_event_step(
+                    conn,
+                    int(cursor.lastrowid),
+                    step_type="system",
+                    summary=details or title,
+                    cause=LEGACY_SIMPLE_MIGRATION_CAUSE,
+                    occurred_at=event_time,
+                    created_at=updated_at,
+                )
+                result["created"] += 1
+            except Exception as exc:
+                result["failed"] += 1
+                if len(result["errors"]) < 5:
+                    result["errors"].append(f"{row.get('source_event_key') or row.get('id')}: {exc}")
+
         conn.commit()
     finally:
         conn.close()
-    return rows
+    return result
+
+
+def get_legacy_important_events_for_migration(
+    session_id: str,
+    *,
+    identity_session: str | None = None,
+) -> list[dict[str, Any]]:
+    session_id = _resolve_identity_session(session_id, identity_session)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id, session_id, source_event_key, title, kind, event_time,
+                      time_text, details, followup_hint, confidence, status,
+                      linked_task_id, last_seen_at, created_at
+               FROM important_events
+               WHERE session_id = ?
+               ORDER BY last_seen_at ASC, created_at ASC, id ASC""",
+            (session_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _delete_simple_migrated_threads(conn, session_id: str) -> int:
+    rows = conn.execute(
+        """SELECT t.id
+           FROM event_threads t
+           JOIN event_steps s ON s.thread_id = t.id
+           WHERE t.session_id = ?
+           GROUP BY t.id
+           HAVING COUNT(s.id) = 1
+              AND MAX(s.step_type) = 'system'
+              AND MAX(s.cause) = ?""",
+        (session_id, LEGACY_SIMPLE_MIGRATION_CAUSE),
+    ).fetchall()
+    thread_ids = [int(row["id"]) for row in rows]
+    if not thread_ids:
+        return 0
+    placeholders = ",".join("?" for _ in thread_ids)
+    conn.execute(
+        f"DELETE FROM event_steps WHERE thread_id IN ({placeholders})",
+        tuple(thread_ids),
+    )
+    cursor = conn.execute(
+        f"DELETE FROM event_threads WHERE id IN ({placeholders})",
+        tuple(thread_ids),
+    )
+    return max(0, int(cursor.rowcount))
+
+
+def migrate_legacy_important_events_from_plan(
+    session_id: str,
+    threads: list[dict[str, Any]],
+    *,
+    identity_session: str | None = None,
+    reset_simple_migration: bool = True,
+) -> dict[str, Any]:
+    """Apply a model-produced legacy-event migration plan."""
+    session_id = _resolve_identity_session(session_id, identity_session)
+    conn = get_conn()
+    now = _now()
+    result: dict[str, Any] = {
+        "legacy": 0,
+        "planned": len(threads or []),
+        "created": 0,
+        "skipped": 0,
+        "steps": 0,
+        "removed_simple": 0,
+        "failed": 0,
+        "errors": [],
+    }
+    try:
+        result["legacy"] = conn.execute(
+            "SELECT COUNT(*) AS c FROM important_events WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()["c"]
+        if reset_simple_migration:
+            result["removed_simple"] = _delete_simple_migrated_threads(conn, session_id)
+
+        for item in threads or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                title = _text(item.get("title"), "未命名事件")
+                kind = _text(item.get("kind")).lower()
+                event_time = _text(item.get("event_time")) or None
+                time_text = _text(item.get("time_text"))
+                followup_hint = _text(item.get("followup_hint"))
+                merge_hint = _text(item.get("merge_hint")) or followup_hint
+                status = _text(item.get("status"), "active") or "active"
+                try:
+                    confidence = max(0.0, min(1.0, float(item.get("confidence") or 0.0)))
+                except Exception:
+                    confidence = 0.0
+                key = derive_source_event_key(
+                    item.get("key") or item.get("source_event_key") or item.get("thread_key"),
+                    title=title,
+                    kind=kind,
+                    event_time=event_time or "",
+                    time_text=time_text,
+                )
+                if _fetch_thread_by_key(conn, session_id, key):
+                    result["skipped"] += 1
+                    continue
+
+                raw_steps = item.get("steps")
+                if not isinstance(raw_steps, list) or not raw_steps:
+                    raw_steps = [
+                        {
+                            "step_type": item.get("step_type") or "system",
+                            "summary": item.get("summary") or item.get("details") or title,
+                            "cause": item.get("cause") or LEGACY_MODEL_MIGRATION_CAUSE,
+                            "reflection": item.get("reflection") or "",
+                            "occurred_at": event_time,
+                        }
+                    ]
+                search_text = _search_text_from_parts(
+                    title,
+                    kind,
+                    event_time,
+                    time_text,
+                    followup_hint,
+                    merge_hint,
+                    *(
+                        _search_text_from_parts(
+                            step.get("summary"),
+                            step.get("cause"),
+                            step.get("reflection"),
+                        )
+                        for step in raw_steps
+                        if isinstance(step, dict)
+                    ),
+                )
+                cursor = conn.execute(
+                    """INSERT INTO event_threads (
+                           session_id, key, title, kind, status, event_time,
+                           time_text, followup_hint, confidence, linked_task_id,
+                           search_text, merge_hint, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        session_id,
+                        key,
+                        title,
+                        kind,
+                        status,
+                        event_time,
+                        time_text,
+                        followup_hint,
+                        confidence,
+                        item.get("linked_task_id"),
+                        search_text,
+                        merge_hint,
+                        now,
+                        now,
+                    ),
+                )
+                thread_id = int(cursor.lastrowid)
+                created_steps = 0
+                for step in raw_steps:
+                    if not isinstance(step, dict):
+                        continue
+                    summary = _text(step.get("summary") or step.get("details"))
+                    if not summary:
+                        continue
+                    cause = _text(step.get("cause")) or LEGACY_MODEL_MIGRATION_CAUSE
+                    _append_event_step(
+                        conn,
+                        thread_id,
+                        step_type=_text(step.get("step_type"), "system"),
+                        summary=summary,
+                        cause=cause,
+                        reflection=_text(step.get("reflection")),
+                        occurred_at=_text(step.get("occurred_at") or step.get("event_time")) or event_time,
+                        created_at=_text(step.get("created_at")) or now,
+                    )
+                    created_steps += 1
+                if created_steps == 0:
+                    _append_event_step(
+                        conn,
+                        thread_id,
+                        step_type="system",
+                        summary=title,
+                        cause=LEGACY_MODEL_MIGRATION_CAUSE,
+                        occurred_at=event_time,
+                        created_at=now,
+                    )
+                    created_steps = 1
+                result["created"] += 1
+                result["steps"] += created_steps
+            except Exception as exc:
+                result["failed"] += 1
+                if len(result["errors"]) < 5:
+                    result["errors"].append(f"{item.get('key') or item.get('title')}: {exc}")
+
+        conn.commit()
+    finally:
+        conn.close()
+    return result
 
 
 def get_important_event_by_key(
@@ -138,68 +787,61 @@ def get_important_event_by_key(
     normalized_key = derive_source_event_key(source_event_key)
     conn = get_conn()
     try:
-        row = conn.execute(
-            """
-            SELECT id, session_id, source_event_key, title, kind, event_time, time_text,
-                   details, followup_hint, confidence, status, linked_task_id,
-                   last_seen_at, created_at
-            FROM important_events
-            WHERE session_id = ? AND source_event_key = ?
-            """,
-            (session_id, normalized_key),
-        ).fetchone()
-        return dict(row) if row else None
+        row = _fetch_thread_by_key(conn, session_id, normalized_key)
+        return _legacy_row_from_thread(row) if row else None
     finally:
         conn.close()
+
+
+def _status_placeholders(statuses: tuple[str, ...]) -> str:
+    return ",".join("?" for _ in statuses)
+
+
+def _parse_event_time(value: str) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if len(raw) == 10:
+            return datetime.fromisoformat(raw + "T23:59:59")
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone().replace(tzinfo=None)
+        return parsed
+    except Exception:
+        return None
 
 
 def get_important_events(
     session_id: str,
     limit: int = 8,
-    statuses: tuple[str, ...] = ("active", "scheduled"),
+    statuses: tuple[str, ...] = ACTIVE_EVENT_STATUSES,
     *,
     identity_session: str | None = None,
 ) -> list[dict]:
     session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     try:
-        placeholders = ",".join("?" for _ in statuses)
+        placeholders = _status_placeholders(statuses)
         rows = conn.execute(
-            f"""
-            SELECT id, session_id, source_event_key, title, kind, event_time, time_text,
-                   details, followup_hint, confidence, status, linked_task_id,
-                   last_seen_at, created_at
-            FROM important_events
-            WHERE session_id = ? AND status IN ({placeholders})
-            """,
+            _thread_select_sql()
+            + f" WHERE t.session_id = ? AND t.status IN ({placeholders})",
             (session_id, *statuses),
         ).fetchall()
     finally:
         conn.close()
 
     now = datetime.now()
+    items = [_legacy_row_from_thread(dict(row)) for row in rows]
 
     def _sort_key(row: dict):
-        raw_time = str(row.get("event_time") or "").strip()
-        parsed = None
-        if raw_time:
-            try:
-                if len(raw_time) == 10:
-                    parsed = datetime.fromisoformat(raw_time + "T23:59:59")
-                else:
-                    parsed = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
-                    if parsed.tzinfo is not None:
-                        parsed = parsed.astimezone().replace(tzinfo=None)
-            except Exception:
-                parsed = None
-
+        parsed = _parse_event_time(str(row.get("event_time") or ""))
         if parsed is not None and parsed >= now:
             return (0, parsed, -float(row.get("confidence") or 0.0))
         if parsed is None:
             return (1, datetime.max, -float(row.get("confidence") or 0.0))
         return (2, parsed, -float(row.get("confidence") or 0.0))
 
-    items = [dict(row) for row in rows]
     items.sort(key=_sort_key)
     return items[:limit]
 
@@ -207,23 +849,22 @@ def get_important_events(
 def get_recent_important_events(
     session_id: str,
     limit: int | None = None,
-    statuses: tuple[str, ...] = ("active", "scheduled"),
+    statuses: tuple[str, ...] = ACTIVE_EVENT_STATUSES,
     *,
     identity_session: str | None = None,
 ) -> list[dict]:
-    """Return report-ordered important events; ``limit=None`` returns all."""
+    """Return report-ordered event threads; ``limit=None`` returns all."""
     session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     try:
-        placeholders = ",".join("?" for _ in statuses)
-        sql = f"""
-            SELECT id, session_id, source_event_key, title, kind, event_time, time_text,
-                   details, followup_hint, confidence, status, linked_task_id,
-                   last_seen_at, created_at
-            FROM important_events
-            WHERE session_id = ? AND status IN ({placeholders})
-            ORDER BY last_seen_at DESC, created_at DESC, id DESC
+        placeholders = _status_placeholders(statuses)
+        sql = (
+            _thread_select_sql()
+            + f"""
+              WHERE t.session_id = ? AND t.status IN ({placeholders})
+              ORDER BY t.updated_at DESC, t.created_at DESC, t.id DESC
             """
+        )
         params: tuple[object, ...] = (session_id, *statuses)
         if limit is not None:
             sql += " LIMIT ?"
@@ -231,7 +872,126 @@ def get_recent_important_events(
         rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
-    return [dict(row) for row in rows]
+    return [_legacy_row_from_thread(dict(row)) for row in rows]
+
+
+def get_recent_important_events_from_conn(
+    conn,
+    session_id: str,
+    limit: int | None = None,
+    statuses: tuple[str, ...] = ACTIVE_EVENT_STATUSES,
+) -> list[dict[str, Any]]:
+    """Connection-scoped variant for maintenance snapshots."""
+    session_id = _resolve_identity_session(session_id)
+    placeholders = _status_placeholders(statuses)
+    sql = (
+        _thread_select_sql()
+        + f"""
+          WHERE t.session_id = ? AND t.status IN ({placeholders})
+          ORDER BY t.updated_at DESC, t.created_at DESC, t.id DESC
+        """
+    )
+    params: tuple[object, ...] = (session_id, *statuses)
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (*params, int(limit))
+    rows = conn.execute(sql, params).fetchall()
+    return [_legacy_row_from_thread(dict(row)) for row in rows]
+
+
+def get_event_thread_steps(
+    session_id: str,
+    key: str,
+    *,
+    identity_session: str | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    session_id = _resolve_identity_session(session_id, identity_session)
+    normalized_key = derive_source_event_key(key)
+    conn = get_conn()
+    try:
+        thread = _fetch_thread_by_key(conn, session_id, normalized_key)
+        if not thread:
+            return None, []
+        rows = conn.execute(
+            """SELECT id, thread_id, step_type, summary, cause, reflection,
+                      occurred_at, source_msg_start_id, source_msg_end_id, created_at
+               FROM event_steps
+               WHERE thread_id = ?
+               ORDER BY id ASC""",
+            (int(thread["id"]),),
+        ).fetchall()
+        return _legacy_row_from_thread(thread), [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def find_related_event_threads(
+    session_id: str,
+    text: str,
+    limit: int = 5,
+    *,
+    statuses: tuple[str, ...] = ACTIVE_EVENT_STATUSES,
+    _conn=None,
+) -> list[dict[str, Any]]:
+    session_id = _resolve_identity_session(session_id)
+    query_text = _text(text)
+    query_tokens = _tokens(query_text)
+    if not query_tokens:
+        return []
+
+    conn = _conn or get_conn()
+    close_conn = _conn is None
+    try:
+        placeholders = _status_placeholders(statuses)
+        rows = conn.execute(
+            _thread_select_sql()
+            + f" WHERE t.session_id = ? AND t.status IN ({placeholders})",
+            (session_id, *statuses),
+        ).fetchall()
+    finally:
+        if close_conn:
+            conn.close()
+
+    now = datetime.now()
+    scored: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        legacy = _legacy_row_from_thread(row)
+        haystack = _search_text_from_parts(
+            legacy.get("title"),
+            legacy.get("details"),
+            legacy.get("followup_hint"),
+            legacy.get("search_text"),
+            legacy.get("merge_hint"),
+        )
+        hay_tokens = _tokens(haystack)
+        if not hay_tokens:
+            continue
+        overlap = len(query_tokens & hay_tokens)
+        if overlap <= 0:
+            continue
+        base = overlap / max(1, min(len(query_tokens), len(hay_tokens)))
+        status_bonus = 0.12 if legacy.get("status") in ACTIVE_EVENT_STATUSES else 0.0
+        recent_bonus = 0.0
+        try:
+            updated = datetime.fromisoformat(str(legacy.get("last_seen_at") or ""))
+            age_days = max(0.0, (now - updated).total_seconds() / 86400)
+            recent_bonus = max(0.0, 0.18 - min(age_days, 30) * 0.006)
+        except Exception:
+            pass
+        score = min(1.0, base + status_bonus + recent_bonus)
+        legacy["score"] = score
+        legacy["reason_for_match"] = "matched: " + ", ".join(sorted((query_tokens & hay_tokens))[:8])
+        scored.append(legacy)
+
+    scored.sort(
+        key=lambda item: (
+            float(item.get("score") or 0.0),
+            str(item.get("last_seen_at") or ""),
+        ),
+        reverse=True,
+    )
+    return scored[: max(1, int(limit))]
 
 
 def link_important_event_task(
@@ -245,21 +1005,254 @@ def link_important_event_task(
     session_id = _resolve_identity_session(session_id, identity_session)
     normalized_key = derive_source_event_key(source_event_key)
     conn = get_conn()
+    now = _now()
     try:
-        conn.execute(
-            """
-            UPDATE important_events
-            SET linked_task_id = ?, status = ?, last_seen_at = ?
-            WHERE session_id = ? AND source_event_key = ?
-            """,
-            (
-                int(task_id),
-                status,
-                datetime.now().isoformat(),
-                session_id,
-                normalized_key,
-            ),
-        )
+        row = _fetch_thread_by_key(conn, session_id, normalized_key)
+        if row:
+            conn.execute(
+                """UPDATE event_threads
+                   SET linked_task_id = ?, status = ?, updated_at = ?
+                   WHERE session_id = ? AND key = ?""",
+                (int(task_id), status, now, session_id, normalized_key),
+            )
+            _append_event_step(
+                conn,
+                int(row["id"]),
+                step_type="system",
+                summary=f"已关联定时任务 #{int(task_id)}",
+                cause="系统根据事件创建或更新提醒任务",
+                created_at=now,
+            )
         conn.commit()
     finally:
         conn.close()
+
+
+def update_event_threads_for_task(
+    session_id: str | None,
+    task_id: int,
+    *,
+    status: str,
+    summary: str,
+    cause: str = "",
+) -> int:
+    conn = get_conn()
+    now = _now()
+    changed = 0
+    try:
+        if session_id:
+            rows = conn.execute(
+                "SELECT id FROM event_threads WHERE session_id = ? AND linked_task_id = ?",
+                (session_id, int(task_id)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id FROM event_threads WHERE linked_task_id = ?",
+                (int(task_id),),
+            ).fetchall()
+        for row in rows:
+            conn.execute(
+                """UPDATE event_threads
+                   SET status = ?, linked_task_id = NULL, updated_at = ?
+                   WHERE id = ?""",
+                (status, now, int(row["id"])),
+            )
+            _append_event_step(
+                conn,
+                int(row["id"]),
+                step_type="system",
+                summary=summary,
+                cause=cause,
+                created_at=now,
+            )
+            changed += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return changed
+
+
+def drop_event_thread(
+    session_id: str,
+    key: str,
+    *,
+    reason: str = "",
+    identity_session: str | None = None,
+) -> int:
+    session_id = _resolve_identity_session(session_id, identity_session)
+    normalized_key = derive_source_event_key(key)
+    conn = get_conn()
+    now = _now()
+    try:
+        row = _fetch_thread_by_key(conn, session_id, normalized_key)
+        if not row:
+            return 0
+        conn.execute(
+            """UPDATE event_threads
+               SET status = 'dropped', linked_task_id = NULL, updated_at = ?
+               WHERE id = ?""",
+            (now, int(row["id"])),
+        )
+        _append_event_step(
+            conn,
+            int(row["id"]),
+            step_type="system",
+            summary="事件线已被维护整理标记为不再展示",
+            cause=reason or "维护整理判断该事件线可移除",
+            created_at=now,
+        )
+        conn.commit()
+        return 1
+    finally:
+        conn.close()
+
+
+def apply_event_thread_maintenance(
+    conn,
+    session_id: str,
+    *,
+    drop_ids: list[int] | None = None,
+    updates: list[dict[str, Any]] | None = None,
+    now: str | None = None,
+) -> tuple[int, int]:
+    """Apply model-maintenance operations to event_threads via legacy-shaped IDs."""
+    session_id = _resolve_identity_session(session_id)
+    now = now or _now()
+    dropped = 0
+    updated = 0
+    for thread_id in drop_ids or []:
+        row = _fetch_thread_by_legacy_id(conn, session_id, int(thread_id))
+        if not row:
+            continue
+        if row.get("linked_task_id") or str(row.get("status") or "") != "active":
+            continue
+        conn.execute(
+            """UPDATE event_threads
+               SET status = 'dropped', linked_task_id = NULL, updated_at = ?
+               WHERE id = ?""",
+            (now, int(row["id"])),
+        )
+        _append_event_step(
+            conn,
+            int(row["id"]),
+            step_type="system",
+            summary="事件线已被维护整理标记为不再展示",
+            cause="模型维护判断该事件线已过期、重复或价值较低",
+            created_at=now,
+        )
+        dropped += 1
+
+    for update in updates or []:
+        row = _fetch_thread_by_legacy_id(conn, session_id, int(update.get("id") or 0))
+        if not row:
+            continue
+        title = _text(update.get("title")) or row.get("title") or "未命名事件"
+        kind = _text(update.get("kind")) or row.get("kind") or ""
+        event_time = _text(update.get("event_time")) or row.get("event_time")
+        time_text = _text(update.get("time_text")) or row.get("time_text") or ""
+        details = _text(update.get("details"))
+        followup_hint = _text(update.get("followup_hint")) or row.get("followup_hint") or ""
+        try:
+            confidence = max(0.0, min(1.0, float(update.get("confidence", row.get("confidence") or 0.0))))
+        except Exception:
+            confidence = float(row.get("confidence") or 0.0)
+        conn.execute(
+            """UPDATE event_threads
+               SET title = ?, kind = ?, event_time = ?, time_text = ?,
+                   followup_hint = ?, confidence = ?, merge_hint = ?, updated_at = ?
+               WHERE id = ?""",
+            (
+                title,
+                kind,
+                event_time,
+                time_text,
+                followup_hint,
+                confidence,
+                followup_hint,
+                now,
+                int(row["id"]),
+            ),
+        )
+        current_summary = _text(row.get("current_summary"))
+        if details and details != current_summary:
+            _append_event_step(
+                conn,
+                int(row["id"]),
+                step_type="system",
+                summary=details,
+                cause="模型维护合并或重写了事件线当前状态",
+                created_at=now,
+            )
+        else:
+            _rebuild_thread_search_text(conn, int(row["id"]))
+        updated += 1
+    return dropped, updated
+
+
+def event_graph_payload(session_id: str) -> dict[str, Any]:
+    conn = get_conn()
+    try:
+        threads = conn.execute(
+            _thread_select_sql()
+            + " WHERE t.session_id = ? ORDER BY t.updated_at DESC, t.id DESC",
+            (session_id,),
+        ).fetchall()
+        thread_rows = [_legacy_row_from_thread(dict(row)) for row in threads]
+        thread_ids = [int(row["id"]) for row in thread_rows]
+        steps: list[dict[str, Any]] = []
+        if thread_ids:
+            placeholders = ",".join("?" for _ in thread_ids)
+            step_rows = conn.execute(
+                f"""SELECT id, thread_id, step_type, summary, cause, reflection,
+                           occurred_at, source_msg_start_id, source_msg_end_id, created_at
+                    FROM event_steps
+                    WHERE thread_id IN ({placeholders})
+                    ORDER BY thread_id ASC, id ASC""",
+                tuple(thread_ids),
+            ).fetchall()
+            steps = [dict(row) for row in step_rows]
+    finally:
+        conn.close()
+
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    for thread in thread_rows:
+        nodes.append(
+            {
+                "id": f"thread-{thread['id']}",
+                "type": "thread",
+                "thread_id": thread["id"],
+                "key": thread["source_event_key"],
+                "label": thread["title"],
+                "status": thread["status"],
+                "summary": thread.get("current_summary") or thread.get("details") or "",
+            }
+        )
+    previous_by_thread: dict[int, str] = {}
+    for step in steps:
+        node_id = f"step-{step['id']}"
+        thread_id = int(step["thread_id"])
+        nodes.append(
+            {
+                "id": node_id,
+                "type": "step",
+                "thread_id": thread_id,
+                "label": step["summary"],
+                "step_type": step["step_type"],
+                "cause": step["cause"],
+                "reflection": step["reflection"],
+                "created_at": step["created_at"],
+            }
+        )
+        source = previous_by_thread.get(thread_id) or f"thread-{thread_id}"
+        edges.append(
+            {
+                "id": f"edge-{source}-{node_id}",
+                "source": source,
+                "target": node_id,
+                "label": step["cause"] or step["step_type"],
+                "step_type": step["step_type"],
+            }
+        )
+        previous_by_thread[thread_id] = node_id
+    return {"threads": thread_rows, "steps": steps, "nodes": nodes, "edges": edges}

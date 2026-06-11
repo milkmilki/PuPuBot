@@ -1,5 +1,7 @@
 """Snapshot builders for model-assisted maintenance."""
 
+from ..storage.important_events import get_recent_important_events_from_conn
+
 
 def _build_session_snapshot(conn, session_id: str) -> dict:
     summaries = [
@@ -42,18 +44,9 @@ def _build_session_snapshot(conn, session_id: str) -> dict:
             (session_id,),
         ).fetchall()
     ]
-    important_events = [
-        dict(row)
-        for row in conn.execute(
-            """SELECT id, source_event_key, title, kind, event_time, time_text,
-                      details, followup_hint, confidence, status, linked_task_id,
-                      last_seen_at, created_at
-               FROM important_events
-               WHERE session_id = ?
-               ORDER BY created_at ASC, id ASC""",
-            (session_id,),
-        ).fetchall()
-    ]
+    important_events = list(
+        reversed(get_recent_important_events_from_conn(conn, session_id, limit=None))
+    )
     return {
         "session_id": session_id,
         "summaries": summaries,

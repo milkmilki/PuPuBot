@@ -18,14 +18,12 @@ def _strip_code_fence(raw_text: str) -> str:
 
 
 def _parse_json_object(raw_text: str) -> dict:
-    cleaned = _strip_code_fence(raw_text)
+    cleaned = re.sub(r"<think>.*?</think>", "", _strip_code_fence(raw_text), flags=re.DOTALL | re.IGNORECASE)
     decoder = json.JSONDecoder()
     candidates = []
     if cleaned:
         candidates.append(cleaned)
-        brace_index = cleaned.find("{")
-        if brace_index != -1:
-            candidates.append(cleaned[brace_index:])
+        candidates.extend(cleaned[index:] for index, char in enumerate(cleaned) if char == "{")
 
     seen = set()
     for candidate in candidates:

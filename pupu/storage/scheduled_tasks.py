@@ -89,6 +89,36 @@ def _debug_dump_task_by_id(conn, task_id: int, tag: str) -> dict | None:
     return data
 
 
+def _mark_event_threads_for_task(conn, task_id: int, *, session_id: str | None, status: str, summary: str, cause: str) -> None:
+    now = datetime.now().isoformat()
+    if session_id:
+        rows = conn.execute(
+            "SELECT id FROM event_threads WHERE session_id = ? AND linked_task_id = ?",
+            (session_id, int(task_id)),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id FROM event_threads WHERE linked_task_id = ?",
+            (int(task_id),),
+        ).fetchall()
+    for row in rows:
+        thread_id = int(row["id"])
+        cursor = conn.execute(
+            """INSERT INTO event_steps (
+                   thread_id, step_type, summary, cause, reflection, occurred_at,
+                   source_msg_start_id, source_msg_end_id, created_at
+               ) VALUES (?, 'system', ?, ?, '', NULL, NULL, NULL, ?)""",
+            (thread_id, summary, cause, now),
+        )
+        step_id = int(cursor.lastrowid)
+        conn.execute(
+            """UPDATE event_threads
+               SET status = ?, linked_task_id = NULL, current_step_id = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, step_id, now, thread_id),
+        )
+
+
 def count_scheduled_tasks(session_id: str) -> int:
     conn = get_conn()
     row = conn.execute(
@@ -189,13 +219,13 @@ def cancel_matching_scheduled_tasks(session_id: str, query: str) -> list[dict]:
                 )
             if cursor.rowcount <= 0:
                 continue
-            conn.execute(
-                """
-                UPDATE important_events
-                SET status = 'cancelled', linked_task_id = NULL
-                WHERE session_id = ? AND linked_task_id = ?
-                """,
-                (session_id, task_id),
+            _mark_event_threads_for_task(
+                conn,
+                task_id,
+                session_id=session_id,
+                status="cancelled",
+                summary="关联提醒已取消",
+                cause="系统取消了匹配的定时任务",
             )
             cancelled.append(dict(row))
         conn.commit()
@@ -348,13 +378,13 @@ def cancel_scheduled_task(session_id: str, task_id: int) -> bool:
             f"session={session_id} task_id={task_id} rowcount={cursor.rowcount}"
         )
     if cursor.rowcount > 0:
-        conn.execute(
-            """
-            UPDATE important_events
-            SET status = 'cancelled', linked_task_id = NULL
-            WHERE session_id = ? AND linked_task_id = ?
-            """,
-            (session_id, task_id),
+        _mark_event_threads_for_task(
+            conn,
+            task_id,
+            session_id=session_id,
+            status="cancelled",
+            summary="关联提醒已取消",
+            cause="系统取消了指定定时任务",
         )
     conn.commit()
     _debug_dump_task_by_id(conn, task_id, "cancel_task_after_row")
@@ -492,13 +522,13 @@ def _skip_missed_scheduled_task(conn, row, now: datetime) -> None:
             (task_id, old_run_at),
         )
         if cursor.rowcount > 0:
-            conn.execute(
-                """
-                UPDATE important_events
-                SET status = 'missed', linked_task_id = NULL
-                WHERE linked_task_id = ?
-                """,
-                (task_id,),
+            _mark_event_threads_for_task(
+                conn,
+                task_id,
+                session_id=None,
+                status="missed",
+                summary="关联提醒已错过",
+                cause="定时任务超过补触发窗口，被系统跳过",
             )
         return
     conn.execute(
@@ -594,13 +624,13 @@ def finalize_scheduled_task(
                 f"task_id={task_id} rowcount={cursor.rowcount}"
             )
         if cursor.rowcount > 0:
-            conn.execute(
-                """
-                UPDATE important_events
-                SET status = 'completed', linked_task_id = NULL
-                WHERE linked_task_id = ?
-                """,
-                (task_id,),
+            _mark_event_threads_for_task(
+                conn,
+                task_id,
+                session_id=None,
+                status="completed",
+                summary="关联提醒已完成",
+                cause="定时任务已经触发并完成",
             )
     else:
         cursor = conn.execute(

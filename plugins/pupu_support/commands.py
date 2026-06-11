@@ -61,7 +61,7 @@ HELP_TEXT = f"""PuPu 可用命令
 /tasks（/定时任务）：查看定时任务
 
 记忆：
-/important（/events /important_events /重要事件 /记忆事件）：查看重要事件记忆
+/important（/events /important_events /重要事件 /记忆事件）：查看事件线记忆；支持 detail <key> / search <内容> / url / migrate [simple]
 /facts（/fact /memory_facts /长期记忆 /事实记忆）：查看长期事实记忆
 /recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
 /memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引（管理员）
@@ -180,9 +180,10 @@ async def handle_tasks(event: Event):
 
 
 @important_cmd.handle()
-async def handle_important(event: Event):
+async def handle_important(event: Event, args: Message = CommandArg()):
     _context_sid, identity_sid = resolve_sessions(event)
-    report = await asyncio.to_thread(format_important_events_report, identity_sid)
+    query = args.extract_plain_text().strip()
+    report = await asyncio.to_thread(format_important_events_report, identity_sid, query=query)
     await important_cmd.finish(report)
 
 

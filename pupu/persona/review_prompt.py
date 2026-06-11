@@ -11,6 +11,7 @@ _FAMILIARITY_DELTA_INSTRUCTIONS = """
 _BATCH_REVIEW_FIELDS = """
 - user_facts: 用户明确说过的稳定事实；没有就返回 {}
 - self_facts: 仆仆自己主动说过的设定；没有就返回 {}
+- event_updates: 事件线进展；优先 append_step 到候选 thread_key，确实无关才 create_thread；没有就返回 []
 - important_events: 值得长期记住、以后可能自然跟进的事；没有就返回 []
 - task_updates: 对定时任务的统一更新；没有就返回 []"""
 
@@ -61,6 +62,24 @@ _FAMILIARITY_SCORING_RULES = """
 _FULL_FAMILIARITY_RULES = """
 
 当前关系分数已经达到 100，不要评估关系分数变化，JSON 里也不要包含任何分数字段。"""
+
+_EVENT_UPDATE_RULES = """
+
+event_updates 用于维护“持续事件线”，目标是减少重复 important_events：
+- 如果输入里有“候选事件线”，且新信息能合理归入其中，输出 action=append_step，并填写候选 thread_key。
+- 只有候选都明显无关时，才输出 action=create_thread。
+- 每条 event_update 字段：
+  - action: append_step / create_thread
+  - thread_key: append_step 时必须使用候选 thread_key；create_thread 时给稳定短 key
+  - title: create_thread 时必填；append_step 可沿用候选标题
+  - kind: birthday / anniversary / exam / trip / meeting / deadline / promise / health / project / other
+  - step_type: user / instance / time / system
+  - summary: 事件当前发展到哪一步
+  - cause: 是什么话或行为导致这个状态变化
+  - reflection: 如果是 instance 触发且后续能看出效果，写一句自然反思；否则空
+  - event_time / time_text / followup_hint / confidence: 同 important_events
+- step_type=time 只能表达推测，summary 必须带“可能/推测/大概/也许”，不要写成确定事实。
+"""
 
 _BATCH_REVIEW_BODY = """
 
@@ -131,6 +150,7 @@ def build_batch_review_prompt(
         if include_familiarity_delta
         else _FULL_FAMILIARITY_RULES
     )
+    prompt += _EVENT_UPDATE_RULES
     prompt += _BATCH_REVIEW_BODY
     prompt = _render_character_name(prompt, name)
     prompt += _SUBJECT_RULES_TEMPLATE.format(character_name=name)

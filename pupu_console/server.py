@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,14 @@ def api_arbiter_logs(tail: int = 200) -> dict[str, str]:
 
 @app.get("/")
 def index_page() -> FileResponse:
-    return FileResponse(_STATIC_DIR / "index.html")
+    return FileResponse(
+        _STATIC_DIR / "index.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 def _instance_summary(instance_id: str) -> dict[str, Any]:
@@ -243,6 +251,133 @@ def api_memory_path(instance_id: str) -> dict[str, Any]:
         "memu_path": str(memu_path),
         "memu_exists": memu_path.is_file(),
     }
+
+
+def _empty_event_graph(path: Path, *, exists: bool) -> dict[str, Any]:
+    return {
+        "memory_path": str(path),
+        "exists": exists,
+        "threads": [],
+        "steps": [],
+        "nodes": [],
+        "edges": [],
+    }
+
+
+def _event_graph_from_path(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return _empty_event_graph(path, exists=False)
+
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        table_names = {
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('event_threads', 'event_steps')"
+            ).fetchall()
+        }
+        if "event_threads" not in table_names:
+            return _empty_event_graph(path, exists=True)
+
+        threads = [
+            dict(row)
+            for row in conn.execute(
+                """
+                SELECT t.id, t.session_id, t.key AS source_event_key, t.title, t.kind,
+                       t.status, t.current_step_id, t.event_time, t.time_text,
+                       t.followup_hint, t.confidence, t.linked_task_id,
+                       t.search_text, t.merge_hint, t.created_at,
+                       t.updated_at AS last_seen_at,
+                       s.summary AS current_summary,
+                       s.cause AS current_cause,
+                       s.reflection AS current_reflection
+                FROM event_threads t
+                LEFT JOIN event_steps s ON s.id = t.current_step_id
+                ORDER BY t.updated_at DESC, t.id DESC
+                """
+            ).fetchall()
+        ]
+        thread_ids = [int(row["id"]) for row in threads]
+        steps: list[dict[str, Any]] = []
+        if "event_steps" in table_names and thread_ids:
+            placeholders = ",".join("?" for _ in thread_ids)
+            steps = [
+                dict(row)
+                for row in conn.execute(
+                    f"""
+                    SELECT id, thread_id, step_type, summary, cause, reflection,
+                           occurred_at, source_msg_start_id, source_msg_end_id, created_at
+                    FROM event_steps
+                    WHERE thread_id IN ({placeholders})
+                    ORDER BY thread_id ASC, id ASC
+                    """,
+                    thread_ids,
+                ).fetchall()
+            ]
+    finally:
+        conn.close()
+
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    for thread in threads:
+        nodes.append(
+            {
+                "id": f"thread-{thread['id']}",
+                "type": "thread",
+                "thread_id": thread["id"],
+                "key": thread.get("source_event_key"),
+                "label": thread.get("title"),
+                "status": thread.get("status"),
+                "summary": thread.get("current_summary") or "",
+            }
+        )
+    previous_by_thread: dict[int, str] = {}
+    for step in steps:
+        thread_id = int(step["thread_id"])
+        node_id = f"step-{step['id']}"
+        nodes.append(
+            {
+                "id": node_id,
+                "type": "step",
+                "thread_id": thread_id,
+                "label": step.get("summary"),
+                "step_type": step.get("step_type"),
+                "cause": step.get("cause"),
+                "reflection": step.get("reflection"),
+                "created_at": step.get("created_at"),
+                "occurred_at": step.get("occurred_at"),
+            }
+        )
+        source = previous_by_thread.get(thread_id) or f"thread-{thread_id}"
+        edges.append(
+            {
+                "id": f"edge-{source}-{node_id}",
+                "source": source,
+                "target": node_id,
+                "label": step.get("cause") or step.get("step_type"),
+                "step_type": step.get("step_type"),
+            }
+        )
+        previous_by_thread[thread_id] = node_id
+
+    return {
+        "memory_path": str(path),
+        "exists": True,
+        "threads": threads,
+        "steps": steps,
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+@app.get("/api/instances/{instance_id}/event_graph")
+def api_instance_event_graph(instance_id: str) -> dict[str, Any]:
+    try:
+        path = instance_store.memory_db_path(instance_id)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return _event_graph_from_path(path)
 
 
 @app.post("/api/instances/{instance_id}/import_memory")

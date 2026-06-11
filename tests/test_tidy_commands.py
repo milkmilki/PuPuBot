@@ -1,5 +1,7 @@
 import contextlib
+import json
 import os
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -34,6 +36,62 @@ class _FakeTask:
 class TidyCommandTests(unittest.IsolatedAsyncioTestCase):
     def _owner_event(self) -> SimpleNamespace:
         return SimpleNamespace(get_user_id=lambda: "owner")
+
+    def test_cli_instance_selector_applies_selected_instance_env(self):
+        keys = (
+            "PUPU_REPO_ROOT",
+            "PUPU_INSTANCE_DIR",
+            "PUPU_CONFIG_PATH",
+            "PUPU_DB_PATH",
+            "PUPU_MEMU_DB_PATH",
+            "PUPU_PERSONA_PATH",
+        )
+        old_values = {key: os.environ.get(key) for key in keys}
+        self.addCleanup(self._restore_env, old_values)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            os.environ["PUPU_REPO_ROOT"] = str(root)
+            os.environ.pop("PUPU_INSTANCE_DIR", None)
+            for instance_id, display in (("b-inst", "Beta"), ("a-inst", "Alpha")):
+                inst = root / "instances" / instance_id
+                (inst / "data").mkdir(parents=True)
+                (inst / "instance.json").write_text(
+                    json.dumps(
+                        {
+                            "id": instance_id,
+                            "display_name": display,
+                            "qq_mode": "cli",
+                            "port": 9000,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                (inst / "persona.json").write_text("{}", encoding="utf-8")
+                (inst / ".env.qq").write_text("PORT=9000\n", encoding="utf-8")
+
+            with patch.object(cli.console, "print"):
+                with patch.object(cli.console, "input", return_value="2"):
+                    selected = cli._configure_cli_instance_interactively()
+
+            expected = root / "instances" / "b-inst"
+            self.assertEqual(selected, "b-inst")
+            self.assertEqual(os.environ["PUPU_INSTANCE_DIR"], str(expected.resolve()))
+            self.assertEqual(os.environ["PUPU_DB_PATH"], str(expected.resolve() / "data" / "pupu.db"))
+            self.assertEqual(os.environ["PUPU_MEMU_DB_PATH"], str(expected.resolve() / "data" / "memu.db"))
+            self.assertEqual(os.environ["PUPU_PERSONA_PATH"], str(expected.resolve() / "persona.json"))
+
+    def test_cli_instance_selector_skips_when_instance_env_exists(self):
+        old_value = os.environ.get("PUPU_INSTANCE_DIR")
+        self.addCleanup(self._restore_env, {"PUPU_INSTANCE_DIR": old_value})
+        os.environ["PUPU_INSTANCE_DIR"] = "already-selected"
+
+        with patch.object(cli.console, "input") as mock_input:
+            selected = cli._configure_cli_instance_interactively()
+
+        self.assertIsNone(selected)
+        mock_input.assert_not_called()
 
     def test_cli_tidy_accepts_check_apply_and_defaults_to_apply(self):
         cases = [
@@ -159,6 +217,14 @@ class TidyCommandTests(unittest.IsolatedAsyncioTestCase):
         mock_set.assert_called_once_with(True)
         mock_start.assert_awaited_once_with("bot")
         mock_finish.assert_awaited_once_with("started")
+
+    @staticmethod
+    def _restore_env(old_values: dict[str, str | None]) -> None:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 if __name__ == "__main__":

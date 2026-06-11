@@ -6,6 +6,9 @@ let selectedId = null;
 let logTimer = null;
 let arbiterTimer = null;
 let ws = null;
+let currentEventGraph = null;
+let selectedEventThreadId = null;
+let eventGraphViewState = { scale: 1, tx: 0, ty: 0 };
 
 async function api(path, opts = {}) {
   const r = await fetch(path, {
@@ -94,6 +97,22 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+function shortText(s, max = 34) {
+  const text = String(s || "").replace(/\s+/g, " ").trim();
+  if (text.length <= max) return text;
+  return text.slice(0, Math.max(1, max - 1)) + "…";
+}
+
+function stepTypeLabel(type) {
+  const map = {
+    user: "用户",
+    instance: "实例",
+    time: "时间",
+    system: "系统",
+  };
+  return map[type] || type || "进展";
+}
+
 function stopLogPoll() {
   if (logTimer) {
     clearInterval(logTimer);
@@ -149,6 +168,7 @@ async function selectInstance(id) {
     <div class="tabs">
       <button type="button" class="tab active" data-tab="run">运行</button>
       <button type="button" class="tab" data-tab="soul">灵魂</button>
+      <button type="button" class="tab" data-tab="events">事件图谱</button>
     </div>
     <div id="tab-run" class="panel">
       <p>状态: <span id="run-status"></span></p>
@@ -201,6 +221,16 @@ async function selectInstance(id) {
       <label>预设显示名 <input id="cap-dname" placeholder="我的预设" /></label>
       <button type="button" id="btn-capture">另存为预设</button>
     </div>
+    <div id="tab-events" class="panel" style="display:none">
+      <div class="event-toolbar">
+        <div>
+          <h3>事件图谱</h3>
+          <p class="hint" id="event-graph-status">尚未加载。</p>
+        </div>
+        <button type="button" id="btn-refresh-events">刷新</button>
+      </div>
+      <div id="event-graph-panel" class="event-graph-empty">切换到此页后会加载事件线。</div>
+    </div>
   `;
   $("#f-qqmode").value = data.qq_mode || "napcat";
 
@@ -218,6 +248,10 @@ async function selectInstance(id) {
       const t = btn.dataset.tab;
       $("#tab-run").style.display = t === "run" ? "block" : "none";
       $("#tab-soul").style.display = t === "soul" ? "block" : "none";
+      $("#tab-events").style.display = t === "events" ? "block" : "none";
+      if (t === "events") {
+        loadEventGraph(id);
+      }
     });
   });
 
@@ -265,6 +299,7 @@ async function selectInstance(id) {
   });
 
   $("#btn-save-soul").addEventListener("click", () => saveSoulForm(id));
+  $("#btn-refresh-events").addEventListener("click", () => loadEventGraph(id, { force: true }));
 
   const soulSel = $("#apply-soul-slug");
   const souls = await api("/api/souls");
@@ -298,6 +333,307 @@ async function selectInstance(id) {
 
   await refreshRunStatus();
   startLogStream(id);
+}
+
+async function loadEventGraph(id, opts = {}) {
+  const status = $("#event-graph-status");
+  const panel = $("#event-graph-panel");
+  if (!panel) return;
+  if (status) status.textContent = "加载中…";
+  try {
+    const data = await api(`/api/instances/${id}/event_graph`);
+    currentEventGraph = data;
+    const threads = data.threads || [];
+    if (!threads.some((t) => String(t.id) === String(selectedEventThreadId))) {
+      selectedEventThreadId = threads[0] ? threads[0].id : null;
+    }
+    renderEventGraph(data);
+    if (status) {
+      status.textContent = data.exists
+        ? `事件线 ${threads.length} 条，进展 ${(data.steps || []).length} 条。`
+        : "当前实例还没有记忆数据库。";
+    }
+  } catch (e) {
+    currentEventGraph = null;
+    panel.innerHTML = `<p class="hint">事件图谱加载失败：${escapeHtml(e.message || e)}</p>`;
+    if (status) status.textContent = "加载失败。";
+    if (!opts.force) console.warn(e);
+  }
+}
+
+function renderEventGraph(data) {
+  const panel = $("#event-graph-panel");
+  if (!panel) return;
+  const threads = data.threads || [];
+  const steps = data.steps || [];
+  if (!data.exists) {
+    panel.innerHTML = "<p class='hint'>当前实例还没有生成 pupu.db。</p>";
+    return;
+  }
+  if (!threads.length) {
+    panel.innerHTML = "<p class='hint'>还没有事件线。新的 batch review 会写入 event_threads / event_steps。</p>";
+    return;
+  }
+
+  const stepsByThread = new Map();
+  for (const step of steps) {
+    const key = String(step.thread_id);
+    if (!stepsByThread.has(key)) stepsByThread.set(key, []);
+    stepsByThread.get(key).push(step);
+  }
+  const selected = threads.find((t) => String(t.id) === String(selectedEventThreadId)) || threads[0];
+  selectedEventThreadId = selected ? selected.id : null;
+  const selectedSteps = selected ? stepsByThread.get(String(selected.id)) || [] : [];
+
+  const listHtml = threads
+    .map((thread) => {
+      const active = String(thread.id) === String(selectedEventThreadId) ? " active" : "";
+      const count = (stepsByThread.get(String(thread.id)) || []).length;
+      return `<button type="button" class="event-thread${active}" data-thread-id="${thread.id}">
+        <strong>${escapeHtml(thread.title || "未命名事件")}</strong>
+        <span>${escapeHtml(thread.status || "active")} · ${count} 步</span>
+        <code>${escapeHtml(thread.source_event_key || thread.key || "")}</code>
+      </button>`;
+    })
+    .join("");
+
+  panel.innerHTML = `
+    <div class="event-layout">
+      <aside class="event-thread-list">${listHtml}</aside>
+      <section class="event-visual">
+        ${renderEventGraphSvg(threads, stepsByThread)}
+        ${renderEventTimeline(selected, selectedSteps)}
+      </section>
+    </div>
+  `;
+  panel.querySelectorAll(".event-thread").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      selectedEventThreadId = btn.dataset.threadId;
+      renderEventGraph(currentEventGraph);
+    });
+  });
+  setupEventGraphInteractions(panel);
+}
+
+function renderEventGraphSvg(threads, stepsByThread) {
+  const maxSteps = Math.max(1, ...threads.map((t) => (stepsByThread.get(String(t.id)) || []).length));
+  const width = Math.max(760, 260 + maxSteps * 170);
+  const height = Math.max(240, 70 + threads.length * 112);
+  const lines = [];
+  const nodes = [];
+  threads.forEach((thread, row) => {
+    const y = 55 + row * 112;
+    const threadX = 95;
+    const steps = stepsByThread.get(String(thread.id)) || [];
+    const selectedClass = String(thread.id) === String(selectedEventThreadId) ? " selected" : "";
+    nodes.push(`
+      <g class="graph-node thread-node${selectedClass}">
+        <rect x="${threadX - 74}" y="${y - 24}" width="148" height="48" rx="6"></rect>
+        <text x="${threadX}" y="${y - 4}" text-anchor="middle">${escapeHtml(shortText(thread.title || "未命名事件", 12))}</text>
+        <text x="${threadX}" y="${y + 14}" text-anchor="middle" class="node-sub">${escapeHtml(thread.status || "active")}</text>
+      </g>
+    `);
+    let previousX = threadX + 74;
+    steps.forEach((step, idx) => {
+      const x = 255 + idx * 170;
+      lines.push(`<line x1="${previousX}" y1="${y}" x2="${x - 62}" y2="${y}" class="graph-edge ${escapeHtml(step.step_type || "user")}"></line>`);
+      nodes.push(`
+        <g class="graph-node step-node ${escapeHtml(step.step_type || "user")}">
+          <rect x="${x - 62}" y="${y - 24}" width="124" height="48" rx="6"></rect>
+          <text x="${x}" y="${y - 4}" text-anchor="middle">${escapeHtml(shortText(step.summary || "", 12))}</text>
+          <text x="${x}" y="${y + 14}" text-anchor="middle" class="node-sub">${escapeHtml(stepTypeLabel(step.step_type))}</text>
+        </g>
+      `);
+      previousX = x + 62;
+    });
+  });
+  return `
+    <div class="event-svg-wrap" data-graph-width="${width}" data-graph-height="${height}">
+      <svg class="event-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="事件图谱">
+        <g class="event-graph-viewport">
+          ${lines.join("")}
+          ${nodes.join("")}
+        </g>
+      </svg>
+      <div class="event-graph-help">滚轮缩放，拖动画布平移，触摸可双指缩放。</div>
+    </div>
+  `;
+}
+
+function setupEventGraphInteractions(root) {
+  const wrap = root.querySelector(".event-svg-wrap");
+  const svg = root.querySelector(".event-svg");
+  const viewport = root.querySelector(".event-graph-viewport");
+  if (!wrap || !svg || !viewport) return;
+  const graphWidth = Number(wrap.dataset.graphWidth || 760);
+  const graphHeight = Number(wrap.dataset.graphHeight || 260);
+  const pointers = new Map();
+  let panning = false;
+  let lastPointer = null;
+  let pinch = null;
+
+  function applyTransform() {
+    viewport.setAttribute(
+      "transform",
+      `translate(${eventGraphViewState.tx},${eventGraphViewState.ty}) scale(${eventGraphViewState.scale})`
+    );
+  }
+  function fitInitialView() {
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const scale = Math.min(1.4, Math.max(0.25, Math.min((rect.width - 32) / graphWidth, (rect.height - 32) / graphHeight)));
+    if (eventGraphViewState._graphWidth !== graphWidth || eventGraphViewState._graphHeight !== graphHeight) {
+      eventGraphViewState = {
+        scale,
+        tx: (rect.width - graphWidth * scale) / 2,
+        ty: 16,
+        _graphWidth: graphWidth,
+        _graphHeight: graphHeight,
+      };
+    }
+    applyTransform();
+  }
+  function setPanning(active) {
+    panning = active;
+    svg.classList.toggle("is-panning", active);
+  }
+  function updatePinch() {
+    const points = Array.from(pointers.values());
+    if (points.length < 2) {
+      pinch = null;
+      return;
+    }
+    const a = points[0];
+    const b = points[1];
+    const cx = (a.x + b.x) / 2;
+    const cy = (a.y + b.y) / 2;
+    const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    if (!pinch) {
+      pinch = {
+        cx,
+        cy,
+        distance,
+        scale: eventGraphViewState.scale,
+        tx: eventGraphViewState.tx,
+        ty: eventGraphViewState.ty,
+      };
+      return;
+    }
+    const nextScale = Math.min(3.5, Math.max(0.2, pinch.scale * (distance / pinch.distance)));
+    const graphX = (pinch.cx - pinch.tx) / pinch.scale;
+    const graphY = (pinch.cy - pinch.ty) / pinch.scale;
+    eventGraphViewState.scale = nextScale;
+    eventGraphViewState.tx = cx - graphX * nextScale;
+    eventGraphViewState.ty = cy - graphY * nextScale;
+    applyTransform();
+  }
+  svg.addEventListener(
+    "wheel",
+    (ev) => {
+      ev.preventDefault();
+      const rect = svg.getBoundingClientRect();
+      const mx = ev.clientX - rect.left;
+      const my = ev.clientY - rect.top;
+      const oldScale = eventGraphViewState.scale;
+      const factor = ev.deltaY < 0 ? 1.12 : 0.89;
+      eventGraphViewState.scale = Math.min(3.5, Math.max(0.2, eventGraphViewState.scale * factor));
+      eventGraphViewState.tx = mx - ((mx - eventGraphViewState.tx) / oldScale) * eventGraphViewState.scale;
+      eventGraphViewState.ty = my - ((my - eventGraphViewState.ty) / oldScale) * eventGraphViewState.scale;
+      applyTransform();
+    },
+    { passive: false }
+  );
+  svg.addEventListener("pointerdown", (ev) => {
+    ev.preventDefault();
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pointers.size >= 2) {
+      setPanning(false);
+      lastPointer = null;
+      updatePinch();
+    } else {
+      setPanning(true);
+      lastPointer = { x: ev.clientX, y: ev.clientY };
+    }
+    try {
+      svg.setPointerCapture(ev.pointerId);
+    } catch (e) {
+      /* ignore */
+    }
+  });
+  svg.addEventListener("pointermove", (ev) => {
+    if (!pointers.has(ev.pointerId)) return;
+    ev.preventDefault();
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pointers.size >= 2) {
+      updatePinch();
+      return;
+    }
+    if (!panning || !lastPointer) return;
+    eventGraphViewState.tx += ev.clientX - lastPointer.x;
+    eventGraphViewState.ty += ev.clientY - lastPointer.y;
+    lastPointer = { x: ev.clientX, y: ev.clientY };
+    applyTransform();
+  });
+  function endPointer(ev) {
+    pointers.delete(ev.pointerId);
+    if (pointers.size >= 2) {
+      updatePinch();
+    } else if (pointers.size === 1) {
+      const only = Array.from(pointers.values())[0];
+      pinch = null;
+      setPanning(true);
+      lastPointer = { x: only.x, y: only.y };
+    } else {
+      pinch = null;
+      setPanning(false);
+      lastPointer = null;
+    }
+    try {
+      svg.releasePointerCapture(ev.pointerId);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+  svg.addEventListener("pointerup", endPointer);
+  svg.addEventListener("pointercancel", endPointer);
+  svg.addEventListener("lostpointercapture", (ev) => {
+    pointers.delete(ev.pointerId);
+    if (!pointers.size) {
+      pinch = null;
+      setPanning(false);
+      lastPointer = null;
+    }
+  });
+  fitInitialView();
+}
+
+function renderEventTimeline(thread, steps) {
+  if (!thread) return "<p class='hint'>请选择一条事件线。</p>";
+  const stepHtml = steps.length
+    ? steps
+        .map(
+          (step, idx) => `
+          <div class="event-step">
+            <div class="event-step-head">
+              <span>${idx + 1}. ${escapeHtml(stepTypeLabel(step.step_type))}</span>
+              <time>${escapeHtml(step.occurred_at || step.created_at || "")}</time>
+            </div>
+            <p>${escapeHtml(step.summary || "")}</p>
+            ${step.cause ? `<p class="hint">触发：${escapeHtml(step.cause)}</p>` : ""}
+            ${step.reflection ? `<p class="hint">反思：${escapeHtml(step.reflection)}</p>` : ""}
+          </div>`
+        )
+        .join("")
+    : "<p class='hint'>这条事件线还没有 step。</p>";
+  return `
+    <div class="event-detail">
+      <h3>${escapeHtml(thread.title || "未命名事件")}</h3>
+      <p class="hint">${escapeHtml(thread.source_event_key || "")}</p>
+      ${thread.current_summary ? `<p>${escapeHtml(thread.current_summary)}</p>` : ""}
+      ${thread.followup_hint ? `<p class="hint">跟进：${escapeHtml(thread.followup_hint)}</p>` : ""}
+      <div class="event-timeline">${stepHtml}</div>
+    </div>
+  `;
 }
 
 function formatFacts(obj) {

@@ -1,7 +1,9 @@
 """Terminal chat interface with command handling and periodic scheduler tick."""
 
+import os
 import threading
 import time
+from pathlib import Path
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -40,7 +42,7 @@ CLI_HELP_TEXT = """PuPu CLI 可用命令
 /tasks（/定时任务）：查看定时任务
 
 记忆：
-/important（/events /important_events /重要事件 /记忆事件）：查看重要事件记忆
+/important（/events /important_events /重要事件 /记忆事件）：查看事件线记忆；支持 detail <key> / search <内容> / url / migrate [simple]
 /facts（/fact /memory_facts /长期记忆 /事实记忆）：查看长期事实记忆
 /recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
 /memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引
@@ -88,6 +90,100 @@ def _parse_tidy_mode(command_arg: str) -> tuple[str | None, str | None]:
     return None, TIDY_USAGE
 
 
+def _apply_instance_env(instance_dir: Path) -> None:
+    inst = instance_dir.resolve()
+    os.environ["PUPU_INSTANCE_DIR"] = str(inst)
+    os.environ["PUPU_CONFIG_PATH"] = str(inst / "instance.json")
+    os.environ["PUPU_DB_PATH"] = str(inst / "data" / "pupu.db")
+    os.environ["PUPU_MEMU_DB_PATH"] = str(inst / "data" / "memu.db")
+    os.environ["PUPU_PERSONA_PATH"] = str(inst / "persona.json")
+    (inst / "data").mkdir(parents=True, exist_ok=True)
+    (inst / "data" / "logs").mkdir(parents=True, exist_ok=True)
+
+    env_file = inst / ".env.qq"
+    if env_file.is_file():
+        from dotenv import load_dotenv
+
+        load_dotenv(env_file, override=True)
+
+
+def _configure_cli_instance_interactively() -> str | None:
+    """Let direct CLI launches choose a managed instance.
+
+    ``pupu.instance_main --dir`` sets ``PUPU_INSTANCE_DIR`` before importing the
+    CLI, so that path stays non-interactive and already points at one instance.
+    """
+    if os.environ.get("PUPU_INSTANCE_DIR"):
+        return None
+
+    try:
+        from pupu_console import instance_store
+    except Exception:
+        return None
+
+    try:
+        instance_ids = instance_store.list_instance_ids()
+    except Exception:
+        return None
+    if not instance_ids:
+        return None
+
+    choices = []
+    for instance_id in instance_ids:
+        try:
+            cfg, _persona = instance_store.read_instance_files(instance_id)
+            inst_dir = instance_store.instance_dir(instance_id).resolve()
+            choices.append(
+                {
+                    "id": instance_id,
+                    "display_name": str(cfg.get("display_name") or instance_id),
+                    "qq_mode": str(cfg.get("qq_mode") or "napcat"),
+                    "port": instance_store.read_port(inst_dir),
+                    "dir": inst_dir,
+                    "db_exists": (inst_dir / "data" / "pupu.db").is_file(),
+                }
+            )
+        except Exception:
+            continue
+    if not choices:
+        return None
+
+    console.print("[bold cyan]选择要进入的 PuPu 实例[/bold cyan]")
+    console.print("[dim]直接回车使用根目录默认 CLI；输入编号或实例 id 进入对应实例。[/dim]")
+    for index, choice in enumerate(choices, start=1):
+        db_hint = "有记忆库" if choice["db_exists"] else "暂无记忆库"
+        console.print(
+            f"{index}. {choice['display_name']} "
+            f"[dim]id={choice['id']} mode={choice['qq_mode']} port={choice['port']} {db_hint}[/dim]"
+        )
+
+    by_id = {str(choice["id"]): choice for choice in choices}
+    while True:
+        raw = console.input("[bold green]实例> [/bold green]").strip()
+        if not raw:
+            console.print("[dim]使用根目录默认 CLI。[/dim]")
+            return None
+        if raw.lower() in {"q", "quit", "exit"}:
+            raise SystemExit(0)
+        selected = None
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(choices):
+                selected = choices[idx - 1]
+        if selected is None:
+            selected = by_id.get(raw)
+        if selected is None:
+            console.print("[yellow]没有这个实例，请输入列表里的编号或 id；直接回车使用默认 CLI。[/yellow]")
+            continue
+
+        _apply_instance_env(Path(selected["dir"]))
+        console.print(
+            f"[green]已选择实例：{selected['display_name']} "
+            f"({selected['id']})[/green]"
+        )
+        return str(selected["id"])
+
+
 def handle_command(cmd: str) -> bool:
     """Handle slash commands. Returns True if handled."""
     command_name, _, command_arg = cmd.partition(" ")
@@ -123,8 +219,8 @@ def handle_command(cmd: str) -> bool:
     elif cmd in ("/tasks", "/定时任务"):
         console.print(manage_scheduled_task(OWNER_SESSION, {"action": "list"}))
         return False
-    elif cmd in ("/important", "/events", "/important_events", "/重要事件", "/记忆事件"):
-        console.print(format_important_events_report(OWNER_SESSION))
+    elif command_name in ("/important", "/events", "/important_events", "/重要事件", "/记忆事件"):
+        console.print(format_important_events_report(OWNER_SESSION, query=command_arg))
         return False
     elif cmd in ("/facts", "/fact", "/memory_facts", "/长期记忆", "/事实记忆"):
         console.print(format_facts_report(OWNER_SESSION))
@@ -177,6 +273,7 @@ def handle_command(cmd: str) -> bool:
 
 
 def main():
+    _configure_cli_instance_interactively()
     setup_runtime_logging()
     init_db()
     preflight_model_providers()
@@ -218,3 +315,7 @@ def main():
         console.print(f"[bold cyan]仆仆:[/bold cyan] ", end="")
         console.print(Markdown(reply))
         console.print()
+
+
+if __name__ == "__main__":
+    main()

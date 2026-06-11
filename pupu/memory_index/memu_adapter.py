@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from ..persona.core import get_pupu_name
 from ..storage.db import get_conn, get_data_dir
+from ..storage.important_events import drop_event_thread, get_recent_important_events
 
 DEFAULT_TOP_K = 6
 DEFAULT_LOG_PREVIEW_CHARS = 220
@@ -950,18 +951,12 @@ def _is_low_info_fact(payload: dict[str, Any]) -> bool:
 
 
 def _load_legacy_event_map(identity_session: str) -> dict[str, dict[str, Any]]:
-    conn = get_conn()
-    try:
-        rows = conn.execute(
-            """SELECT source_event_key, kind, event_time, status, linked_task_id,
-                      created_at, title, details, followup_hint
-               FROM important_events
-               WHERE session_id = ?""",
-            (identity_session,),
-        ).fetchall()
-        return {str(row["source_event_key"]): dict(row) for row in rows}
-    finally:
-        conn.close()
+    rows = get_recent_important_events(
+        identity_session,
+        limit=None,
+        statuses=("active", "scheduled", "done", "cancelled", "missed", "dropped"),
+    )
+    return {str(row["source_event_key"]): dict(row) for row in rows}
 
 
 def _legacy_source_action(candidate: dict[str, Any]) -> str:
@@ -986,15 +981,20 @@ def _delete_legacy_source(identity_session: str, candidate: dict[str, Any]) -> i
                 f"DELETE FROM {table} WHERE session_id = ? AND fact_key = ?",
                 (identity_session, key),
             )
-        else:
-            cur = conn.execute(
-                "DELETE FROM important_events WHERE session_id = ? AND source_event_key = ?",
-                (identity_session, key),
+        if table == "important_events":
+            conn.close()
+            return drop_event_thread(
+                identity_session,
+                key,
+                reason=str(candidate.get("reason") or "memU tidy requested source removal"),
             )
         conn.commit()
         return int(cur.rowcount or 0)
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _event_date_label(value: date) -> str:
@@ -1663,19 +1663,9 @@ def rebuild_memu_session(identity_session: str, context_session: str | None = No
                 (identity_session,),
             ).fetchall()
         }
-        events = [
-            dict(row)
-            for row in conn.execute(
-                """SELECT source_event_key, title, kind, event_time, time_text,
-                          details, followup_hint, confidence
-                   FROM important_events
-                   WHERE session_id = ?
-                   ORDER BY created_at ASC, id ASC""",
-                (identity_session,),
-            ).fetchall()
-        ]
     finally:
         conn.close()
+    events = list(reversed(get_recent_important_events(identity_session, limit=None)))
 
     _log(
         "rebuild loaded "

@@ -207,6 +207,63 @@ def init_db():
     )
     cursor.execute(
         """
+        CREATE TABLE IF NOT EXISTS event_threads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL DEFAULT 'default',
+            key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'active',
+            current_step_id INTEGER,
+            event_time TEXT,
+            time_text TEXT NOT NULL DEFAULT '',
+            followup_hint TEXT NOT NULL DEFAULT '',
+            confidence REAL NOT NULL DEFAULT 0,
+            linked_task_id INTEGER,
+            search_text TEXT NOT NULL DEFAULT '',
+            merge_hint TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_event_threads_key
+        ON event_threads(session_id, key)
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_event_threads_prompt
+        ON event_threads(session_id, status, event_time, updated_at)
+    """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS event_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id INTEGER NOT NULL,
+            step_type TEXT NOT NULL DEFAULT 'user',
+            summary TEXT NOT NULL,
+            cause TEXT NOT NULL DEFAULT '',
+            reflection TEXT NOT NULL DEFAULT '',
+            occurred_at TEXT,
+            source_msg_start_id INTEGER,
+            source_msg_end_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(thread_id) REFERENCES event_threads(id)
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_event_steps_thread
+        ON event_steps(thread_id, created_at, id)
+    """
+    )
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS memu_sync_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             context_session TEXT NOT NULL,
