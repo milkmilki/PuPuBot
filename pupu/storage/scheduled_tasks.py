@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from ..message_sources import WAIT_FOLLOWUP
 from .db import get_conn
+from .important_events import _append_event_step
 
 MAX_SCHEDULED_TASKS_PER_SESSION = 30
 SCHEDULED_TASK_GRACE_SECONDS = 3600
@@ -103,19 +104,19 @@ def _mark_event_threads_for_task(conn, task_id: int, *, session_id: str | None, 
         ).fetchall()
     for row in rows:
         thread_id = int(row["id"])
-        cursor = conn.execute(
-            """INSERT INTO event_steps (
-                   thread_id, step_type, summary, cause, reflection, occurred_at,
-                   source_msg_start_id, source_msg_end_id, created_at
-               ) VALUES (?, 'system', ?, ?, '', NULL, NULL, NULL, ?)""",
-            (thread_id, summary, cause, now),
-        )
-        step_id = int(cursor.lastrowid)
         conn.execute(
             """UPDATE event_threads
-               SET status = ?, linked_task_id = NULL, current_step_id = ?, updated_at = ?
+               SET status = ?, linked_task_id = NULL, updated_at = ?
                WHERE id = ?""",
-            (status, step_id, now, thread_id),
+            (status, now, thread_id),
+        )
+        _append_event_step(
+            conn,
+            thread_id,
+            step_type="system",
+            summary=summary,
+            cause=cause,
+            created_at=now,
         )
 
 

@@ -13,6 +13,8 @@ ACTIVE_EVENT_STATUSES = ("active", "scheduled")
 VALID_STEP_TYPES = {"time", "user", "instance", "system"}
 LEGACY_SIMPLE_MIGRATION_CAUSE = "从旧 important_events 迁移为事件线"
 LEGACY_MODEL_MIGRATION_CAUSE = "从旧 important_events 经模型迁移"
+EVENT_THREAD_FTS_TABLE = "event_thread_fts"
+FTS_RECALL_LIMIT = 20
 
 
 def _resolve_identity_session(session_id: str = "default", identity_session: str | None = None) -> str:
@@ -66,6 +68,105 @@ def _tokens(value: str) -> set[str]:
 
 def _search_text_from_parts(*parts: Any) -> str:
     return " ".join(str(part or "").strip() for part in parts if str(part or "").strip())
+
+
+def ensure_event_thread_fts(conn) -> bool:
+    """Create the optional FTS5 index used for event-thread recall."""
+    try:
+        conn.execute(
+            f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS {EVENT_THREAD_FTS_TABLE}
+            USING fts5(
+                thread_id UNINDEXED,
+                session_id UNINDEXED,
+                status UNINDEXED,
+                title,
+                current_summary,
+                followup_hint,
+                search_text,
+                merge_hint,
+                tokenize='trigram'
+            )
+            """
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _event_thread_fts_available(conn) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE name = ?",
+            (EVENT_THREAD_FTS_TABLE,),
+        ).fetchone()
+        if row:
+            return True
+        return ensure_event_thread_fts(conn)
+    except Exception:
+        return False
+
+
+def _delete_event_thread_fts(conn, thread_id: int) -> None:
+    try:
+        if _event_thread_fts_available(conn):
+            conn.execute(
+                f"DELETE FROM {EVENT_THREAD_FTS_TABLE} WHERE rowid = ?",
+                (int(thread_id),),
+            )
+    except Exception:
+        pass
+
+
+def _refresh_event_thread_fts(conn, thread_id: int) -> None:
+    if not _event_thread_fts_available(conn):
+        return
+    row = conn.execute(
+        _thread_select_sql() + " WHERE t.id = ?",
+        (int(thread_id),),
+    ).fetchone()
+    if not row:
+        _delete_event_thread_fts(conn, thread_id)
+        return
+    data = dict(row)
+    try:
+        conn.execute(
+            f"DELETE FROM {EVENT_THREAD_FTS_TABLE} WHERE rowid = ?",
+            (int(thread_id),),
+        )
+        conn.execute(
+            f"""INSERT INTO {EVENT_THREAD_FTS_TABLE} (
+                   rowid, thread_id, session_id, status, title, current_summary,
+                   followup_hint, search_text, merge_hint
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                int(thread_id),
+                int(thread_id),
+                data.get("session_id") or "",
+                data.get("status") or "",
+                data.get("title") or "",
+                data.get("current_summary") or "",
+                data.get("followup_hint") or "",
+                data.get("search_text") or "",
+                data.get("merge_hint") or "",
+            ),
+        )
+    except Exception:
+        pass
+
+
+def rebuild_event_thread_fts(conn) -> int:
+    """Rebuild the optional FTS index from event_threads."""
+    if not ensure_event_thread_fts(conn):
+        return 0
+    try:
+        conn.execute(f"DELETE FROM {EVENT_THREAD_FTS_TABLE}")
+        rows = conn.execute("SELECT id FROM event_threads ORDER BY id ASC").fetchall()
+        for row in rows:
+            _refresh_event_thread_fts(conn, int(row["id"]))
+        return len(rows)
+    except Exception:
+        return 0
 
 
 def _legacy_row_from_thread(row: dict[str, Any]) -> dict[str, Any]:
@@ -166,6 +267,7 @@ def _rebuild_thread_search_text(conn, thread_id: int) -> str:
         "UPDATE event_threads SET search_text = ? WHERE id = ?",
         (search_text, int(thread_id)),
     )
+    _refresh_event_thread_fts(conn, int(thread_id))
     return search_text
 
 
@@ -615,6 +717,8 @@ def _delete_simple_migrated_threads(conn, session_id: str) -> int:
     thread_ids = [int(row["id"]) for row in rows]
     if not thread_ids:
         return 0
+    for thread_id in thread_ids:
+        _delete_event_thread_fts(conn, thread_id)
     placeholders = ",".join("?" for _ in thread_ids)
     conn.execute(
         f"DELETE FROM event_steps WHERE thread_id IN ({placeholders})",
@@ -925,12 +1029,190 @@ def get_event_thread_steps(
         conn.close()
 
 
+def get_event_thread_recent_steps(
+    session_id: str,
+    key: str,
+    *,
+    limit: int = 3,
+    identity_session: str | None = None,
+    _conn=None,
+) -> list[dict[str, Any]]:
+    session_id = _resolve_identity_session(session_id, identity_session)
+    normalized_key = derive_source_event_key(key)
+    conn = _conn or get_conn()
+    close_conn = _conn is None
+    try:
+        thread = _fetch_thread_by_key(conn, session_id, normalized_key)
+        if not thread:
+            return []
+        rows = conn.execute(
+            """SELECT id, thread_id, step_type, summary, cause, reflection,
+                      occurred_at, source_msg_start_id, source_msg_end_id, created_at
+               FROM event_steps
+               WHERE thread_id = ?
+               ORDER BY id DESC
+               LIMIT ?""",
+            (int(thread["id"]), max(1, int(limit))),
+        ).fetchall()
+        return list(reversed([dict(row) for row in rows]))
+    finally:
+        if close_conn:
+            conn.close()
+
+
+def _fts_phrase(value: str) -> str:
+    return '"' + str(value or "").replace('"', '""') + '"'
+
+
+def _fts_query(text: str) -> str:
+    terms: list[str] = []
+    for token in sorted(_tokens(text), key=len, reverse=True):
+        if len(token) < 3:
+            continue
+        if re.search(r"[\u4e00-\u9fff]", token):
+            terms.append(_fts_phrase(token))
+        elif re.fullmatch(r"[0-9a-zA-Z_][0-9a-zA-Z_\-]*", token):
+            terms.append(_fts_phrase(token))
+        if len(terms) >= 12:
+            break
+    if terms:
+        return " OR ".join(terms)
+    query = _text(text)
+    return _fts_phrase(query) if len(query) >= 3 else ""
+
+
+def _fetch_event_thread_candidates(
+    conn,
+    session_id: str,
+    statuses: tuple[str, ...],
+    *,
+    thread_ids: list[int] | None = None,
+):
+    placeholders = _status_placeholders(statuses)
+    params: list[Any] = [session_id, *statuses]
+    where = f" WHERE t.session_id = ? AND t.status IN ({placeholders})"
+    if thread_ids is not None:
+        if not thread_ids:
+            return []
+        id_placeholders = ",".join("?" for _ in thread_ids)
+        where += f" AND t.id IN ({id_placeholders})"
+        params.extend(int(item) for item in thread_ids)
+    return conn.execute(_thread_select_sql() + where, tuple(params)).fetchall()
+
+
+def _fts_candidate_scores(
+    conn,
+    session_id: str,
+    query_text: str,
+    statuses: tuple[str, ...],
+    *,
+    limit: int,
+) -> tuple[dict[int, float], bool]:
+    if not _event_thread_fts_available(conn):
+        return {}, False
+    match_query = _fts_query(query_text)
+    if not match_query:
+        return {}, True
+    try:
+        placeholders = _status_placeholders(statuses)
+        rows = conn.execute(
+            f"""SELECT thread_id, bm25({EVENT_THREAD_FTS_TABLE}) AS rank
+                FROM {EVENT_THREAD_FTS_TABLE}
+                WHERE {EVENT_THREAD_FTS_TABLE} MATCH ?
+                  AND session_id = ?
+                  AND status IN ({placeholders})
+                ORDER BY rank ASC
+                LIMIT ?""",
+            (match_query, session_id, *statuses, max(1, int(limit))),
+        ).fetchall()
+    except Exception:
+        return {}, False
+    scores: dict[int, float] = {}
+    ranks = [(int(row["thread_id"]), float(row["rank"] or 0.0)) for row in rows]
+    if not ranks:
+        return {}, True
+    best = min(rank for _, rank in ranks)
+    worst = max(rank for _, rank in ranks)
+    span = max(0.000001, worst - best)
+    for thread_id, rank in ranks:
+        normalized = 1.0 - ((rank - best) / span) if len(ranks) > 1 else 1.0
+        scores[thread_id] = max(0.0, min(1.0, normalized))
+    return scores, True
+
+
+def _score_event_thread(
+    row: dict[str, Any],
+    query_tokens: set[str],
+    *,
+    now: datetime,
+    fts_score: float | None = None,
+) -> dict[str, Any] | None:
+    legacy = _legacy_row_from_thread(row)
+    haystack = _search_text_from_parts(
+        legacy.get("title"),
+        legacy.get("details"),
+        legacy.get("followup_hint"),
+        legacy.get("search_text"),
+        legacy.get("merge_hint"),
+    )
+    hay_tokens = _tokens(haystack)
+    overlap_tokens = sorted(query_tokens & hay_tokens)
+    overlap = len(overlap_tokens)
+    if overlap <= 0 and fts_score is None:
+        return None
+
+    overlap_score = overlap / max(1, min(len(query_tokens), len(hay_tokens)))
+    fts_component = max(0.0, min(1.0, float(fts_score))) if fts_score is not None else 0.0
+    status_bonus = 0.12 if legacy.get("status") in ACTIVE_EVENT_STATUSES else 0.0
+    confidence_bonus = min(0.08, max(0.0, float(legacy.get("confidence") or 0.0)) * 0.08)
+    recent_bonus = 0.0
+    try:
+        updated = datetime.fromisoformat(str(legacy.get("last_seen_at") or ""))
+        age_days = max(0.0, (now - updated).total_seconds() / 86400)
+        recent_bonus = max(0.0, 0.18 - min(age_days, 30) * 0.006)
+    except Exception:
+        pass
+
+    score = min(
+        1.0,
+        (fts_component * 0.44)
+        + (overlap_score * 0.46)
+        + status_bonus
+        + recent_bonus
+        + confidence_bonus,
+    )
+    legacy["score"] = score
+    legacy["match_debug"] = {
+        "fts_score": fts_component,
+        "overlap_score": overlap_score,
+        "overlap_tokens": overlap_tokens[:12],
+        "status_bonus": status_bonus,
+        "recent_bonus": recent_bonus,
+        "confidence_bonus": confidence_bonus,
+        "total": score,
+    }
+    reason_bits = []
+    if fts_score is not None:
+        reason_bits.append(f"fts={fts_component:.2f}")
+    if overlap_tokens:
+        reason_bits.append("matched: " + ", ".join(overlap_tokens[:8]))
+    if status_bonus:
+        reason_bits.append(f"status+{status_bonus:.2f}")
+    if recent_bonus:
+        reason_bits.append(f"recent+{recent_bonus:.2f}")
+    if confidence_bonus:
+        reason_bits.append(f"confidence+{confidence_bonus:.2f}")
+    legacy["reason_for_match"] = "; ".join(reason_bits) or "fts candidate"
+    return legacy
+
+
 def find_related_event_threads(
     session_id: str,
     text: str,
     limit: int = 5,
     *,
     statuses: tuple[str, ...] = ACTIVE_EVENT_STATUSES,
+    debug: bool = False,
     _conn=None,
 ) -> list[dict[str, Any]]:
     session_id = _resolve_identity_session(session_id)
@@ -942,12 +1224,22 @@ def find_related_event_threads(
     conn = _conn or get_conn()
     close_conn = _conn is None
     try:
-        placeholders = _status_placeholders(statuses)
-        rows = conn.execute(
-            _thread_select_sql()
-            + f" WHERE t.session_id = ? AND t.status IN ({placeholders})",
-            (session_id, *statuses),
-        ).fetchall()
+        fts_scores, fts_attempted = _fts_candidate_scores(
+            conn,
+            session_id,
+            query_text,
+            statuses,
+            limit=max(FTS_RECALL_LIMIT, int(limit) * 3),
+        )
+        if fts_scores:
+            rows = _fetch_event_thread_candidates(
+                conn,
+                session_id,
+                statuses,
+                thread_ids=list(fts_scores.keys()),
+            )
+        else:
+            rows = _fetch_event_thread_candidates(conn, session_id, statuses)
     finally:
         if close_conn:
             conn.close()
@@ -956,33 +1248,13 @@ def find_related_event_threads(
     scored: list[dict[str, Any]] = []
     for raw in rows:
         row = dict(raw)
-        legacy = _legacy_row_from_thread(row)
-        haystack = _search_text_from_parts(
-            legacy.get("title"),
-            legacy.get("details"),
-            legacy.get("followup_hint"),
-            legacy.get("search_text"),
-            legacy.get("merge_hint"),
-        )
-        hay_tokens = _tokens(haystack)
-        if not hay_tokens:
-            continue
-        overlap = len(query_tokens & hay_tokens)
-        if overlap <= 0:
-            continue
-        base = overlap / max(1, min(len(query_tokens), len(hay_tokens)))
-        status_bonus = 0.12 if legacy.get("status") in ACTIVE_EVENT_STATUSES else 0.0
-        recent_bonus = 0.0
-        try:
-            updated = datetime.fromisoformat(str(legacy.get("last_seen_at") or ""))
-            age_days = max(0.0, (now - updated).total_seconds() / 86400)
-            recent_bonus = max(0.0, 0.18 - min(age_days, 30) * 0.006)
-        except Exception:
-            pass
-        score = min(1.0, base + status_bonus + recent_bonus)
-        legacy["score"] = score
-        legacy["reason_for_match"] = "matched: " + ", ".join(sorted((query_tokens & hay_tokens))[:8])
-        scored.append(legacy)
+        fts_score = fts_scores.get(int(row["id"]))
+        legacy = _score_event_thread(row, query_tokens, now=now, fts_score=fts_score)
+        if legacy:
+            if debug:
+                legacy["match_debug"]["fts_attempted"] = bool(fts_attempted)
+                legacy["match_debug"]["used_fts_candidate"] = fts_score is not None
+            scored.append(legacy)
 
     scored.sort(
         key=lambda item: (

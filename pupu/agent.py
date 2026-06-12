@@ -19,6 +19,7 @@ from .memory import (
     get_familiarity,
     find_related_event_threads,
     has_successful_memu_sync,
+    get_event_thread_recent_steps,
     get_important_events,
     get_oldest_unsummarized_msg_id,
     get_recent_messages,
@@ -260,6 +261,18 @@ def _format_event_thread_candidates_for_review(identity_session: str, text: str)
         if hint:
             line += f" | hint={_compact_review_field(hint, 100)}"
         lines.append(line)
+        steps = get_event_thread_recent_steps(identity_session, key, limit=3) if key else []
+        for step in steps:
+            step_type = str(step.get("step_type") or "user")
+            summary = _compact_review_field(step.get("summary"), 90)
+            cause = _compact_review_field(step.get("cause"), 70)
+            reflection = _compact_review_field(step.get("reflection"), 70)
+            step_line = f"  - recent_step[{step_type}] summary={summary}"
+            if cause:
+                step_line += f" | cause={cause}"
+            if reflection:
+                step_line += f" | reflection={reflection}"
+            lines.append(step_line)
     return "\n".join(lines)
 
 

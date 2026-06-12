@@ -262,6 +262,15 @@ def init_db():
         ON event_steps(thread_id, created_at, id)
     """
     )
+    try:
+        from .important_events import ensure_event_thread_fts, rebuild_event_thread_fts
+
+        if ensure_event_thread_fts(conn):
+            rebuild_event_thread_fts(conn)
+    except Exception:
+        # FTS5 is an optional recall acceleration. The event graph still works
+        # through the lexical fallback when SQLite was built without it.
+        pass
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS memu_sync_log (

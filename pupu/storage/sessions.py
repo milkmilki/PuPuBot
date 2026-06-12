@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from .db import get_conn
+from .important_events import EVENT_THREAD_FTS_TABLE, _event_thread_fts_available
 
 
 def reset_session(session_id: str):
     conn = get_conn()
+    if _event_thread_fts_available(conn):
+        conn.execute(f"DELETE FROM {EVENT_THREAD_FTS_TABLE} WHERE session_id = ?", (session_id,))
     conn.execute(
         """DELETE FROM event_steps
            WHERE thread_id IN (

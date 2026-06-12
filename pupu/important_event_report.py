@@ -160,17 +160,40 @@ def format_event_thread_detail_report(session_id: str, key: str) -> str:
 
 def format_event_thread_search_report(session_id: str, query: str, limit: int = 8) -> str:
     query = _compact(query)
+    debug = False
+    if query.startswith("--debug "):
+        debug = True
+        query = _compact(query.removeprefix("--debug "))
+    elif query == "--debug":
+        debug = True
+        query = ""
     if not query:
-        return "用法：/events search <内容>"
-    events = find_related_event_threads(session_id, query, limit=limit)
+        return "用法：/events search [--debug] <内容>"
+    events = find_related_event_threads(session_id, query, limit=limit, debug=debug)
     if not events:
         return f"没有找到相关事件线：{query}"
 
-    lines = [f"相关事件线 {len(events)} 条"]
+    lines = [f"相关事件线 {len(events)} 条" + ("（debug）" if debug else "")]
     for idx, event in enumerate(events, start=1):
         score = float(event.get("score") or 0.0)
         lines.extend(_format_event_lines(idx, event))
         lines.append(f"   匹配: score={score:.2f} {_compact(event.get('reason_for_match'))}")
+        if debug:
+            detail = event.get("match_debug") or {}
+            tokens = detail.get("overlap_tokens") or []
+            lines.append(
+                "   debug: "
+                f"total={float(detail.get('total') or score):.3f} "
+                f"fts={float(detail.get('fts_score') or 0.0):.3f} "
+                f"overlap={float(detail.get('overlap_score') or 0.0):.3f} "
+                f"status_bonus={float(detail.get('status_bonus') or 0.0):.3f} "
+                f"recent_bonus={float(detail.get('recent_bonus') or 0.0):.3f} "
+                f"confidence_bonus={float(detail.get('confidence_bonus') or 0.0):.3f} "
+                f"fts_attempted={bool(detail.get('fts_attempted'))} "
+                f"used_fts={bool(detail.get('used_fts_candidate'))}"
+            )
+            if tokens:
+                lines.append(f"   debug_tokens: {', '.join(str(token) for token in tokens[:12])}")
     return "\n".join(lines)
 
 

@@ -9,8 +9,9 @@ os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
-from pupu.agent import _parse_batch_review_result
+from pupu.agent import _format_event_thread_candidates_for_review, _parse_batch_review_result
 from pupu.memory import (
+    append_event_step,
     _get_conn,
     create_scheduled_task,
     get_familiarity,
@@ -27,6 +28,7 @@ from pupu.memory import (
     save_summary,
     set_familiarity,
     update_familiarity,
+    upsert_important_events,
 )
 from pupu.persona import build_batch_review_prompt
 
@@ -305,6 +307,39 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(summaries[-1]["summary"], "用户和仆仆聊了一个重要约定。")
         self.assertEqual(events[0]["source_event_key"], "promise-test")
         self.assertEqual(list_scheduled_tasks(self.session_id), [])
+
+    def test_batch_review_event_candidates_include_recent_steps(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "cake-check",
+                    "title": "草莓蛋糕验收",
+                    "kind": "promise",
+                    "details": "用户答应带草莓蛋糕让仆仆验收",
+                    "merge_hint": "草莓蛋糕 验收 大颗草莓",
+                    "confidence": 0.95,
+                }
+            ],
+        )
+        append_event_step(
+            self.session_id,
+            "cake-check",
+            step_type="instance",
+            summary="仆仆提醒用户晚上要验收草莓蛋糕",
+            cause="仆仆主动跟进约定",
+            reflection="这次提醒让约定更清晰",
+        )
+
+        text = _format_event_thread_candidates_for_review(
+            self.session_id,
+            "今天要检查草莓蛋糕",
+        )
+
+        self.assertIn("thread_key=cake-check", text)
+        self.assertIn("recent_step[instance]", text)
+        self.assertIn("仆仆主动跟进约定", text)
+        self.assertIn("这次提醒让约定更清晰", text)
 
     def test_batch_review_input_uses_instance_name_instead_of_pupu(self):
         for i in range(10):

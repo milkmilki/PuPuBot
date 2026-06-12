@@ -13,13 +13,16 @@ from pupu.memory import (
     create_scheduled_task,
     event_graph_payload,
     find_related_event_threads,
+    get_event_thread_recent_steps,
     get_event_thread_steps,
     get_important_events,
+    _get_conn,
     init_db,
     link_important_event_task,
     reset_session,
     upsert_important_events,
 )
+import pupu.storage.important_events as important_event_store
 from pupu.storage.scheduled_tasks import cancel_scheduled_task
 
 
@@ -134,6 +137,121 @@ class EventGraphMemoryTests(unittest.TestCase):
 
         self.assertEqual(matches[0]["source_event_key"], "cake-check")
         self.assertGreater(matches[0]["score"], 0)
+
+    def test_event_thread_fts_index_is_created_and_refreshed(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "fts-cake",
+                    "title": "草莓蛋糕验收",
+                    "kind": "promise",
+                    "details": "用户答应带草莓蛋糕让仆仆验收",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        append_event_step(
+            self.session_id,
+            "fts-cake",
+            step_type="user",
+            summary="用户补充说要检查草莓蛋糕上的大颗草莓",
+        )
+
+        conn = _get_conn()
+        try:
+            table = conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = 'event_thread_fts'"
+            ).fetchone()
+            fts_row = conn.execute(
+                """SELECT search_text
+                   FROM event_thread_fts
+                   WHERE session_id = ? AND search_text MATCH ?""",
+                (self.session_id, '"大颗草莓"'),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(table)
+        self.assertIsNotNone(fts_row)
+
+    def test_related_search_marks_fts_candidate_in_debug(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "debug-cake",
+                    "title": "草莓蛋糕验收",
+                    "kind": "promise",
+                    "details": "用户答应带草莓蛋糕让仆仆验收",
+                    "merge_hint": "草莓蛋糕 验收 大颗草莓",
+                    "confidence": 0.95,
+                }
+            ],
+        )
+
+        matches = find_related_event_threads(
+            self.session_id,
+            "今天要检查草莓蛋糕",
+            limit=3,
+            debug=True,
+        )
+
+        self.assertEqual(matches[0]["source_event_key"], "debug-cake")
+        self.assertTrue(matches[0]["match_debug"]["fts_attempted"])
+        self.assertTrue(matches[0]["match_debug"]["used_fts_candidate"])
+        self.assertGreater(matches[0]["match_debug"]["fts_score"], 0)
+
+    def test_related_search_falls_back_when_fts_unavailable(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "fallback-cake",
+                    "title": "草莓蛋糕验收",
+                    "kind": "promise",
+                    "details": "用户答应带草莓蛋糕让仆仆验收",
+                    "merge_hint": "草莓 蛋糕 验收",
+                    "confidence": 0.95,
+                }
+            ],
+        )
+
+        original = important_event_store._event_thread_fts_available
+        important_event_store._event_thread_fts_available = lambda conn: False
+        try:
+            matches = find_related_event_threads(
+                self.session_id,
+                "今天要检查草莓蛋糕",
+                limit=3,
+                debug=True,
+            )
+        finally:
+            important_event_store._event_thread_fts_available = original
+
+        self.assertEqual(matches[0]["source_event_key"], "fallback-cake")
+        self.assertFalse(matches[0]["match_debug"]["fts_attempted"])
+        self.assertFalse(matches[0]["match_debug"]["used_fts_candidate"])
+
+    def test_recent_steps_returns_last_steps_in_chronological_order(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "steps-demo",
+                    "title": "事件线步骤测试",
+                    "kind": "promise",
+                    "details": "第一步",
+                    "confidence": 0.8,
+                }
+            ],
+        )
+        append_event_step(self.session_id, "steps-demo", step_type="user", summary="第二步")
+        append_event_step(self.session_id, "steps-demo", step_type="instance", summary="第三步")
+
+        steps = get_event_thread_recent_steps(self.session_id, "steps-demo", limit=2)
+
+        self.assertEqual([step["summary"] for step in steps], ["第二步", "第三步"])
 
     def test_scheduled_task_cancel_updates_thread_with_system_step(self):
         task_id = create_scheduled_task(

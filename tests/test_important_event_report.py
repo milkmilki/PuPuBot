@@ -468,6 +468,33 @@ class ImportantEventReportTests(unittest.TestCase):
         finally:
             html_path.unlink(missing_ok=True)
 
+    def test_search_debug_report_includes_score_breakdown(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "debug-search",
+                    "title": "草莓蛋糕验收",
+                    "kind": "promise",
+                    "details": "用户答应带草莓蛋糕让仆仆验收",
+                    "merge_hint": "草莓蛋糕 验收 大颗草莓",
+                    "confidence": 0.95,
+                }
+            ],
+        )
+
+        report = format_important_events_report(
+            self.session_id,
+            query="search --debug 今天要检查草莓蛋糕",
+        )
+
+        self.assertIn("相关事件线 1 条（debug）", report)
+        self.assertIn("debug-search", report)
+        self.assertIn("fts=", report)
+        self.assertIn("overlap=", report)
+        self.assertIn("status_bonus=", report)
+        self.assertIn("used_fts=True", report)
+
 
 if __name__ == "__main__":
     unittest.main()
