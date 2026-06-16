@@ -140,6 +140,15 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       cursor: pointer;
       font-weight: 650;
     }}
+    .layout-choice {{
+      display: grid;
+      gap: 6px;
+    }}
+    .layout-choice label {{
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }}
     .thread-list {{
       display: grid;
       gap: 8px;
@@ -341,6 +350,13 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
           <option value="missed">missed</option>
           <option value="dropped">dropped</option>
         </select>
+        <div class="layout-choice">
+          <label for="layout-mode">布局</label>
+          <select id="layout-mode">
+            <option value="horizontal">横向事件链</option>
+            <option value="radial">中心发散</option>
+          </select>
+        </div>
         <button id="fit">适配视图</button>
         <div class="legend">
           <span style="color: var(--thread)"><i class="dot"></i>事件线</span>
@@ -367,6 +383,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       selectedThreadId: null,
       query: "",
       status: "",
+      layout: "horizontal",
       scale: 1,
       tx: 0,
       ty: 0,
@@ -399,12 +416,10 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
 
     const threads = EVENT_GRAPH_DATA.threads || [];
     const steps = EVENT_GRAPH_DATA.steps || [];
-    const allNodes = (EVENT_GRAPH_DATA.nodes || []).map((node, index) => ({{
+    const allNodes = (EVENT_GRAPH_DATA.nodes || []).map((node) => ({{
       ...node,
-      x: 260 + (index % 7) * 64,
-      y: 170 + Math.floor(index / 7) * 58,
-      vx: 0,
-      vy: 0,
+      x: 0,
+      y: 0,
     }}));
     const allEdges = (EVENT_GRAPH_DATA.edges || []).map((edge) => ({{ ...edge }}));
     const byNodeId = new Map(allNodes.map((node) => [node.id, node]));
@@ -495,56 +510,61 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       if (node.type === "thread") return colors.thread;
       return colors[node.step_type] || colors.system;
     }}
-    function simulate(nodes, edges, iterations = 90) {{
-      if (!nodes.length) return;
-      const bounds = svg.getBoundingClientRect();
-      const cx = Math.max(300, bounds.width || 900) / 2;
-      const cy = Math.max(300, bounds.height || 650) / 2;
-      for (let tick = 0; tick < iterations; tick++) {{
-        for (const node of nodes) {{
-          const targetX = node.type === "thread" ? cx - 140 : cx + 80;
-          const targetY = cy + (Number(node.thread_id || 0) % 9 - 4) * 28;
-          node.vx += (targetX - node.x) * 0.002;
-          node.vy += (targetY - node.y) * 0.002;
-        }}
-        for (let i = 0; i < nodes.length; i++) {{
-          for (let j = i + 1; j < nodes.length; j++) {{
-            const a = nodes[i], b = nodes[j];
-            let dx = a.x - b.x;
-            let dy = a.y - b.y;
-            let dist2 = dx * dx + dy * dy || 0.01;
-            const force = Math.min(7, 900 / dist2);
-            const dist = Math.sqrt(dist2);
-            dx /= dist; dy /= dist;
-            a.vx += dx * force;
-            a.vy += dy * force;
-            b.vx -= dx * force;
-            b.vy -= dy * force;
-          }}
-        }}
-        for (const edge of edges) {{
-          const source = byNodeId.get(edge.source);
-          const target = byNodeId.get(edge.target);
-          if (!source || !target) continue;
-          const dx = target.x - source.x;
-          const dy = target.y - source.y;
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          const desired = source.type === "thread" ? 120 : 92;
-          const force = (dist - desired) * 0.018;
-          const fx = (dx / dist) * force;
-          const fy = (dy / dist) * force;
-          source.vx += fx;
-          source.vy += fy;
-          target.vx -= fx;
-          target.vy -= fy;
-        }}
-        for (const node of nodes) {{
-          if (state.draggingNode === node) continue;
-          node.vx *= 0.76;
-          node.vy *= 0.76;
-          node.x += node.vx;
-          node.y += node.vy;
-        }}
+    function orderedVisibleThreads() {{
+      const visibleIds = visibleThreadIdSet();
+      return threads.filter((thread) => visibleIds.has(String(thread.id)));
+    }}
+    function threadSteps(threadId) {{
+      return stepsByThread.get(String(threadId)) || [];
+    }}
+    function placeNode(nodeId, x, y) {{
+      const node = byNodeId.get(nodeId);
+      if (!node) return;
+      node.x = x;
+      node.y = y;
+    }}
+    function applyHorizontalLayout() {{
+      const shown = orderedVisibleThreads();
+      const rowGap = 118;
+      const stepGap = 178;
+      const startX = 130;
+      const firstStepX = 330;
+      const startY = 90;
+      shown.forEach((thread, row) => {{
+        const y = startY + row * rowGap;
+        placeNode(`thread-${{thread.id}}`, startX, y);
+        threadSteps(thread.id).forEach((step, idx) => {{
+          placeNode(`step-${{step.id}}`, firstStepX + idx * stepGap, y);
+        }});
+      }});
+    }}
+    function applyRadialLayout() {{
+      const shown = orderedVisibleThreads();
+      const centerX = 640;
+      const centerY = 420;
+      const innerRadius = shown.length <= 1 ? 0 : Math.max(150, Math.min(420, shown.length * 18));
+      const stepGap = 138;
+      const stepStart = shown.length <= 1 ? 170 : 150;
+      shown.forEach((thread, index) => {{
+        const angle = shown.length <= 1
+          ? 0
+          : -Math.PI / 2 + (Math.PI * 2 * index) / shown.length;
+        const ux = Math.cos(angle);
+        const uy = Math.sin(angle);
+        const threadX = centerX + ux * innerRadius;
+        const threadY = centerY + uy * innerRadius;
+        placeNode(`thread-${{thread.id}}`, threadX, threadY);
+        threadSteps(thread.id).forEach((step, idx) => {{
+          const distance = stepStart + idx * stepGap;
+          placeNode(`step-${{step.id}}`, threadX + ux * distance, threadY + uy * distance);
+        }});
+      }});
+    }}
+    function applyLayout() {{
+      if (state.layout === "radial") {{
+        applyRadialLayout();
+      }} else {{
+        applyHorizontalLayout();
       }}
     }}
     function graphTransform() {{
@@ -608,7 +628,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       state.edgeEls = new Map();
       state.nodeEls = new Map();
       empty.hidden = nodes.length > 0;
-      simulate(nodes, edges, 28);
+      applyLayout();
       svg.innerHTML = "";
       const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
       state.viewport = g;
@@ -744,6 +764,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       renderList();
       renderDetail();
       draw();
+      setTimeout(fitView, 20);
     }});
     document.getElementById("status-filter").addEventListener("change", (ev) => {{
       state.status = ev.target.value || "";
@@ -752,6 +773,12 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       renderList();
       renderDetail();
       draw();
+      setTimeout(fitView, 20);
+    }});
+    document.getElementById("layout-mode").addEventListener("change", (ev) => {{
+      state.layout = ev.target.value || "horizontal";
+      draw();
+      setTimeout(fitView, 20);
     }});
     document.getElementById("fit").addEventListener("click", fitView);
     svg.addEventListener("wheel", (ev) => {{

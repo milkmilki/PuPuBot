@@ -11,6 +11,7 @@ from nonebot.params import CommandArg
 
 import httpx
 
+from pupu.command_registry import command_aliases, command_usage, render_help
 from pupu.config import load_arbiter_base_url, load_arbiter_timeout_seconds, load_owner_ids
 
 from pupu.facts_report import format_facts_report
@@ -50,79 +51,37 @@ from pupu.tts import get_tts_config, get_tts_status
 from .common import is_owner, log, resolve_sessions, send_private_segments, split_message
 from . import state
 
-TIDY_USAGE = "用法：/tidy [check|apply]"
-
-HELP_TEXT = f"""PuPu 可用命令
-
-基础：
-/help（/commands /帮助 /命令 /指令）：查看这份帮助
-/score：查看好感度
-/history：查看最近聊天记录
-/tasks（/定时任务）：查看定时任务
-
-记忆：
-/important（/events /important_events /重要事件 /记忆事件）：查看事件线记忆；支持 detail <key> / search <内容> / url / migrate [simple]
-/facts（/fact /memory_facts /长期记忆 /事实记忆）：查看长期事实记忆
-/recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
-/memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引（管理员）
-/tidy（/cleanup /整理记忆 /整理）：整理 memU 长期记忆（facts / important_events）（管理员），默认 apply，也可用 /tidy check
-/reset：重置当前会话记忆、好感度和聊天记录（管理员）
-
-语音：
-/voice（/tts /语音 /语音回复）：查看语音回复状态
-/voice on：开启语音回复（管理员）
-/voice off：关闭语音回复（管理员）
-
-模型：
-/provider（/llm /模型源 /模型）：查看当前模型源
-/provider status（/provider list）：查看当前模型源
-/provider <provider>：切换聊天模型源（管理员）
-/provider <role> <provider>：切换指定角色模型源（管理员）
-/provider all <provider>：切换全部角色模型源（管理员）
-可用 role：chat / judge / maintenance / proactive
-可用 provider：{", ".join(SUPPORTED_PROVIDERS)}
-
-主动消息：
-/proactive（/主动 /主动消息）：手动触发一次主动消息检查（管理员）
-/proactive status：查看主动消息开关和后台循环状态（管理员）
-/proactive on / /proactive off：开启或关闭主动消息，并写回当前实例配置（管理员）
-/proactive force（/proactive now /proactive run /proactive 强制 /proactive 立即）：强制执行一次主动消息流程（管理员）
-
-群仲裁：
-/silence（/silenc /沉默 /静默 /仲裁静默）：查看本群静默状态（管理员，仅群聊）
-/silence on：本群仲裁强制不接话（管理员，仅群聊，需中心化仲裁服务）
-/silence off：恢复本群仲裁接话（管理员，仅群聊）
-"""
+TIDY_USAGE = f"用法：{command_usage('tidy')}"
 
 help_cmd = on_command(
     "help",
-    aliases={"commands", "帮助", "命令", "指令"},
+    aliases=command_aliases("help"),
     priority=5,
     block=True,
 )
 score_cmd = on_command("score", priority=5, block=True)
-tasks_cmd = on_command("tasks", aliases={"定时任务"}, priority=5, block=True)
+tasks_cmd = on_command("tasks", aliases=command_aliases("tasks"), priority=5, block=True)
 important_cmd = on_command(
     "important",
-    aliases={"events", "important_events", "重要事件", "记忆事件"},
+    aliases=command_aliases("important"),
     priority=5,
     block=True,
 )
 facts_cmd = on_command(
     "facts",
-    aliases={"fact", "memory_facts", "长期记忆", "事实记忆"},
+    aliases=command_aliases("facts"),
     priority=5,
     block=True,
 )
 recall_cmd = on_command(
     "recall",
-    aliases={"memu_recall", "召回"},
+    aliases=command_aliases("recall"),
     priority=5,
     block=True,
 )
 memu_rebuild_cmd = on_command(
     "memu_rebuild",
-    aliases={"rebuild_memory", "重建记忆"},
+    aliases=command_aliases("memu_rebuild"),
     priority=5,
     block=True,
 )
@@ -130,31 +89,31 @@ history_cmd = on_command("history", priority=5, block=True)
 reset_cmd = on_command("reset", priority=5, block=True)
 tidy_cmd = on_command(
     "tidy",
-    aliases={"cleanup", "整理记忆", "整理"},
+    aliases=command_aliases("tidy"),
     priority=5,
     block=True,
 )
 voice_cmd = on_command(
     "voice",
-    aliases={"tts", "语音", "语音回复"},
+    aliases=command_aliases("voice"),
     priority=5,
     block=True,
 )
 proactive_cmd = on_command(
     "proactive",
-    aliases={"主动", "主动消息"},
+    aliases=command_aliases("proactive"),
     priority=5,
     block=True,
 )
 provider_cmd = on_command(
     "provider",
-    aliases={"llm", "模型源", "模型"},
+    aliases=command_aliases("provider"),
     priority=5,
     block=True,
 )
 silence_cmd = on_command(
     "silence",
-    aliases={"silenc", "沉默", "静默", "仲裁静默"},
+    aliases=command_aliases("silence"),
     priority=5,
     block=True,
 )
@@ -162,7 +121,11 @@ silence_cmd = on_command(
 
 @help_cmd.handle()
 async def handle_help():
-    await help_cmd.finish(HELP_TEXT)
+    await help_cmd.finish(
+        render_help(surface="qq")
+        + "\n\n模型 provider 可选："
+        + ", ".join(SUPPORTED_PROVIDERS)
+    )
 
 
 @score_cmd.handle()
@@ -525,12 +488,12 @@ async def handle_provider(event: Event, args: Message = CommandArg()):
 
     warning = ""
     if provider == "xiaoshuoai" and not os.environ.get("PUPU_XIAOSHUOAI_API_KEY", "").strip():
-        warning = "\n但 PUPU_XIAOSHUOAI_API_KEY 还没配置，请先填好 .env。"
+        warning = "\n但 PUPU_XIAOSHUOAI_API_KEY 还没配置，请先填好 pupu.yaml。"
     if provider == "deepseek" and not os.environ.get("PUPU_DEEPSEEK_API_KEY", "").strip():
-        warning = "\n但 PUPU_DEEPSEEK_API_KEY 还没配置，请先填好 .env。"
+        warning = "\n但 PUPU_DEEPSEEK_API_KEY 还没配置，请先填好 pupu.yaml。"
     await provider_cmd.finish(
         f"已切换 {('全部' if role == 'all' else role)} provider 为 {provider}。"
-        "\n下一次模型请求生效，重启后会回到 .env 配置。"
+        "\n下一次模型请求生效，重启后会回到 pupu.yaml 配置。"
         + warning
     )
 

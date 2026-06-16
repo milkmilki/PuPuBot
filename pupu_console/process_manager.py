@@ -10,6 +10,8 @@ import threading
 from collections import defaultdict
 from pathlib import Path
 
+from pupu.app_config import apply_app_config_env, ensure_app_config_file
+
 from . import instance_store
 from .paths import get_repo_root, instances_dir
 
@@ -79,6 +81,8 @@ class ProcessManager:
         with self._lock:
             if self._arbiter_proc is not None and self._arbiter_proc.poll() is None:
                 raise RuntimeError("仲裁服务已在运行")
+            ensure_app_config_file()
+            apply_app_config_env()
             env = os.environ.copy()
             env.setdefault("PYTHONIOENCODING", "utf-8")
             if sys.platform == "win32":
@@ -161,6 +165,8 @@ class ProcessManager:
                 if op == my_port:
                     raise RuntimeError(f"port {my_port} already used by running instance {other_id}")
 
+            ensure_app_config_file()
+            apply_app_config_env()
             env = os.environ.copy()
             env["PUPU_INSTANCE_DIR"] = str(inst_dir)
             env["PUPU_CONFIG_PATH"] = str(inst_dir / "instance.json")

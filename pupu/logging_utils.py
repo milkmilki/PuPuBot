@@ -15,6 +15,29 @@ _print_lock = threading.Lock()
 _original_print = builtins.print
 _original_stderr = sys.stderr
 
+_VERBOSE_CONSOLE_PREFIXES = (
+    "[pupu][memu]",
+    "[pupu] batch review",
+    "[pupu] dialogue decision",
+)
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def is_debug_console_enabled() -> bool:
+    return _truthy(os.environ.get("PUPU_DEBUG_CONSOLE"))
+
+
+def set_debug_console_enabled(enabled: bool) -> None:
+    os.environ["PUPU_DEBUG_CONSOLE"] = "1" if enabled else "0"
+
+
+def _is_verbose_console_line(text: str) -> bool:
+    stripped = str(text or "").lstrip()
+    return any(stripped.startswith(prefix) for prefix in _VERBOSE_CONSOLE_PREFIXES)
+
 
 class _TeeStderr:
     def __init__(self, original, sink_getter):
@@ -97,14 +120,20 @@ def _get_sink():
 
 def _patched_print(*args, **kwargs):
     file_target = kwargs.get("file")
-    _original_print(*args, **kwargs)
+    sep = kwargs.get("sep", " ")
+    end = kwargs.get("end", "\n")
+    text = sep.join(str(arg) for arg in args) + end
+
+    should_echo = True
+    if file_target in (None, sys.stdout, sys.stderr, _original_stderr):
+        should_echo = is_debug_console_enabled() or not _is_verbose_console_line(text)
+
+    if should_echo:
+        _original_print(*args, **kwargs)
 
     if file_target not in (None, sys.stdout, sys.stderr, _original_stderr):
         return
 
-    sep = kwargs.get("sep", " ")
-    end = kwargs.get("end", "\n")
-    text = sep.join(str(arg) for arg in args) + end
     sink = _get_sink()
     if sink is None or not text:
         return

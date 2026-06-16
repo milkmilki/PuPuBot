@@ -11,12 +11,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from dotenv import load_dotenv
-
+from .app_config import apply_app_config_env
 from .storage.db import get_data_dir
 
 _ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_ROOT / ".env")
+apply_app_config_env()
 
 _DEFAULT_PROVIDER = ""
 _KNOWN_AUDIO_FORMATS = {"wav", "ogg", "mp3", "aac", "flac"}

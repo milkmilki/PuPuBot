@@ -10,13 +10,18 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from .agent import chat
+from .app_config import apply_app_config_env, default_instance_settings, ensure_app_config_file
 from .backup import maybe_run_daily_backup
+from .command_registry import command_usage, render_help, resolve_command
 from .dialogue_loop import register_sender
 from .sessions import OWNER_SESSION
 from .facts_report import format_facts_report
 from .important_event_report import format_important_events_report
-from .llm import preflight_model_providers
-from .logging_utils import setup_runtime_logging
+from .logging_utils import (
+    is_debug_console_enabled,
+    set_debug_console_enabled,
+    setup_runtime_logging,
+)
 from .memory import get_familiarity_info, get_recent_messages, init_db, reset_session
 from .memory_index import (
     clear_memu_session,
@@ -29,27 +34,8 @@ from .tools import manage_scheduled_task
 
 console = Console()
 
-TIDY_USAGE = "用法：/tidy [check|apply]"
+TIDY_USAGE = f"用法：{command_usage('tidy')}"
 DAILY_BACKUP_CHECK_INTERVAL_SECONDS = 30 * 60
-
-CLI_HELP_TEXT = """PuPu CLI 可用命令
-
-基础：
-/help（/commands /帮助 /命令 /指令）：查看这份帮助
-/quit（/exit /q）：退出
-/score：查看好感度
-/history：查看最近聊天记录
-/tasks（/定时任务）：查看定时任务
-
-记忆：
-/important（/events /important_events /重要事件 /记忆事件）：查看事件线记忆；支持 detail <key> / search <内容> / url / migrate [simple]
-/facts（/fact /memory_facts /长期记忆 /事实记忆）：查看长期事实记忆
-/recall <内容>（/memu_recall /召回）：调试 memU 会召回哪些记忆
-/memu_rebuild（/rebuild_memory /重建记忆）：从旧库重建当前会话的 memU 索引
-/tidy（/cleanup /整理记忆 /整理）：整理 memU 长期记忆（facts / important_events），默认执行 apply，也可用 /tidy check
-/proactive [status|on|off]：查看、开启或关闭主动消息开关
-/reset：重置当前会话记忆、好感度和聊天记录
-"""
 
 
 def _cli_scheduler_loop():
@@ -116,17 +102,21 @@ def _configure_cli_instance_interactively() -> str | None:
     if os.environ.get("PUPU_INSTANCE_DIR"):
         return None
 
-    try:
-        from pupu_console import instance_store
-    except Exception:
-        return None
+    from pupu_console import instance_store
 
-    try:
-        instance_ids = instance_store.list_instance_ids()
-    except Exception:
-        return None
+    apply_app_config_env()
+    defaults = default_instance_settings()
+    instance_ids = instance_store.list_instance_ids()
     if not instance_ids:
-        return None
+        console.print("[yellow]还没有 PuPu 实例，需要先创建一个。[/yellow]")
+        default_name = defaults["display_name"]
+        display_name = console.input(
+            f"[bold green]显示名称（默认：{default_name}）> [/bold green]"
+        ).strip() or default_name
+        instance_id = instance_store.create_instance(display_name, qq_mode="cli")
+        _apply_instance_env(instance_store.instance_dir(instance_id))
+        console.print(f"[green]已创建并选择实例：{display_name} ({instance_id})[/green]")
+        return instance_id
 
     choices = []
     for instance_id in instance_ids:
@@ -149,7 +139,7 @@ def _configure_cli_instance_interactively() -> str | None:
         return None
 
     console.print("[bold cyan]选择要进入的 PuPu 实例[/bold cyan]")
-    console.print("[dim]直接回车使用根目录默认 CLI；输入编号或实例 id 进入对应实例。[/dim]")
+    console.print("[dim]输入编号或实例 id；输入 n 创建新实例；输入 q 退出。[/dim]")
     for index, choice in enumerate(choices, start=1):
         db_hint = "有记忆库" if choice["db_exists"] else "暂无记忆库"
         console.print(
@@ -161,8 +151,17 @@ def _configure_cli_instance_interactively() -> str | None:
     while True:
         raw = console.input("[bold green]实例> [/bold green]").strip()
         if not raw:
-            console.print("[dim]使用根目录默认 CLI。[/dim]")
-            return None
+            console.print("[yellow]必须选择一个实例；输入 n 可以创建新实例。[/yellow]")
+            continue
+        if raw.lower() in {"n", "new", "create", "c"}:
+            default_name = defaults["display_name"]
+            display_name = console.input(
+                f"[bold green]显示名称（默认：{default_name}）> [/bold green]"
+            ).strip() or default_name
+            instance_id = instance_store.create_instance(display_name, qq_mode="cli")
+            _apply_instance_env(instance_store.instance_dir(instance_id))
+            console.print(f"[green]已创建并选择实例：{display_name} ({instance_id})[/green]")
+            return instance_id
         if raw.lower() in {"q", "quit", "exit"}:
             raise SystemExit(0)
         selected = None
@@ -173,7 +172,7 @@ def _configure_cli_instance_interactively() -> str | None:
         if selected is None:
             selected = by_id.get(raw)
         if selected is None:
-            console.print("[yellow]没有这个实例，请输入列表里的编号或 id；直接回车使用默认 CLI。[/yellow]")
+            console.print("[yellow]没有这个实例，请输入列表里的编号或 id；输入 n 创建新实例。[/yellow]")
             continue
 
         _apply_instance_env(Path(selected["dir"]))
@@ -187,13 +186,17 @@ def _configure_cli_instance_interactively() -> str | None:
 def handle_command(cmd: str) -> bool:
     """Handle slash commands. Returns True if handled."""
     command_name, _, command_arg = cmd.partition(" ")
-    if command_name in ("/help", "/commands", "/帮助", "/命令", "/指令"):
-        console.print(CLI_HELP_TEXT)
+    spec = resolve_command(command_name, surface="cli")
+    if spec is None:
         return False
-    if cmd in ("/quit", "/exit", "/q"):
+
+    if spec.command_id == "help":
+        console.print(render_help(surface="cli"))
+        return False
+    if spec.command_id == "quit":
         console.print("[dim]再见。[/dim]")
         return True
-    elif cmd == "/score":
+    elif spec.command_id == "score":
         info = get_familiarity_info(OWNER_SESSION)
         console.print(
             Panel(
@@ -205,7 +208,7 @@ def handle_command(cmd: str) -> bool:
             )
         )
         return False
-    elif cmd == "/history":
+    elif spec.command_id == "history":
         messages = get_recent_messages(20, OWNER_SESSION)
         if not messages:
             console.print("[dim]还没有聊天记录。[/dim]")
@@ -216,16 +219,16 @@ def handle_command(cmd: str) -> bool:
                 else:
                     console.print(f"[bold cyan]仆仆:[/bold cyan] {m['content']}")
         return False
-    elif cmd in ("/tasks", "/定时任务"):
+    elif spec.command_id == "tasks":
         console.print(manage_scheduled_task(OWNER_SESSION, {"action": "list"}))
         return False
-    elif command_name in ("/important", "/events", "/important_events", "/重要事件", "/记忆事件"):
+    elif spec.command_id == "important":
         console.print(format_important_events_report(OWNER_SESSION, query=command_arg))
         return False
-    elif cmd in ("/facts", "/fact", "/memory_facts", "/长期记忆", "/事实记忆"):
+    elif spec.command_id == "facts":
         console.print(format_facts_report(OWNER_SESSION))
         return False
-    elif command_name in ("/tidy", "/cleanup", "/整理记忆", "/整理"):
+    elif spec.command_id == "tidy":
         tidy_mode, tidy_usage = _parse_tidy_mode(command_arg)
         if tidy_usage:
             console.print(tidy_usage)
@@ -235,7 +238,7 @@ def handle_command(cmd: str) -> bool:
             report = run_memu_maintenance(OWNER_SESSION, mode=tidy_mode)
         console.print(report)
         return False
-    elif command_name in ("/proactive", "/主动", "/主动消息"):
+    elif spec.command_id == "proactive":
         action = command_arg.strip().lower()
         if action in {"", "status", "状态", "狀態"}:
             console.print("主动消息：" + ("已开启" if is_proactive_enabled() else "已关闭"))
@@ -248,18 +251,31 @@ def handle_command(cmd: str) -> bool:
         else:
             console.print("用法：/proactive [status|on|off]")
         return False
-    elif command_name in ("/recall", "/memu_recall", "/召回"):
+    elif spec.command_id == "debug":
+        action = command_arg.strip().lower()
+        if action in {"", "status", "状态", "狀態"}:
+            console.print("调试日志：" + ("已开启" if is_debug_console_enabled() else "已关闭"))
+        elif action in {"on", "enable", "enabled", "open", "start", "1", "true", "yes", "开启", "打开", "开"}:
+            set_debug_console_enabled(True)
+            console.print("调试日志已开启。memU、batch review 等详细日志会显示在控制台。")
+        elif action in {"off", "disable", "disabled", "close", "stop", "0", "false", "no", "关闭", "关"}:
+            set_debug_console_enabled(False)
+            console.print("调试日志已关闭。详细日志仍会写入日志文件。")
+        else:
+            console.print("用法：/debug [status|on|off]")
+        return False
+    elif spec.command_id == "recall":
         query = command_arg.strip()
         if not query:
-            console.print("用法：/recall 想测试召回的内容")
+            console.print("用法：/recall <内容>")
         else:
             console.print(format_memu_recall_report(query, OWNER_SESSION))
         return False
-    elif command_name in ("/memu_rebuild", "/rebuild_memory", "/重建记忆"):
+    elif spec.command_id == "memu_rebuild":
         with console.status("[cyan]正在重建 memU 记忆索引...[/cyan]"):
             console.print(rebuild_memu_session(OWNER_SESSION))
         return False
-    elif cmd == "/reset":
+    elif spec.command_id == "reset":
         confirm = console.input("[bold red]确认重置仆仆？所有记忆、好感度、聊天记录都会清空 (y/N): [/bold red]").strip().lower()
         if confirm == "y":
             reset_session(OWNER_SESSION)
@@ -273,10 +289,26 @@ def handle_command(cmd: str) -> bool:
 
 
 def main():
+    cfg_path, created = ensure_app_config_file()
+    if created:
+        console.print(f"[yellow]已创建默认配置文件：{cfg_path}[/yellow]")
+        console.print("[yellow]请在其中填写 llm.*.api_key；未填写前不能开始聊天。[/yellow]")
+        console.print()
+    apply_app_config_env()
     _configure_cli_instance_interactively()
     setup_runtime_logging()
     init_db()
-    preflight_model_providers()
+    from .llm import ProviderConfigError, preflight_model_providers
+
+    try:
+        preflight_model_providers(require_chat=True)
+    except ProviderConfigError as exc:
+        console.print()
+        console.print("[bold red]模型配置还没准备好。[/bold red]")
+        console.print(str(exc))
+        console.print()
+        console.print("请先打开 [bold]pupu.yaml[/bold]，填写 llm.*.api_key。")
+        return
     print_banner()
 
     def _cli_followup_sender(text: str):

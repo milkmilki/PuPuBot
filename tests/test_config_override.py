@@ -40,7 +40,7 @@ class ConfigPathOverrideTests(unittest.TestCase):
             import pupu.config as cfg
 
             importlib.reload(cfg)
-            self.assertEqual(cfg.load_owner_ids(), ["424225912"])
+            self.assertEqual(cfg.load_owner_ids(), [])
         finally:
             Path(path).unlink(missing_ok=True)
 

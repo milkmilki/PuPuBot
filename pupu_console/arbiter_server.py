@@ -4,14 +4,10 @@ Run::
 
     python -m pupu_console.arbiter_server
 
-Or::
-
-    python run_arbitrator.py
-
 Optional JSON config: ``instances/_shared/arbiter_server.json`` (see ``arbiter_server.json.example``).
 
-Environment (override file): ``PUPU_ARBITER_HOST``, ``PUPU_ARBITER_PORT``, ``PUPU_JUDGE_PROVIDER``,
-``PUPU_DEEPSEEK_MODEL``, ``PUPU_DEEPSEEK_API_KEY``, etc. Loads repo ``.env`` first.
+Global ``pupu.yaml`` keys are mapped to ``PUPU_ARBITER_HOST``, ``PUPU_ARBITER_PORT``,
+``PUPU_JUDGE_PROVIDER``, ``PUPU_DEEPSEEK_MODEL``, ``PUPU_DEEPSEEK_API_KEY``, etc.
 
 Debounce (``PUPU_ARBITER_DEBOUNCE_IDLE_SEC`` / ``PUPU_ARBITER_DEBOUNCE_MAX_SEC`` or JSON keys
 ``debounce_idle_seconds`` / ``debounce_max_seconds``):
@@ -40,7 +36,7 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from pupu.app_config import apply_app_config_env
 
 from .paths import get_repo_root, instances_dir
 
@@ -314,7 +310,7 @@ def build_app(bind_host: str, bind_port: int):
 
 def main() -> None:
     repo = get_repo_root()
-    load_dotenv(repo / ".env")
+    apply_app_config_env()
     cfg = load_arbiter_server_config()
     apply_arbiter_settings(cfg)
     host, port = resolve_bind(cfg)
@@ -343,7 +339,7 @@ def main() -> None:
     )
     if os.environ.get("PUPU_JUDGE_PROVIDER", "").strip() == "deepseek" and not has_key:
         print(
-            "[arbiter_server] warning: set PUPU_DEEPSEEK_API_KEY (or ANTHROPIC_API_KEY) in .env for DeepSeek",
+            "[arbiter_server] warning: set llm.deepseek.api_key (or llm.anthropic.api_key) in pupu.yaml",
             file=sys.stderr,
         )
 

@@ -303,22 +303,23 @@ pupu 仆仆你在吗
 
 ## PuPu 侧配置
 
-`.env` 里可以配置：
+`pupu.yaml` 里可以配置：
 
-```env
-PUPU_STARDEW_HOST=127.0.0.1
-PUPU_STARDEW_PORT=18787
-PUPU_STARDEW_SESSION_ID=owner
-PUPU_STARDEW_TOKEN=
-PUPU_STARDEW_REPLY_HINT=
+```yaml
+stardew:
+  host: 127.0.0.1
+  port: 18787
+  session_id: owner
+  token: ""
+  reply_hint: ""
 ```
 
 说明：
 
-- `PUPU_STARDEW_PORT=18787`：PuPu bridge 监听端口。
-- `PUPU_STARDEW_SESSION_ID=owner`：共享你现在和仆仆的主记忆。
-- `PUPU_STARDEW_TOKEN`：可选密钥。如果这里设置了，Mod 配置里也要填同一个 `Token`。
-- `PUPU_STARDEW_REPLY_HINT`：可选回复风格提示。
+- `stardew.port=18787`：PuPu bridge 监听端口。
+- `stardew.session_id=owner`：共享你现在和仆仆的主记忆。
+- `stardew.token`：可选密钥。如果这里设置了，Mod 配置里也要填同一个 `Token`。
+- `stardew.reply_hint`：可选回复风格提示。
 
 ## Mod 配置
 

@@ -1,0 +1,117 @@
+# PuPuBot global configuration.
+# Copy this file to pupu.yaml, then fill only the values you need.
+
+llm:
+  # Supported: anthropic, deepseek, xiaoshuoai, codex_cli
+  provider: deepseek
+  chat_provider: deepseek
+  judge_provider: deepseek
+  maintenance_provider: deepseek
+  proactive_provider: deepseek
+
+  anthropic:
+    api_key: ""
+    base_url: ""
+    model: claude-opus-4-6
+    judge_model: claude-haiku-4-5-20251001
+
+  deepseek:
+    api_key: ""
+    base_url: https://api.deepseek.com/anthropic
+    model: deepseek-chat
+    effort: high
+    timeout: 90
+    temperature: 0.7
+
+  xiaoshuoai:
+    api_key: ""
+    base_url: https://www.gpt4novel.com/api/xiaoshuoai/ext/v1/chat/completions
+    model: ""
+    timeout: 60
+    temperature: 0.7
+
+  codex_cli:
+    bin: ""
+    profile: ""
+    reasoning_effort: low
+    proxy: ""
+    no_proxy: localhost,127.0.0.1,::1
+
+user:
+  # Your QQ number(s). Leave empty for CLI-only testing.
+  owner_ids:
+    - ""
+
+instance:
+  display_name: 仆仆
+  # cli | napcat | official
+  qq_mode: cli
+  qq_app_id: ""
+  qq_app_secret: ""
+  debounce_seconds_open_group: 35
+
+napcat:
+  host: 0.0.0.0
+  port: 8081
+  command_start: ["/"]
+  command_sep: ["."]
+  access_token: ""
+
+console:
+  host: 127.0.0.1
+  port: 8770
+
+arbiter:
+  host: 127.0.0.1
+  port: 18079
+  debounce_idle_seconds: 30
+  debounce_max_seconds: 60
+  await_max_timeout_seconds: 60
+  subscribe_timeout_seconds: 30
+  timeout_seconds: 300
+  audit: true
+
+memu:
+  enabled: auto
+  api_key: ""
+  base_url: https://api.openai.com/v1
+  method: rag
+  retrieve_top_k: 6
+  ranking: salience
+  llm_provider: openai
+  llm_api_key: ""
+  llm_base_url: ""
+  llm_model: gpt-4o-mini
+  embed_provider: openai
+  embed_api_key: ""
+  embed_base_url: ""
+  embed_model: text-embedding-3-small
+
+web_search:
+  provider: ""
+  fallbacks: tavily,ddg_html
+  tavily_api_key: ""
+
+tts:
+  enabled: false
+  reply_default: false
+  provider: ""
+  base_url: ""
+  voice: ""
+  max_chars: 120
+  timeout: 60
+  audio_format: wav
+  normalize_audio: false
+  ffmpeg: ""
+
+runtime:
+  proactive_enabled: true
+  debug_scheduled_tasks: false
+  backup_dir: ""
+
+stardew:
+  host: 127.0.0.1
+  port: 18787
+  session_id: owner
+  token: ""
+  reply_hint: ""

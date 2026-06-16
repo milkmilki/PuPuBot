@@ -158,6 +158,33 @@ textarea { width: 100%; min-height: 140px; }
   display: grid;
   gap: 0.9rem;
 }
+.event-graph-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.2rem;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+}
+.event-layout-mode {
+  min-width: 7.2rem;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.event-layout-mode:hover {
+  color: var(--text);
+  background: #161b22;
+}
+.event-layout-mode.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
 .event-svg-wrap {
   position: relative;
   background: #0d1117;

@@ -11,16 +11,18 @@
 
 ## 配置
 
-在项目根目录 `.env` 中配置：
+在项目根目录 `pupu.yaml` 中配置：
 
-```env
-# Optional proxy used only by PuPu-launched Codex CLI subprocesses.
-# Keep Clash running, but system proxy can be off.
-PUPU_CODEX_PROXY=http://127.0.0.1:7890
-PUPU_CODEX_NO_PROXY=localhost,127.0.0.1,::1
+```yaml
+llm:
+  codex_cli:
+    # Optional proxy used only by PuPu-launched Codex CLI subprocesses.
+    # Keep Clash running, but system proxy can be off.
+    proxy: http://127.0.0.1:7890
+    no_proxy: localhost,127.0.0.1,::1
 ```
 
-修改 `.env` 后需要重启 PuPu，否则运行中的进程不会重新加载环境变量。
+修改 `pupu.yaml` 后需要重启 PuPu，否则运行中的进程不会重新加载配置。
 
 ## 代码路径
 
@@ -59,13 +61,13 @@ Get-NetTCPConnection -LocalPort 7890 -ErrorAction SilentlyContinue |
 确认 PuPu 会给 Codex 子进程注入代理：
 
 ```powershell
-.\.venv\Scripts\python.exe -c "from dotenv import load_dotenv; load_dotenv('.env'); import os; from pupu.llm_providers import _default_codex_command, _codex_subprocess_env; env=_codex_subprocess_env(); print('codex=', _default_codex_command()); print('PUPU_CODEX_PROXY=', os.environ.get('PUPU_CODEX_PROXY')); print('HTTPS_PROXY in child=', None if env is None else env.get('HTTPS_PROXY')); print('NO_PROXY in child=', None if env is None else env.get('NO_PROXY'))"
+.\.venv\Scripts\python.exe -c "import os; from pupu.app_config import apply_app_config_env; apply_app_config_env(); from pupu.llm_providers import _default_codex_command, _codex_subprocess_env; env=_codex_subprocess_env(); print('codex=', _default_codex_command()); print('PUPU_CODEX_PROXY=', os.environ.get('PUPU_CODEX_PROXY')); print('HTTPS_PROXY in child=', None if env is None else env.get('HTTPS_PROXY')); print('NO_PROXY in child=', None if env is None else env.get('NO_PROXY'))"
 ```
 
 确认 Codex CLI 可用：
 
 ```powershell
-.\.venv\Scripts\python.exe -c "from dotenv import load_dotenv; load_dotenv('.env'); from pupu.llm import codex_cli_status; print(codex_cli_status())"
+.\.venv\Scripts\python.exe -c "from pupu.llm import codex_cli_status; print(codex_cli_status())"
 ```
 
 期望输出：
@@ -132,8 +134,8 @@ chains = [具体节点, 代理组]
 
 先查三件事：
 
-1. `.env` 里是否有 `PUPU_CODEX_PROXY=http://127.0.0.1:7890`。
-2. PuPu 是否在修改 `.env` 后重启过。
+1. `pupu.yaml` 里是否有 `llm.codex_cli.proxy: http://127.0.0.1:7890`。
+2. PuPu 是否在修改 `pupu.yaml` 后重启过。
 3. `Get-NetTCPConnection -LocalPort 7890` 是否能看到 `Listen`。
 
 ### `codex_cli_status()` 报 `WinError 5 拒绝访问`
@@ -143,10 +145,12 @@ chains = [具体节点, 代理组]
 解决方式：
 
 - 使用当前代码里的探测顺序，优先找 npm 或 VS Code 扩展中的真实 `codex.exe`。
-- 或在 `.env` 显式指定：
+- 或在 `pupu.yaml` 显式指定：
 
-```env
-PUPU_CODEX_BIN=C:\Users\<用户名>\.vscode\extensions\<openai.chatgpt-版本>\bin\windows-x86_64\codex.exe
+```yaml
+llm:
+  codex_cli:
+    bin: C:\Users\<用户名>\.vscode\extensions\<openai.chatgpt-版本>\bin\windows-x86_64\codex.exe
 ```
 
 ### 怎么确认不是走 DIRECT

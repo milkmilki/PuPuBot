@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 
-from dotenv import load_dotenv
+from pupu.app_config import apply_app_config_env
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+apply_app_config_env()
 
 from pupu.sessions import OWNER_SESSION
 

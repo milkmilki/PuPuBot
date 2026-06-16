@@ -9,6 +9,7 @@ let ws = null;
 let currentEventGraph = null;
 let selectedEventThreadId = null;
 let eventGraphViewState = { scale: 1, tx: 0, ty: 0 };
+let eventGraphLayoutMode = "horizontal";
 
 async function api(path, opts = {}) {
   const r = await fetch(path, {
@@ -401,6 +402,10 @@ function renderEventGraph(data) {
     <div class="event-layout">
       <aside class="event-thread-list">${listHtml}</aside>
       <section class="event-visual">
+        <div class="event-graph-controls" role="group" aria-label="事件图谱布局">
+          <button type="button" class="event-layout-mode${eventGraphLayoutMode === "horizontal" ? " active" : ""}" data-layout-mode="horizontal">横向事件链</button>
+          <button type="button" class="event-layout-mode${eventGraphLayoutMode === "radial" ? " active" : ""}" data-layout-mode="radial">中心发散</button>
+        </div>
         ${renderEventGraphSvg(threads, stepsByThread)}
         ${renderEventTimeline(selected, selectedSteps)}
       </section>
@@ -412,10 +417,24 @@ function renderEventGraph(data) {
       renderEventGraph(currentEventGraph);
     });
   });
+  panel.querySelectorAll(".event-layout-mode").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      eventGraphLayoutMode = btn.dataset.layoutMode || "horizontal";
+      eventGraphViewState = { scale: 1, tx: 0, ty: 0 };
+      renderEventGraph(currentEventGraph);
+    });
+  });
   setupEventGraphInteractions(panel);
 }
 
 function renderEventGraphSvg(threads, stepsByThread) {
+  if (eventGraphLayoutMode === "radial") {
+    return renderEventGraphRadialSvg(threads, stepsByThread);
+  }
+  return renderEventGraphHorizontalSvg(threads, stepsByThread);
+}
+
+function renderEventGraphHorizontalSvg(threads, stepsByThread) {
   const maxSteps = Math.max(1, ...threads.map((t) => (stepsByThread.get(String(t.id)) || []).length));
   const width = Math.max(760, 260 + maxSteps * 170);
   const height = Math.max(240, 70 + threads.length * 112);
@@ -447,6 +466,78 @@ function renderEventGraphSvg(threads, stepsByThread) {
       previousX = x + 62;
     });
   });
+  return `
+    <div class="event-svg-wrap" data-graph-width="${width}" data-graph-height="${height}">
+      <svg class="event-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="事件图谱">
+        <g class="event-graph-viewport">
+          ${lines.join("")}
+          ${nodes.join("")}
+        </g>
+      </svg>
+      <div class="event-graph-help">滚轮缩放，拖动画布平移，触摸可双指缩放。</div>
+    </div>
+  `;
+}
+
+function renderEventGraphRadialSvg(threads, stepsByThread) {
+  const positions = new Map();
+  const maxSteps = Math.max(1, ...threads.map((t) => (stepsByThread.get(String(t.id)) || []).length));
+  const innerRadius = threads.length <= 1 ? 0 : Math.max(170, Math.min(440, threads.length * 22));
+  const stepStart = threads.length <= 1 ? 190 : 165;
+  const stepGap = 145;
+  const margin = 140;
+  const reach = innerRadius + stepStart + Math.max(0, maxSteps - 1) * stepGap + margin;
+  const width = Math.max(820, reach * 2);
+  const height = Math.max(620, reach * 2);
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const lines = [];
+  const nodes = [];
+
+  threads.forEach((thread, index) => {
+    const angle = threads.length <= 1 ? 0 : -Math.PI / 2 + (Math.PI * 2 * index) / threads.length;
+    const ux = Math.cos(angle);
+    const uy = Math.sin(angle);
+    const threadX = centerX + ux * innerRadius;
+    const threadY = centerY + uy * innerRadius;
+    positions.set(`thread-${thread.id}`, { x: threadX, y: threadY });
+    const steps = stepsByThread.get(String(thread.id)) || [];
+    steps.forEach((step, idx) => {
+      positions.set(`step-${step.id}`, {
+        x: threadX + ux * (stepStart + idx * stepGap),
+        y: threadY + uy * (stepStart + idx * stepGap),
+      });
+    });
+  });
+
+  threads.forEach((thread) => {
+    const threadPos = positions.get(`thread-${thread.id}`);
+    if (!threadPos) return;
+    const steps = stepsByThread.get(String(thread.id)) || [];
+    const selectedClass = String(thread.id) === String(selectedEventThreadId) ? " selected" : "";
+    nodes.push(`
+      <g class="graph-node thread-node${selectedClass}">
+        <rect x="${threadPos.x - 74}" y="${threadPos.y - 24}" width="148" height="48" rx="6"></rect>
+        <text x="${threadPos.x}" y="${threadPos.y - 4}" text-anchor="middle">${escapeHtml(shortText(thread.title || "未命名事件", 12))}</text>
+        <text x="${threadPos.x}" y="${threadPos.y + 14}" text-anchor="middle" class="node-sub">${escapeHtml(thread.status || "active")}</text>
+      </g>
+    `);
+    let previous = { x: threadPos.x, y: threadPos.y };
+    steps.forEach((step) => {
+      const pos = positions.get(`step-${step.id}`);
+      if (!pos) return;
+      lines.push(`<line x1="${previous.x}" y1="${previous.y}" x2="${pos.x}" y2="${pos.y}" class="graph-edge ${escapeHtml(step.step_type || "user")}"></line>`);
+      nodes.push(`
+        <g class="graph-node step-node ${escapeHtml(step.step_type || "user")}">
+          <rect x="${pos.x - 62}" y="${pos.y - 24}" width="124" height="48" rx="6"></rect>
+          <text x="${pos.x}" y="${pos.y - 4}" text-anchor="middle">${escapeHtml(shortText(step.summary || "", 12))}</text>
+          <text x="${pos.x}" y="${pos.y + 14}" text-anchor="middle" class="node-sub">${escapeHtml(stepTypeLabel(step.step_type))}</text>
+        </g>
+      `);
+      previous = pos;
+    });
+  });
+
   return `
     <div class="event-svg-wrap" data-graph-width="${width}" data-graph-height="${height}">
       <svg class="event-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="事件图谱">

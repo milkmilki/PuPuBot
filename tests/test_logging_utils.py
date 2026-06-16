@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from datetime import datetime
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,9 @@ class _FakeDatetime:
 
 
 class RuntimeLoggingTests(unittest.TestCase):
+    def tearDown(self):
+        logging_utils.set_debug_console_enabled(False)
+
     def test_log_file_rotates_when_date_changes(self):
         old_initialized = logging_utils._initialized
         old_log_file = logging_utils._log_file
@@ -53,6 +57,29 @@ class RuntimeLoggingTests(unittest.TestCase):
                 logging_utils._initialized = old_initialized
                 logging_utils._log_file = old_log_file
                 logging_utils._log_path = old_log_path
+
+    def test_verbose_pupu_lines_are_hidden_from_console_unless_debug_enabled(self):
+        sink = StringIO()
+        with patch.object(logging_utils, "_original_print") as original_print:
+            with patch.object(logging_utils, "_get_sink", return_value=sink):
+                logging_utils.set_debug_console_enabled(False)
+                logging_utils._patched_print("[pupu][memu] recall start")
+
+                original_print.assert_not_called()
+                self.assertIn("[pupu][memu] recall start", sink.getvalue())
+
+                logging_utils.set_debug_console_enabled(True)
+                logging_utils._patched_print("[pupu][memu] recall start")
+
+                original_print.assert_called_once()
+
+    def test_non_verbose_lines_still_print_normally(self):
+        with patch.object(logging_utils, "_original_print") as original_print:
+            with patch.object(logging_utils, "_get_sink", return_value=StringIO()):
+                logging_utils.set_debug_console_enabled(False)
+                logging_utils._patched_print("[pupu] logging to path")
+
+        original_print.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -17,6 +17,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from pupu.app_config import apply_app_config_env, ensure_app_config_file
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -120,6 +122,8 @@ def _run_qq_bot(config: dict, env_file: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    ensure_app_config_file()
+    apply_app_config_env()
     args = _parse_args(argv)
     if not args.instance_dir:
         print("需要 --dir 或环境变量 PUPU_INSTANCE_DIR", file=sys.stderr)
@@ -134,12 +138,21 @@ def main(argv: list[str] | None = None) -> None:
     _load_instance_dotenv(inst)
     os.chdir(REPO_ROOT)
 
-    from pupu.llm import preflight_model_providers
+    from pupu.llm import ProviderConfigError, preflight_model_providers
     from pupu.logging_utils import setup_runtime_logging
 
     setup_runtime_logging()
     config = _read_instance_config(inst)
-    preflight_model_providers()
+    try:
+        preflight_model_providers(require_chat=True)
+    except ProviderConfigError as exc:
+        print("[配置错误] 模型提供商还不能使用：", file=sys.stderr)
+        print(exc, file=sys.stderr)
+        print(
+            "请先打开 pupu.yaml，填写 llm.*.api_key。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     qq_mode = config.get("qq_mode", "napcat")
     env_file = inst / ".env.qq"

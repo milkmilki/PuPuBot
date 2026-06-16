@@ -6,8 +6,8 @@ import os
 from pathlib import Path
 
 import anthropic
-from dotenv import load_dotenv
 
+from .app_config import apply_app_config_env
 from .llm_providers import (
     AnthropicProvider,
     CodexCliProvider,
@@ -17,7 +17,7 @@ from .llm_providers import (
     join_text_blocks,
 )
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+apply_app_config_env()
 
 MODEL = os.environ.get("PUPU_MODEL", "claude-opus-4-6")
 JUDGE_MODEL = os.environ.get("PUPU_JUDGE_MODEL", "claude-haiku-4-5-20251001")
@@ -41,6 +41,10 @@ XIAOSHUOAI_ENDPOINT = (
     "https://www.gpt4novel.com/api/xiaoshuoai/ext/v1/chat/completions"
 )
 DEEPSEEK_ENDPOINT = "https://api.deepseek.com/anthropic"
+
+
+class ProviderConfigError(ProviderError):
+    """Raised when the configured model provider is missing local setup."""
 
 
 def get_client():
@@ -398,11 +402,82 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
-def preflight_model_providers() -> None:
+def _has_env_value(name: str) -> bool:
+    return bool(os.environ.get(name, "").strip())
+
+
+def _provider_config_issue(provider_name: str) -> str | None:
+    if provider_name == "anthropic":
+        if _has_env_value("ANTHROPIC_API_KEY"):
+            return None
+        return (
+            "Anthropic API key is not configured.\n"
+            "Fill llm.anthropic.api_key in pupu.yaml, or set ANTHROPIC_API_KEY."
+        )
+    if provider_name == "deepseek":
+        if _has_env_value("PUPU_DEEPSEEK_API_KEY") or _has_env_value("ANTHROPIC_API_KEY"):
+            return None
+        return (
+            "DeepSeek API key is not configured.\n"
+            "Fill llm.deepseek.api_key in pupu.yaml, or set PUPU_DEEPSEEK_API_KEY."
+        )
+    if provider_name == "xiaoshuoai":
+        if _has_env_value("PUPU_XIAOSHUOAI_API_KEY"):
+            return None
+        return (
+            "XiaoshuoAI API key is not configured.\n"
+            "Fill llm.xiaoshuoai.api_key in pupu.yaml, or set PUPU_XIAOSHUOAI_API_KEY."
+        )
+    if provider_name == "codex_cli":
+        try:
+            codex_cli_status()
+            return None
+        except Exception as exc:
+            return (
+                "Codex CLI provider is not available.\n"
+                f"{exc}\n"
+                "Install/login Codex CLI, or change llm.provider in pupu.yaml."
+            )
+    if provider_name not in SUPPORTED_PROVIDERS:
+        return (
+            f"Unknown provider {provider_name!r}.\n"
+            f"Supported providers: {', '.join(SUPPORTED_PROVIDERS)}."
+        )
+    return None
+
+
+def validate_model_provider_config(*, roles: tuple[str, ...] = ("chat",)) -> None:
+    """Fail early when a required model provider cannot make requests."""
+    issues: list[str] = []
+    seen: set[str] = set()
+    for role in roles:
+        name = get_provider_name(role)
+        key = f"{role}:{name}"
+        if key in seen:
+            continue
+        seen.add(key)
+        issue = _provider_config_issue(name)
+        if issue:
+            issues.append(f"- {role}: {issue}")
+    if not issues:
+        return
+    raise ProviderConfigError(
+        "Model provider is not ready.\n"
+        + "\n".join(issues)
+        + "\n\nOpen pupu.yaml and fill the relevant key. If the file is missing, the launcher will create it from pupu.yaml.example."
+    )
+
+
+def preflight_model_providers(*, require_chat: bool = False) -> None:
     global _preflight_done
     if _preflight_done:
+        if require_chat:
+            validate_model_provider_config(roles=("chat",))
         return
     _preflight_done = True
+
+    if require_chat:
+        validate_model_provider_config(roles=("chat",))
 
     checked = set()
     for role in ("chat", "judge", "maintenance", "proactive"):

@@ -6,10 +6,12 @@ import json
 import os
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
+from .app_config import default_owner_ids
+
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "instances" / "_no_instance" / "instance.json"
 
 # Used when config omits ``owner_ids`` and for new console instances.
-DEFAULT_OWNER_IDS: list[str] = ["424225912"]
+DEFAULT_OWNER_IDS: list[str] = []
 DEFAULT_ARBITER_URL = "http://127.0.0.1:18079/api/group_arbitrate"
 DEFAULT_ARBITER_BASE_URL = "http://127.0.0.1:18079"
 DEFAULT_ARBITER_TIMEOUT_SECONDS = 300.0
@@ -41,8 +43,8 @@ def load_owner_ids() -> list[str]:
     try:
         config = load_config()
     except Exception:
-        return list(DEFAULT_OWNER_IDS)
-    return [str(value) for value in config.get("owner_ids", DEFAULT_OWNER_IDS)]
+        return default_owner_ids() or list(DEFAULT_OWNER_IDS)
+    return [str(value) for value in config.get("owner_ids", default_owner_ids() or DEFAULT_OWNER_IDS)]
 
 
 def load_owner_id_set() -> set[str]:

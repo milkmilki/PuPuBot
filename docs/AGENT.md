@@ -10,9 +10,9 @@ Fast-lookup guide for AI agents working on this codebase. Read this before explo
 User (QQ / Terminal)
         │
         ▼
-┌──────────────────┐        start.py chooses CLI vs QQ (NoneBot)
+┌──────────────────┐        start.py selects/creates an instance
 │  start.py        │──────────────────────────────────┐
-│  启动仆仆.bat    │                                  │
+│  Windows .bat    │                                  │
 └──────────────────┘                                  │
                                                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -40,8 +40,8 @@ User (QQ / Terminal)
 
 | Path | Purpose |
 |------|---------|
-| [start.py](../start.py) | Unified entry: `[1]` terminal, `[2]` NapCat OneBot v11, `[3]` QQ official bot (single default `config.json` / `data/pupu.db`) |
-| [pupu/instance_main.py](../pupu/instance_main.py) | **Multi-instance** subprocess entry; same NoneBot paths as `start.py` but reads `instance.json` + per-instance `.env.qq` / DB / persona |
+| [start.py](../start.py) | Instance-first launcher: select/create `instances/<id>`, then start CLI or QQ for that instance. No root-level default bot. |
+| [pupu/instance_main.py](../pupu/instance_main.py) | Subprocess entry for one instance; loads `pupu.yaml`, then reads `instance.json` + generated per-instance `.env.qq` / DB / persona |
 | [pupu/agent.py](../pupu/agent.py) | **`chat()`** — save user msg, build prompt, `chat_complete` + tools, `_parse_dialogue_output`, save assistant; start-of-turn **`cancel_wait_timer`**; end **`schedule_wait_timer`** if `should_wait`; **`message_source`** (`chat`, `scheduled`, `wait_followup`, …); batch review when `source == chat` |
 | [pupu/followup.py](../pupu/followup.py) | **`DIALOGUE_OUTPUT_PROTOCOL`** (sole spec for chat JSON output); **`WAIT_DELAY_SECONDS = 180`**; **`_parse_dialogue_output`** → `(content, should_wait)` with JSON repair / heuristics |
 | [pupu/message_sources.py](../pupu/message_sources.py) | Single source for persisted **`message_source`** / `source` strings: **`CHAT`**, **`SCHEDULED`**, **`PROACTIVE`**, **`WAIT_FOLLOWUP`** (agent still exports **`REVIEW_SOURCE = CHAT`**) |
@@ -59,7 +59,6 @@ User (QQ / Terminal)
 | [plugins/pupu_support/onebot_handlers.py](../plugins/pupu_support/onebot_handlers.py) | OneBot v11 private/group; on connect **`register_owner_wait_followup_sender`** so proactive/timer can reach owner without a recent user turn |
 | [pupu/memory.py](../pupu/memory.py) | Facade re-exporting [pupu/storage/*](../pupu/storage/) (messages, familiarity, facts, summaries, important events, scheduled tasks, …) |
 | [pupu/persona/](../pupu/persona/) | **`build_system_prompt`** (persona + memory + scheduler tool rules only; **no** duplicate JSON format block — that lives in `followup.DIALOGUE_OUTPUT_PROTOCOL`) |
-| [config.json](../config.json) | `qq_mode`, `owner_ids`, `tool_servers`, … (see [config.example.json](../config.example.json)) |
 
 ## Dialogue output protocol (every normal model turn)
 
@@ -99,7 +98,7 @@ The chat system prompt ends with **`DIALOGUE_OUTPUT_PROTOCOL`** ([followup.py](.
 | QQ Official group @ | `qqgroup_{group_openid}` | No |
 | Terminal CLI | `owner` ([cli.py](../pupu/cli.py)) | Yes |
 
-## Database (SQLite: `data/pupu.db`)
+## Database (SQLite: `instances/<id>/data/pupu.db`)
 
 High-signal tables (not exhaustive):
 
@@ -124,18 +123,18 @@ Score **0–100** with tiered persona text in **`pupu/persona/`** (see `FAMILIAR
 
 ## Environment & run
 
-- Venv: **`ForFun/`** (Windows: `ForFun\Scripts\python.exe` — see [启动仆仆.bat](../启动仆仆.bat)).
-- API: **`.env`** — e.g. `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`; model/provider overrides via `PUPU_*` env vars (see [llm.py](../pupu/llm.py) / README).
-- QQ: **`.env.qq`** — NoneBot host/port; NapCat reverse WS to `ws://127.0.0.1:8081/onebot/v11/ws` per [start.py](../start.py). Each **managed instance** has its own `.env.qq` under `instances/<id>/` (see multi-instance below).
+- Venv: **`ForFun/`** (Windows: `ForFun\Scripts\python.exe`; `启动仆仆.bat` and `启动仆仆控制台.bat` are double-click wrappers).
+- Global config: **`pupu.yaml`** — provider keys, owner QQ ids, NapCat port, Console / arbiter ports, memU, web search, and TTS settings. `pupu.app_config.apply_app_config_env()` maps YAML keys into the `PUPU_*` environment variables consumed by runtime modules.
+- QQ runtime file: **`instances/<id>/.env.qq`** — generated from `pupu.yaml` for NoneBot host/port; NapCat reverse WS to `ws://127.0.0.1:<port>/onebot/v11/ws`.
 
-## Multi-instance console (optional)
+## Instances
 
-Several PuPu processes can run in parallel. Each instance = **own subprocess**, SQLite DB, `instance.json` (same shape as root `config.json` plus `id`, `display_name`, `port`), `persona.json`, and `.env.qq`.
+Every PuPu runtime uses an instance. Several PuPu processes can run in parallel. Each instance = **own subprocess**, SQLite DB, `instance.json`, `persona.json`, and generated `.env.qq`.
 
 | Path | Role |
 |------|------|
 | [pupu/instance_main.py](../pupu/instance_main.py) | `python -m pupu.instance_main --dir <dir>` — sets `PUPU_INSTANCE_DIR`, `PUPU_CONFIG_PATH`, `PUPU_DB_PATH`, `PUPU_PERSONA_PATH`; **cwd** = repo root so `plugins/` loads; `qq_mode` in `instance.json`: `napcat` \| `official` \| `cli`. |
-| [pupu_console/](../pupu_console/) | Web UI: `python -m pupu_console` — CRUD `instances/`, CRUD `souls/` presets, start/stop, logs / WS console, **memory path + SQLite import** (replace `data/pupu.db` when stopped). APIs: `GET /api/instances/{id}/memory_path`, `POST /api/instances/{id}/import_memory` (multipart file). |
+| [pupu_console/](../pupu_console/) | Web UI: `python -m pupu_console` — CRUD `instances/`, CRUD `souls/` presets, start/stop, logs / WS console, **memory path + SQLite import** (replace `instances/<id>/data/pupu.db` when stopped). APIs: `GET /api/instances/{id}/memory_path`, `POST /api/instances/{id}/import_memory` (multipart file). |
 | `instances/<id>/` | Runtime files for one bot; chat memory DB: `instances/<id>/data/pupu.db` (also exposed as `memory_path` on `GET /api/instances/{id}`). |
 | `souls/<slug>.json` | Preset soul (persona + `tool_servers` only at instance level). **Apply** does not change `port`, `qq_app_id`, `qq_app_secret`, or `owner_ids`. |
 
@@ -155,7 +154,7 @@ Shared prompt modules (`FAMILIARITY_PROMPTS`, proactive, batch review) stay in c
 | QQ: ensure owner receives timer sends without prior message | `register_owner_wait_followup_sender` in [onebot_handlers.py](../plugins/pupu_support/onebot_handlers.py) |
 | Dialogue JSON rules / parsing | [followup.py](../pupu/followup.py) |
 | Batch review behavior | [agent.py](../pupu/agent.py) `_maybe_batch_review*`, [review_followups.py](../pupu/review_followups.py) |
-| New tool server | `pupu/tooling/servers/*`, register in `__init__.py`; enable in `config.json` → `tool_servers` |
+| New tool server | `pupu/tooling/servers/*`, register in `__init__.py`; enable in instance `instance.json` → `tool_servers` |
 | Persona tone | `pupu/persona/*.py` |
 | Import / replace instance SQLite memory | Web console “运行” tab or `POST /api/instances/{id}/import_memory`; logic in [instance_store.py](../pupu_console/instance_store.py) (`replace_memory_db`) |
 

@@ -53,7 +53,7 @@ def main() -> int:
     common_msg = {
         "group_id": group_id,
         "message_id": "msg-1",
-        "speaker_qq": "424225912",
+        "speaker_qq": "1000000001",
         "speaker_name": "钮钴禄",
         "text": "喵喵喵",
         "speaker_is_bot": False,

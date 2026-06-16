@@ -12,7 +12,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pupu.config import DEFAULT_OWNER_IDS
+from pupu.app_config import (
+    default_instance_settings,
+    default_owner_ids,
+    default_napcat_settings,
+    write_env_qq_file,
+)
 
 from .paths import instances_dir
 
@@ -91,23 +96,17 @@ def _normalize_instance_config(cfg: dict[str, Any]) -> None:
 def read_port(inst_dir: Path) -> int:
     env_path = inst_dir / ".env.qq"
     if not env_path.is_file():
-        return 8081
+        return int(default_napcat_settings()["port"])
     for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line.startswith("PORT="):
             raw = line.split("=", 1)[1].strip().strip('"').strip("'")
             return int(raw)
-    return 8081
+    return int(default_napcat_settings()["port"])
 
 
-def write_env_qq(inst_dir: Path, port: int, host: str = "0.0.0.0") -> None:
-    text = (
-        f"HOST={host}\n"
-        f"PORT={port}\n"
-        'COMMAND_START=["/"]\n'
-        'COMMAND_SEP=["."]\n'
-    )
-    (inst_dir / ".env.qq").write_text(text, encoding="utf-8")
+def write_env_qq(inst_dir: Path, port: int, host: str | None = None) -> None:
+    write_env_qq_file(inst_dir, port=port, host=host)
 
 
 def list_instance_ids() -> list[str]:
@@ -130,7 +129,7 @@ def next_free_port() -> int:
             used.add(read_port(instances_dir() / iid))
         except (OSError, ValueError):
             continue
-    port = 8081
+    port = int(default_napcat_settings()["port"])
     while port in used:
         port += 1
     return port
@@ -190,25 +189,30 @@ def create_instance(
     if inst_dir.exists():
         raise FileExistsError(instance_id)
 
+    defaults = default_instance_settings()
     use_port = port if port is not None else next_free_port()
     cfg: dict[str, Any] = {
         "id": instance_id,
-        "display_name": display_name or "仆仆",
+        "display_name": display_name or defaults["display_name"],
         "port": use_port,
-        "qq_mode": qq_mode,
-        "qq_app_id": "",
-        "qq_app_secret": "",
-        "owner_ids": list(DEFAULT_OWNER_IDS),
+        "qq_mode": qq_mode or defaults["qq_mode"],
+        "qq_app_id": defaults["qq_app_id"],
+        "qq_app_secret": defaults["qq_app_secret"],
+        "owner_ids": default_owner_ids(),
         "open_groups": [],
         "bot_id": instance_id,
-        "arbiter_url": DEFAULT_ARBITER_URL,
+        "arbiter_url": defaults.get("arbiter_url") or DEFAULT_ARBITER_URL,
+        "arbiter_base_url": defaults.get("arbiter_base_url"),
         "peer": {
             "bot_id": "",
             "name": "",
             "qq": "",
             "persona_brief": "",
         },
-        "debounce_seconds_open_group": DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS,
+        "debounce_seconds_open_group": defaults.get(
+            "debounce_seconds_open_group",
+            DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS,
+        ),
         "tool_servers": json.loads(json.dumps(DEFAULT_TOOL_SERVERS)),
     }
     persona = _default_persona()

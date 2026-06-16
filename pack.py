@@ -11,24 +11,33 @@ INCLUDE = [
     "pupu_console/",
     "plugins/",
     "docs/",
-    "data/",
     "start.py",
     "requirements.txt",
-    "config.json",
-    "config.example.json",
-    ".env",
-    ".env.qq",
+    "pupu.yaml.example",
     ".gitignore",
     "README.md",
-    "CLAUDE.md",
     "deploy.bat",
     "启动仆仆.bat",
+    "启动仆仆控制台.bat",
     "pack.py",
 ]
 
 DATA_FILES = []
 
-EXCLUDE_PATTERNS = ("__pycache__", ".pyc", ".pyo")
+EXCLUDE_PATTERNS = (
+    "__pycache__",
+    ".pyc",
+    ".pyo",
+    ".db",
+    ".log",
+    ".bak",
+    "data/",
+    "instances/",
+    ".env",
+    ".env.qq",
+    "pupu.yaml",
+    "config.json",
+)
 
 
 def should_include(path: str) -> bool:
@@ -77,8 +86,9 @@ def pack():
     print("To deploy on another machine:")
     print("  1. Unzip")
     print("  2. Run deploy.bat (Windows) or: python -m venv ForFun && ForFun/Scripts/pip install -r requirements.txt")
-    print("  3. Edit .env with your API key if needed")
-    print("  4. Run: deploy.bat（首次装依赖）然后 启动仆仆.bat 或 ForFun\\Scripts\\python.exe start.py")
+    print("  3. Copy pupu.yaml.example to pupu.yaml and edit provider / QQ / NapCat settings")
+    print("  4. Run: 启动仆仆.bat or ForFun\\Scripts\\python.exe start.py")
+    print("  5. The launcher will ask you to create/select an instance")
 
 
 if __name__ == "__main__":

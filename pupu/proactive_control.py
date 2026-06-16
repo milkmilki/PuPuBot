@@ -10,11 +10,11 @@ _TRUE_VALUES = {"1", "true", "yes", "y", "on", "enable", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "n", "off", "disable", "disabled"}
 
 
-def _env_file_path() -> Path:
+def _env_file_path() -> Path | None:
     inst = os.environ.get("PUPU_INSTANCE_DIR", "").strip()
     if inst:
         return Path(inst) / ".env.qq"
-    return Path(__file__).resolve().parent.parent / ".env"
+    return None
 
 
 def _parse_bool(value: object, default: bool = True) -> bool:
@@ -35,8 +35,9 @@ def is_proactive_enabled(default: bool = True) -> bool:
 def set_proactive_enabled(enabled: bool, *, persist: bool = True) -> None:
     value = "true" if enabled else "false"
     os.environ["PUPU_PROACTIVE_ENABLED"] = value
-    if persist:
-        _set_env_file_value(_env_file_path(), "PUPU_PROACTIVE_ENABLED", value)
+    path = _env_file_path()
+    if persist and path is not None:
+        _set_env_file_value(path, "PUPU_PROACTIVE_ENABLED", value)
 
 
 def _set_env_file_value(path: Path, key: str, value: str) -> None:

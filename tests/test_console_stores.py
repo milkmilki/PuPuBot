@@ -23,10 +23,19 @@ class ConsoleStoresTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmpdir.cleanup)
+        self._old_env = {
+            key: os.environ.get(key)
+            for key in ("PUPU_REPO_ROOT", "PUPU_YAML_PATH")
+        }
         os.environ["PUPU_REPO_ROOT"] = self._tmpdir.name
+        os.environ.pop("PUPU_YAML_PATH", None)
 
     def tearDown(self) -> None:
-        os.environ.pop("PUPU_REPO_ROOT", None)
+        for key, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     def test_create_instance_and_roundtrip(self) -> None:
         iid = instance_store.create_instance("A", qq_mode="cli", port=8099)
@@ -34,7 +43,7 @@ class ConsoleStoresTests(unittest.TestCase):
         self.assertEqual(cfg["display_name"], "A")
         self.assertEqual(cfg["port"], 8099)
         self.assertEqual(cfg["qq_mode"], "cli")
-        self.assertEqual(cfg["owner_ids"], ["424225912"])
+        self.assertEqual(cfg["owner_ids"], [])
         self.assertEqual(cfg["open_groups"], [])
         self.assertEqual(cfg["bot_id"], iid)
         self.assertIn("/api/group_arbitrate", cfg["arbiter_url"])
@@ -43,6 +52,37 @@ class ConsoleStoresTests(unittest.TestCase):
         self.assertIn("core_persona", persona)
         port = instance_store.read_port(Path(self._tmpdir.name) / "instances" / iid)
         self.assertEqual(port, 8099)
+
+    def test_create_instance_uses_yaml_defaults(self) -> None:
+        yaml_path = Path(self._tmpdir.name) / "pupu.yaml"
+        yaml_path.write_text(
+            """
+user:
+  owner_ids: ["12345"]
+napcat:
+  host: 127.0.0.1
+  port: 8123
+  command_start: ["!"]
+instance:
+  display_name: YAML Bot
+  qq_mode: napcat
+  qq_app_id: app-yaml
+  qq_app_secret: secret-yaml
+""",
+            encoding="utf-8",
+        )
+        os.environ["PUPU_YAML_PATH"] = str(yaml_path)
+
+        iid = instance_store.create_instance("", qq_mode="napcat")
+        cfg, _ = instance_store.read_instance_files(iid)
+        self.assertEqual(cfg["display_name"], "YAML Bot")
+        self.assertEqual(cfg["owner_ids"], ["12345"])
+        self.assertEqual(cfg["qq_app_id"], "app-yaml")
+        self.assertEqual(cfg["qq_app_secret"], "secret-yaml")
+        env_text = (Path(self._tmpdir.name) / "instances" / iid / ".env.qq").read_text(encoding="utf-8")
+        self.assertIn("PORT=8123", env_text)
+        self.assertIn("HOST=127.0.0.1", env_text)
+        self.assertIn('COMMAND_START=["!"]', env_text)
 
     def test_apply_soul_keeps_port_and_qq_fields(self) -> None:
         iid = instance_store.create_instance("B", port=9101, qq_mode="official")

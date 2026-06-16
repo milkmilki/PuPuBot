@@ -14,6 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from pupu.app_config import apply_app_config_env, default_instance_settings
+
 from . import arbitrator, instance_store, souls_store
 from .paths import instances_dir
 from .process_manager import ProcessManager
@@ -134,9 +136,11 @@ def api_list_instances() -> list[dict[str, Any]]:
 
 @app.post("/api/instances")
 def api_create_instance(body: dict[str, Any]) -> dict[str, Any]:
-    display_name = str(body.get("display_name") or "仆仆").strip() or "仆仆"
+    apply_app_config_env()
+    defaults = default_instance_settings()
+    display_name = str(body.get("display_name") or defaults["display_name"]).strip() or defaults["display_name"]
     port = body.get("port")
-    qq_mode = str(body.get("qq_mode") or "napcat").strip()
+    qq_mode = str(body.get("qq_mode") or defaults["qq_mode"]).strip()
     soul_slug = body.get("soul_slug")
     if soul_slug is not None:
         soul_slug = str(soul_slug).strip() or None
