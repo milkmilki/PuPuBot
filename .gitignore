@@ -1,0 +1,34 @@
+ForFun/
+.venv/
+.cursor/
+.claude/
+__pycache__/
+*.pyc
+
+# Local secrets and runtime configuration.
+.env
+.env.*
+pupu.yaml
+config.json
+
+# Runtime data, generated memories, logs, exports, and local test DBs.
+data/
+instances/
+souls/
+tests/_tmp/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.log
+*.bak*
+*.tmp
+Test.py
+
+# Build/package outputs.
+pupu_*.zip
+dist/
+build/
+
+integrations/stardew_npc/**/bin/
+integrations/stardew_npc/**/obj/

@@ -1,0 +1,17 @@
+anthropic
+rich
+duckduckgo-search
+httpx
+beautifulsoup4
+python-dotenv
+PyYAML
+# Optional native memU long-term memory. Python 3.14 currently needs manual
+# install because lazyllm>=0.7.3 declares Requires-Python <3.14:
+#   python -m pip install --no-deps "memu-py>=1.5.1,<1.6"
+memu-py>=1.5.1,<1.6; python_version < "3.14"
+fastapi
+python-multipart
+uvicorn[standard]
+nonebot2[fastapi]
+nonebot-adapter-onebot
+nonebot-adapter-qq

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>PuPu 控制台</title>
+  <link rel="stylesheet" href="/static/style.css?v=event-graph-20260610" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>PuPu 控制台</h1>
+    <div class="arbiter-bar" title="开放群仲裁 HTTP 服务（由本控制台子进程启动）">
+      <span class="arbiter-title">仲裁</span>
+      <span id="arbiter-dot" class="dot off"></span>
+      <span id="arbiter-detail" class="arbiter-detail"></span>
+      <a id="arbiter-open" class="arbiter-link" href="#" target="_blank" rel="noopener noreferrer" hidden>健康检查</a>
+      <button type="button" id="btn-arbiter-start" class="primary">启动</button>
+      <button type="button" id="btn-arbiter-stop">停止</button>
+    </div>
+    <div class="actions">
+      <button type="button" id="btn-new">+ 新建仆仆</button>
+      <button type="button" id="btn-souls">灵魂预设库</button>
+    </div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" id="instance-list"></aside>
+    <main class="main" id="main-panel">
+      <p class="hint">左侧选择一个仆仆实例。</p>
+    </main>
+  </div>
+
+  <dialog id="dlg-new" class="modal">
+    <form id="form-new">
+      <h2>新建仆仆</h2>
+      <label>显示名称 <input name="display_name" value="仆仆" required /></label>
+      <label>端口 <input name="port" type="number" placeholder="自动" /></label>
+      <label>QQ 模式
+        <select name="qq_mode">
+          <option value="napcat">NapCat (OneBot)</option>
+          <option value="official">QQ 官方</option>
+          <option value="cli">终端 CLI</option>
+        </select>
+      </label>
+      <label>基于灵魂预设
+        <select name="soul_slug" id="new-soul-select">
+          <option value="">（空白）</option>
+        </select>
+      </label>
+      <menu>
+        <button type="button" id="btn-new-cancel">取消</button>
+        <button type="submit" class="primary" id="btn-create-submit">创建</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-souls" class="modal wide">
+    <h2>灵魂预设库</h2>
+    <div id="souls-panel"></div>
+    <menu><button type="button" id="btn-souls-close">关闭</button></menu>
+  </dialog>
+
+  <script src="/static/app.js?v=event-graph-20260610"></script>
+</body>
+</html>

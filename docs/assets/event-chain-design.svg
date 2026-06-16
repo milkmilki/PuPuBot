@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
+  <title id="title">PuPu 事件链记忆设计图</title>
+  <desc id="desc">展示 PuPu 从对话进入 batch review，经事件线召回与归并，写入 event_threads 和 event_steps，再回流到提示词、memU 与可视化控制台。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" x2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" x2="1">
+      <stop offset="0" stop-color="#059669"/>
+      <stop offset="1" stop-color="#22c55e"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0" x2="1">
+      <stop offset="0" stop-color="#db2777"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#64748b"/>
+    </marker>
+    <style>
+      .title { font: 700 30px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #0f172a; }
+      .subtitle { font: 15px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #475569; }
+      .label { font: 700 18px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #0f172a; }
+      .body { font: 14px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #475569; }
+      .small { font: 12px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #64748b; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 16; }
+      .soft { fill: #f8fafc; stroke: #dbeafe; stroke-width: 1.4; rx: 14; }
+      .node-text { font: 700 14px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #ffffff; }
+      .edge { stroke: #64748b; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #94a3b8; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .pill { fill: #eff6ff; stroke: #bfdbfe; rx: 10; }
+    </style>
+  </defs>
+
+  <rect width="1180" height="720" fill="url(#bg)"/>
+  <text x="54" y="64" class="title">PuPuBot 事件链记忆</text>
+  <text x="54" y="94" class="subtitle">把“重要事件”从孤立条目升级为可延续、可召回、可可视化的事件线。</text>
+
+  <rect x="54" y="132" width="235" height="126" class="box"/>
+  <text x="78" y="166" class="label">对话入口</text>
+  <text x="78" y="195" class="body">CLI / QQ / Console 实例</text>
+  <text x="78" y="221" class="body">消息、任务、主动聊天</text>
+
+  <rect x="358" y="118" width="266" height="154" class="box"/>
+  <text x="386" y="153" class="label">Batch Review</text>
+  <text x="386" y="184" class="body">抽取 summary / facts / event_updates</text>
+  <text x="386" y="210" class="body">判断是创建事件线还是追加进展</text>
+  <text x="386" y="236" class="body">旧 important_events 自动兼容</text>
+
+  <rect x="700" y="118" width="300" height="154" class="box"/>
+  <text x="728" y="153" class="label">增强召回与归并</text>
+  <text x="728" y="184" class="body">SQLite FTS5 倒排召回候选</text>
+  <text x="728" y="210" class="body">关键词 overlap + 近期 + 状态重排</text>
+  <text x="728" y="236" class="body">候选相关时优先 append_step</text>
+
+  <path class="edge" d="M289 195 C318 195 328 195 358 195"/>
+  <path class="edge" d="M624 195 C656 195 668 195 700 195"/>
+
+  <rect x="116" y="340" width="910" height="238" class="box"/>
+  <text x="146" y="376" class="label">事件线数据模型</text>
+  <text x="146" y="405" class="body">一条 thread 表示持续事件；多个 step 表示状态变化和触发因素。</text>
+
+  <rect x="156" y="438" width="192" height="80" fill="url(#blue)" rx="18"/>
+  <text x="252" y="471" text-anchor="middle" class="node-text">event_threads</text>
+  <text x="252" y="496" text-anchor="middle" class="node-text">当前状态 / 标题 / key</text>
+
+  <circle cx="472" cy="478" r="42" fill="url(#green)"/>
+  <text x="472" y="474" text-anchor="middle" class="node-text">step</text>
+  <text x="472" y="494" text-anchor="middle" class="node-text">user</text>
+
+  <circle cx="608" cy="478" r="42" fill="url(#pink)"/>
+  <text x="608" y="474" text-anchor="middle" class="node-text">step</text>
+  <text x="608" y="494" text-anchor="middle" class="node-text">instance</text>
+
+  <circle cx="744" cy="478" r="42" fill="#b45309"/>
+  <text x="744" y="474" text-anchor="middle" class="node-text">step</text>
+  <text x="744" y="494" text-anchor="middle" class="node-text">time</text>
+
+  <circle cx="880" cy="478" r="42" fill="#64748b"/>
+  <text x="880" y="474" text-anchor="middle" class="node-text">step</text>
+  <text x="880" y="494" text-anchor="middle" class="node-text">system</text>
+
+  <path class="edge" d="M348 478 L424 478"/>
+  <path class="edge" d="M514 478 L560 478"/>
+  <path class="edge" d="M650 478 L696 478"/>
+  <path class="edge" d="M786 478 L832 478"/>
+
+  <rect x="170" y="535" width="185" height="26" class="pill"/>
+  <text x="262" y="553" text-anchor="middle" class="small">status / confidence / merge_hint</text>
+  <rect x="424" y="535" width="250" height="26" class="pill"/>
+  <text x="549" y="553" text-anchor="middle" class="small">summary + cause + optional reflection</text>
+  <rect x="724" y="535" width="195" height="26" class="pill"/>
+  <text x="821" y="553" text-anchor="middle" class="small">time steps 必须是推测语气</text>
+
+  <path class="thin" d="M492 272 C492 306 492 318 492 340"/>
+  <path class="thin" d="M850 272 C850 306 760 318 714 340"/>
+
+  <rect x="68" y="632" width="214" height="56" class="soft"/>
+  <text x="175" y="657" text-anchor="middle" class="label">Prompt Recall</text>
+  <text x="175" y="678" text-anchor="middle" class="small">当前事件线回到角色提示词</text>
+
+  <rect x="354" y="632" width="214" height="56" class="soft"/>
+  <text x="461" y="657" text-anchor="middle" class="label">memU Sync</text>
+  <text x="461" y="678" text-anchor="middle" class="small">同步长期记忆快照</text>
+
+  <rect x="640" y="632" width="214" height="56" class="soft"/>
+  <text x="747" y="657" text-anchor="middle" class="label">CLI /events</text>
+  <text x="747" y="678" text-anchor="middle" class="small">列表、详情、搜索、URL 导出</text>
+
+  <rect x="926" y="632" width="214" height="56" class="soft"/>
+  <text x="1033" y="657" text-anchor="middle" class="label">Console Graph</text>
+  <text x="1033" y="678" text-anchor="middle" class="small">横向事件链 / 中心发散图</text>
+
+  <path class="thin" d="M288 578 C252 604 218 614 175 632"/>
+  <path class="thin" d="M500 578 C490 600 478 614 461 632"/>
+  <path class="thin" d="M708 578 C724 604 734 614 747 632"/>
+  <path class="thin" d="M894 578 C944 602 992 615 1033 632"/>
+</svg>
