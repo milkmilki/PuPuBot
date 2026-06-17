@@ -73,6 +73,21 @@ class RuntimeLoggingTests(unittest.TestCase):
 
                 original_print.assert_called_once()
 
+    def test_tool_lines_are_hidden_from_console_unless_debug_enabled(self):
+        sink = StringIO()
+        with patch.object(logging_utils, "_original_print") as original_print:
+            with patch.object(logging_utils, "_get_sink", return_value=sink):
+                logging_utils.set_debug_console_enabled(False)
+                logging_utils._patched_print("[pupu][tool] session=owner call=mcp__tavily__tavily_search")
+
+                original_print.assert_not_called()
+                self.assertIn("[pupu][tool] session=owner call=mcp__tavily__tavily_search", sink.getvalue())
+
+                logging_utils.set_debug_console_enabled(True)
+                logging_utils._patched_print("[pupu][tool] session=owner call=mcp__tavily__tavily_search")
+
+                original_print.assert_called_once()
+
     def test_non_verbose_lines_still_print_normally(self):
         with patch.object(logging_utils, "_original_print") as original_print:
             with patch.object(logging_utils, "_get_sink", return_value=StringIO()):

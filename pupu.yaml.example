@@ -34,8 +34,44 @@ llm:
     bin: ""
     profile: ""
     reasoning_effort: low
+    # Default is real MCP tool calls. Set to bridge only for debugging the old JSON bridge.
+    tool_mode: mcp
     proxy: ""
     no_proxy: localhost,127.0.0.1,::1
+
+# Extra community MCP servers mounted into Codex CLI chat calls.
+# PuPu always mounts its builtin "pupu" MCP server automatically; do not name
+# external servers "pupu".
+mcp:
+  servers:
+    # Tavily MCP server: web search + extract + crawl + map + research.
+    # Source: https://github.com/tavily-ai/tavily-mcp
+    # Windows users can keep command=cmd; on macOS/Linux use command=npx and
+    # args: ["-y", "tavily-mcp@latest"].
+    tavily:
+      enabled: false
+      command: cmd
+      args: ["/c", "npx", "-y", "tavily-mcp@latest"]
+      exposures: ["chat", "proactive"]
+      timeout: 30
+      env:
+        TAVILY_API_KEY: ""
+        # Optional Tavily defaults, for example:
+        # DEFAULT_PARAMETERS: '{"search_depth":"basic","max_results":5}'
+
+    # Example: enable after installing/configuring the community server you want.
+    # brave-search:
+    #   enabled: true
+    #   command: npx
+    #   args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    #   env:
+    #     BRAVE_API_KEY: ""
+    #
+    # filesystem-extra:
+    #   enabled: false
+    #   command: uvx
+    #   args: ["some-community-mcp-server"]
+    #   cwd: ""
 
 user:
   # Your QQ number(s). Leave empty for CLI-only testing.
@@ -86,11 +122,6 @@ memu:
   embed_api_key: ""
   embed_base_url: ""
   embed_model: text-embedding-3-small
-
-web_search:
-  provider: ""
-  fallbacks: tavily,ddg_html
-  tavily_api_key: ""
 
 tts:
   enabled: false

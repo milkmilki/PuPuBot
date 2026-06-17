@@ -95,6 +95,10 @@ def _at_targets(text: str) -> list[str]:
     return sorted(set(re.findall(r"@(\d{5,})", text or "")))
 
 
+def _is_command_text(text: str) -> bool:
+    return bool(str(text or "").lstrip().startswith("/"))
+
+
 # ---------------------------------------------------------------------------
 # Centralized arbiter integration (open groups)
 # ---------------------------------------------------------------------------
@@ -372,6 +376,9 @@ async def buffer_message(
     speaker_name: str | None = None,
     speaker_is_bot: bool = False,
 ):
+    if _is_command_text(text):
+        return
+
     identity_session = identity_session or sid
     if sid not in state.msg_buffers:
         state.msg_buffers[sid] = {

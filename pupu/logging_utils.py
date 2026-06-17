@@ -17,6 +17,7 @@ _original_stderr = sys.stderr
 
 _VERBOSE_CONSOLE_PREFIXES = (
     "[pupu][memu]",
+    "[pupu][tool]",
     "[pupu] batch review",
     "[pupu] dialogue decision",
 )

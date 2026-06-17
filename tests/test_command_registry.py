@@ -28,6 +28,7 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertIn("/tidy", cli_help)
         self.assertNotIn("/voice", cli_help)
         self.assertIn("/voice", qq_help)
+        self.assertIn("/debug", qq_help)
         self.assertIn("/silence", qq_help)
         self.assertIn("（管理员）", qq_help)
 

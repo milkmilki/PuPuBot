@@ -49,7 +49,7 @@ from .review_followups import (
     save_review_event_updates,
     save_review_important_events,
 )
-from .tools import TOOL_DEFINITIONS, execute_tool, is_admin_tool
+from .tools import execute_tool, get_chat_tool_definitions, is_admin_tool
 
 REVIEW_INTERVAL = 10
 REVIEW_SOURCE = CHAT
@@ -420,7 +420,7 @@ def chat(
         system=system_prompt + DIALOGUE_OUTPUT_PROTOCOL,
         messages=messages,
         max_tokens=10000,
-        tools=TOOL_DEFINITIONS,
+        tools=get_chat_tool_definitions(),
         tool_handler=_tool_handler,
         session_id=context_session,
         image_urls=image_urls,

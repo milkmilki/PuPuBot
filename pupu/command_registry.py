@@ -140,7 +140,8 @@ COMMANDS: tuple[CommandSpec, ...] = (
         category="调试",
         description="查看、开启或关闭控制台调试日志",
         usage="/debug [status|on|off]",
-        surfaces=_surface_set(("cli",)),
+        surfaces=_surface_set(("cli", "qq")),
+        admin_surfaces=_surface_set(("qq",)),
     ),
     CommandSpec(
         "silence",

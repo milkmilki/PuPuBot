@@ -23,6 +23,7 @@ from pupu.llm import (
     get_provider_name,
     set_provider_name,
 )
+from pupu.logging_utils import is_debug_console_enabled, set_debug_console_enabled
 from pupu.memory import (
     get_familiarity_info,
     get_recent_messages,
@@ -108,6 +109,12 @@ proactive_cmd = on_command(
 provider_cmd = on_command(
     "provider",
     aliases=command_aliases("provider"),
+    priority=5,
+    block=True,
+)
+debug_cmd = on_command(
+    "debug",
+    aliases=command_aliases("debug"),
     priority=5,
     block=True,
 )
@@ -496,6 +503,27 @@ async def handle_provider(event: Event, args: Message = CommandArg()):
         "\n下一次模型请求生效，重启后会回到 pupu.yaml 配置。"
         + warning
     )
+
+
+@debug_cmd.handle()
+async def handle_debug(event: Event, args: Message = CommandArg()):
+    user_id = event.get_user_id()
+    if not is_owner(user_id):
+        await debug_cmd.finish("只有管理员才能切换调试日志。")
+
+    action = args.extract_plain_text().strip().lower()
+    if not action or action in {"status", "状态", "?"}:
+        await debug_cmd.finish("调试日志：" + ("已开启" if is_debug_console_enabled() else "已关闭"))
+    if action in {"on", "enable", "enabled", "open", "start", "1", "true", "yes", "开启", "打开", "开"}:
+        set_debug_console_enabled(True)
+        await debug_cmd.finish(
+            "调试日志已开启。memU、工具调用、batch review 等详细日志会显示在启动窗口，并照常写入日志文件。"
+        )
+    if action in {"off", "disable", "disabled", "close", "stop", "0", "false", "no", "关闭", "关"}:
+        set_debug_console_enabled(False)
+        await debug_cmd.finish("调试日志已关闭。详细日志仍会写入日志文件，但不再刷启动窗口。")
+
+    await debug_cmd.finish("用法：/debug [status|on|off]")
 
 
 def _silence_http_timeout() -> float:
