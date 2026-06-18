@@ -2,28 +2,36 @@
 
 PuPuBot 是一个面向长期陪伴聊天的 AI bot 实验项目。它可以运行在命令行、QQ 私聊/群聊和本地 Web 控制台里，核心目标不是只回答当下这一句话，而是维护一段持续关系里的记忆、事件、约定和后续进展。
 
-![PuPuBot 事件链记忆设计图](docs/assets/event-chain-design.svg)
+![PuPuBot 记忆系统设计图](docs/assets/event-chain-design.svg)
 
 ## 项目亮点
 
-- **长期角色陪伴**：支持角色人设、好感度、用户事实、自我事实、对话摘要和主动消息。
-- **事件链记忆**：把传统的 `important_events` 升级为 `event_threads` + `event_steps`，用事件线记录持续事件的状态演进。
+- **长期角色陪伴**：支持角色人设、好感度、用户事实、自我事实、对话摘要、主动消息和定时跟进。
+- **事件链记忆**：用 `event_threads` + `event_steps` 记录持续事件的状态演进。
 - **增强召回归并**：用 SQLite FTS5 倒排召回 + 关键词 overlap + 近期/状态/置信度重排，减少重复事件线。
+- **人物索引**：用 `people` + `event_people` 把事件线和参与人物绑定，私聊、群聊和多实例场景能更稳地区分“谁做了什么”。
 - **实例化运行**：每个 bot 都运行在 `instances/<id>` 下，CLI、NapCat、QQ 官方和 Console 共用同一套实例模型。
 - **可视化事件图谱**：`/events url` 可导出自包含 HTML，Console 也内置事件图谱页，支持横向事件链和中心发散布局。
-- **可选 memU 长期记忆索引**：可以把长期记忆同步到 memU，用 RAG 方式按需召回。
+- **可选 memU 长期记忆缓存**：SQLite 是主记忆库；memU 只作为可删除、可重建的 RAG 缓存，用来按需召回相关摘要、事实和事件线快照。
 - **任务与提醒**：支持 scheduled tasks，并把任务取消、错过、重排等变化写回事件线。
 
-## 事件链记忆设计
+## 记忆系统设计
 
-事件链是这个项目最核心的记忆设计。
+PuPuBot 的记忆系统分成两层：本地 SQLite 主记忆库，以及可选的 memU 召回缓存。SQLite 始终是唯一事实源；memU 不负责决定事件或 facts 是否存在，只保存可检索、可删除、可重建的长期记忆副本。你可以把它理解成“主库 + 召回缓存”的组合：主库负责真实，缓存负责更容易想起来。
 
-传统做法会把“重要事件”保存成一条条扁平记录。问题是，长期陪伴对话里的事情往往会继续发展：一个约定会被推迟，一个计划会完成，一次互动会变成后续话题。如果每次都创建新的 important event，记忆很快会变得重复、碎片化，也更难被模型稳定召回。
+### 主记忆库
 
-PuPuBot 的事件链把记忆拆成两层：
+很多长期陪伴对话里的事情不会停在单次记录上：一个约定会被推迟，一个计划会完成，一次互动会变成后续话题。如果每次都创建新的扁平事件，记忆很快会变得重复、碎片化，也更难被模型稳定召回。
 
-- `event_threads`：一条持续事件线，保存标题、当前状态、状态、置信度、跟进提示、合并提示、关联任务等。
+核心表大致分为几类：
+
+- `messages`：原始聊天记录，带 `source`、说话人 key、昵称和 QQ 号等上下文。
+- `summaries`：batch review 后写入的批次摘要。
+- `user_facts` / `self_facts`：用户与实例的稳定长期事实。
+- `event_threads`：持续事件线，保存标题、当前状态、生命周期状态、置信度、跟进提示、合并提示、关联任务等。
 - `event_steps`：事件线里的进展节点，保存状态变化摘要、触发原因、发生时间和可选反思。
+- `people` / `event_people`：人物索引，把事件线、事件节点和固定人物身份关联起来。
+- `scheduled_tasks`：提醒和定时任务；任务完成、取消、错过、重排会追加 `system` 类型事件节点。
 
 step 类型有四种：
 
@@ -34,7 +42,40 @@ step 类型有四种：
 | `time` | 时间自然流逝带来的推测状态，必须保留“可能/推测”语气 |
 | `system` | 系统维护、任务取消/错过/重排等导致的状态变化 |
 
-Batch review 会先根据最近对话检索候选事件线。如果候选相关，优先追加 `append_step`；只有明显无关时才创建新 `create_thread`。这样同一件事会沿着一条链自然生长，而不是散落成很多相似事件。
+### 写入流程
+
+正常聊天不会每句话都立刻写长期记忆，而是由 batch review 在累计到一定数量的 `chat` 消息后统一整理：
+
+1. 程序把消息预处理成“人物名：发言 `<end>`”格式，避免模型把 QQ 号、昵称和实例名混在一起。
+2. 先用 `find_related_event_threads()` 检索候选事件线，并把候选标题、当前状态和最近节点放进 review prompt。
+3. review 模型输出 `summary`、`user_facts`、`self_facts`、`event_updates` 和 `task_updates`。
+4. `event_updates` 优先 `append_step` 到已有事件线；只有明显无关才 `create_thread`。
+5. 写入本地 SQLite 后，如果启用了 memU，再把本轮 `summary` / `user_fact` / `self_fact` / `event_thread` 快照写成可召回缓存。memU 写入失败只影响召回，不会阻断主库写入。
+
+### 召回流程
+
+聊天时有两种召回路径：
+
+- 未启用 memU：直接从 SQLite 读取近期 summaries、facts 和当前事件线，注入 system prompt。
+- 启用 memU：用当前消息和最近聊天作为 query，从 memU 召回相关 `summary` / `user_fact` / `self_fact` / `event_thread` 缓存条目，再注入“本轮自然想起的记忆”。
+
+事件线自己的归并检索不依赖 memU。`find_related_event_threads()` 先用 SQLite FTS5 召回候选，再按关键词 overlap、事件状态、近期活跃度、置信度和人物匹配进行重排。`/events search --debug <query>` 可以看到每条候选的分数组成。
+
+### 整理与同步
+
+`/tidy` 和每日维护走两条不同职责：
+
+- 本地维护会合并摘要、轻量更新事件线标题/当前状态/置信度、整理 facts；它不会删除或 drop 本地事件线。
+- memU tidy 只整理 memU 缓存副本，删除明显重复或低价值的 memU 条目，不删除本地 facts、事件线或聊天记录；整理后会检查 active/scheduled 等事件线缓存是否缺失，缺了就从 SQLite 主库补齐。
+
+这样做的原则是：本地库负责“真实记忆”，memU 负责“更容易想起来”。
+
+### 可视化
+
+事件图谱可以通过两种方式查看：
+
+- `/events url`：导出自包含 HTML 文件，适合 CLI 测试。
+- PuPu Console：实例详情里的事件图谱页，读取 `/api/instances/{id}/event_graph`，展示人物、事件线和进展节点。
 
 ## 快速开始
 
@@ -86,9 +127,7 @@ python -m pupu.cli
 | `/events search <query>` | 搜索相关事件线 |
 | `/events search --debug <query>` | 查看召回评分细节 |
 | `/events url` | 导出独立事件图谱 HTML |
-| `/events migrate` | 让模型把旧 important events 迁移成事件链 |
-| `/events migrate simple` | 机械地一条旧事件迁移成一条事件线 |
-| `/tidy` | 整理长期记忆，启用 memU 时会同步本地库和 memU |
+| `/tidy` | 整理长期记忆；启用 memU 时清理 memU 缓存并从主库补齐事件线缓存 |
 | `/score` | 查看好感度 |
 | `/history` | 查看最近聊天 |
 | `/quit` | 退出 CLI |

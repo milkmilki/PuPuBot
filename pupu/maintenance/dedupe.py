@@ -50,40 +50,6 @@ def _dedupe_events(conn) -> int:
     return deleted
 
 
-def _dedupe_important_events(conn) -> int:
-    rows = conn.execute(
-        """SELECT MIN(id) AS keep_id, GROUP_CONCAT(id) AS all_ids
-           FROM important_events
-           GROUP BY
-             session_id,
-             title,
-             kind,
-             COALESCE(event_time, ''),
-             time_text,
-             details,
-             followup_hint,
-             status,
-             COALESCE(linked_task_id, -1)
-           HAVING COUNT(*) > 1"""
-    ).fetchall()
-    deleted = 0
-    for row in rows:
-        all_ids = [
-            int(part)
-            for part in str(row["all_ids"]).split(",")
-            if part and int(part) != int(row["keep_id"])
-        ]
-        if not all_ids:
-            continue
-        placeholders = ",".join("?" for _ in all_ids)
-        cur = conn.execute(
-            f"DELETE FROM important_events WHERE id IN ({placeholders})",
-            all_ids,
-        )
-        deleted += cur.rowcount
-    return deleted
-
-
 def _dedupe_scheduled_tasks(conn) -> int:
     rows = conn.execute(
         """SELECT MIN(id) AS keep_id, GROUP_CONCAT(id) AS all_ids

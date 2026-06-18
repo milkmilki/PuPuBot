@@ -5,7 +5,7 @@ SUMMARY_MAINTENANCE_PROMPT = """你在帮一个长期陪伴型聊天体整理长
 目标：
 1. 找出明显重复、冗余、可被合并的 summaries
 2. 如果适合，把多条摘要合成一条更紧凑的新摘要
-3. 不要碰用户 facts、自我设定、important_events、tasks
+3. 不要碰用户 facts、自我设定、事件线、tasks
 
 规则：
 - 只处理 summaries
@@ -23,26 +23,24 @@ SUMMARY_MAINTENANCE_PROMPT = """你在帮一个长期陪伴型聊天体整理长
 ```"""
 
 
-IMPORTANT_EVENT_MAINTENANCE_PROMPT = """你在帮一个长期陪伴型聊天体整理 important_events。
+EVENT_THREAD_MAINTENANCE_PROMPT = """你在帮一个长期陪伴型聊天体整理事件线快照（event_threads 的当前状态）。
 
 目标：
-1. 删除明显重复、价值很低、或已经过时且不值得长期记住的 important_events
-2. 重新给保留事件分配 confidence，用来排序
+1. 合并和改写明显重复、冗余或表述不清的事件线当前状态
+2. 重新给事件分配 confidence，用来排序
 3. 允许轻微润色 title/details/followup_hint，让它们更紧凑清晰
 
 规则：
 - 不要凭空创造新事件
-- 不要修改 source_event_key
-- 不要删除 linked_task_id 不为空的事件
-- 不要删除 status 为 scheduled 的事件
+- 不要修改 thread_key
+- 本地事件线是主记忆，不要删除、隐藏、drop 或废弃任何事件线
 - confidence 用 0 到 1 之间的小数；越值得长期记住、越适合未来自然跟进，分数越高
-- 如果某条事件只是当前这一小批里语义重复，请保留更完整、更清楚的一条，删除其余重复项
-- 如果不需要改动，就返回空 drop_ids，并把 updates 原样给回去或只更新你想改的项
+- 如果某条事件只是当前这一小批里语义重复，请通过 updates 改写标题、details、followup_hint 或 confidence，不要删除
+- 如果不需要改动，就返回空 updates 或只更新你想改的项
 
 只返回 JSON：
 ```json
 {
-  "drop_ids": [3],
   "updates": [
     {
       "id": 1,

@@ -79,6 +79,23 @@ def collect_reason_hint(content_blocks) -> str:
     )
 
 
+def _assistant_name_from_system(system: str) -> str:
+    text = str(system or "")
+    patterns = (
+        r"你就是\s*([^。\n，,]+)",
+        r"用户现在是在和\s*([^。\n，,]+)说话",
+        r"你现在是\s*([^。\n，,]+)",
+        r"你叫\s*([^。\n，,、；;\s]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            name = match.group(1).strip()
+            if name:
+                return name
+    return "仆仆"
+
+
 def _codex_subprocess_env() -> dict[str, str] | None:
     proxy = os.environ.get("PUPU_CODEX_PROXY", "").strip()
     if not proxy:
@@ -495,9 +512,10 @@ class CodexCliProvider:
         tools: list[dict],
         tool_results: list[dict[str, str]],
     ) -> str:
+        assistant_name = _assistant_name_from_system(system)
         transcript = []
         for message in messages:
-            role = "用户" if message.get("role") == "user" else "仆仆"
+            role = "用户" if message.get("role") == "user" else assistant_name
             content = message.get("content", "")
             if not isinstance(content, str):
                 content = json.dumps(content, ensure_ascii=False)
@@ -601,9 +619,10 @@ class CodexCliProvider:
         max_tokens: int,
         tools: list[dict],
     ) -> str:
+        assistant_name = _assistant_name_from_system(system)
         transcript = []
         for message in messages:
-            role = "用户" if message.get("role") == "user" else "仆仆"
+            role = "用户" if message.get("role") == "user" else assistant_name
             content = message.get("content", "")
             if not isinstance(content, str):
                 content = json.dumps(content, ensure_ascii=False)
@@ -630,8 +649,9 @@ class CodexCliProvider:
             + "\n".join(transcript)
             + tool_section
             + "\n\n## 回复要求\n"
-            "- 直接输出仆仆接下来要发给用户的话。\n"
-            "- 不要解释你的推理，不要输出工具调用过程，不要输出 JSON，不要加前缀。\n"
+            f"- 直接输出{assistant_name}接下来要发给用户的话。\n"
+            "- 遵守上文已经给出的输出协议；如果上文要求 JSON，就只输出该 JSON 对象。\n"
+            "- 不要解释你的推理，不要输出工具调用过程，不要加前缀。\n"
             "- 如果需要搜索、定时任务、文件或系统能力，优先使用已接入的 PuPu MCP 工具。\n"
             f"- 回复长度上限约 {max_tokens} tokens。"
         )

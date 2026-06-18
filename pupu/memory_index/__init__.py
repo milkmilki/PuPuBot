@@ -7,12 +7,11 @@ importing memU directly so PuPu can keep chatting when the index is unavailable.
 from .memu_adapter import (
     clear_memu_session,
     format_memu_facts_report,
-    format_memu_important_events_report,
+    format_memu_event_threads_report,
     format_memu_recall_report,
     is_memu_long_term_enabled,
     recall_memories,
-    rebuild_memu_session,
-    sync_missing_memu_important_events,
+    sync_missing_memu_event_threads,
     sync_review_memory,
 )
 from .memu_tidy import analyze_memu_tidy, format_memu_tidy_report, run_memu_maintenance, run_memu_tidy
@@ -20,15 +19,14 @@ from .memu_tidy import analyze_memu_tidy, format_memu_tidy_report, run_memu_main
 __all__ = [
     "clear_memu_session",
     "format_memu_facts_report",
-    "format_memu_important_events_report",
+    "format_memu_event_threads_report",
     "format_memu_recall_report",
     "format_memu_tidy_report",
     "analyze_memu_tidy",
     "is_memu_long_term_enabled",
     "recall_memories",
-    "rebuild_memu_session",
     "run_memu_maintenance",
     "run_memu_tidy",
-    "sync_missing_memu_important_events",
+    "sync_missing_memu_event_threads",
     "sync_review_memory",
 ]

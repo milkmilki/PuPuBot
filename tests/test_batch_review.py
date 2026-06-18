@@ -15,7 +15,7 @@ from pupu.memory import (
     _get_conn,
     create_scheduled_task,
     get_familiarity,
-    get_important_events,
+    get_event_threads,
     get_pending_review_last_message_time,
     get_review_candidate_batch,
     get_summaries,
@@ -29,7 +29,7 @@ from pupu.memory import (
     save_summary,
     set_familiarity,
     update_familiarity,
-    upsert_important_events,
+    upsert_event_threads,
 )
 from pupu.storage import get_conn, upsert_person
 from pupu.persona import build_batch_review_prompt
@@ -63,6 +63,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn("关系升温、进行了亲密互动、氛围很好", prompt)
         self.assertIn("summary、facts、title、time_text", prompt)
         self.assertIn("2026年5月19日这轮对话中", prompt)
+        self.assertIn("event_updates 用于维护“持续事件线”", prompt)
 
     def test_batch_review_prompt_uses_instance_name_for_subject_rules(self):
         prompt = build_batch_review_prompt(character_name="璐璐")
@@ -172,19 +173,20 @@ class BatchReviewTests(unittest.TestCase):
   "familiarity_delta": 2,
   "user_facts": {"favorite_genre": "fantasy",},
   "self_facts": {},
-  "important_events": [{
-    "source_event_key": "birthday-2026-04-27",
+  "event_updates": [{
+    "action": "create_thread",
+    "thread_key": "birthday-2026-04-27",
     "title": "user birthday tomorrow",
     "kind": "birthday",
     "event_time": "2026-04-27",
     "time_text": "tomorrow",
-    "details": "user said birthday tomorrow",
+    "summary": "user said birthday tomorrow",
     "followup_hint": "wish happy birthday",
     "confidence": 0.9
   },],
   "task_updates": [{
     "action": "create",
-    "source_event_key": "birthday-2026-04-27",
+    "thread_key": "birthday-2026-04-27",
     "title": "birthday wish",
     "instruction": "wish happy birthday",
     "run_at": "2026-04-27T09:00:00",
@@ -200,7 +202,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(parsed["familiarity_delta"], 2)
         self.assertEqual(parsed["user_facts"]["favorite_genre"], "fantasy")
         self.assertEqual(
-            parsed["important_events"][0]["source_event_key"],
+            parsed["event_updates"][0]["thread_key"],
             "birthday-2026-04-27",
         )
         self.assertEqual(parsed["task_updates"][0]["action"], "create")
@@ -214,14 +216,15 @@ class BatchReviewTests(unittest.TestCase):
     "commitment": "用户承诺要做仆仆一辈子的朋友，永远在一起"
   },
   "self_facts": {},
-  "important_events": [
+  "event_updates": [
     {
-      "source_event_key": "eternal_friendship_promise",
+      "action": "create_thread",
+      "thread_key": "eternal_friendship_promise",
       "title": "永远的朋友承诺",
       "kind": "promise",
       "event_time": "2026-04-26",
       "time_text": "今天",
-      "details": "用户和仆仆确立了永远做朋友的承诺。",
+      "summary": "用户和仆仆确立了永远做朋友的承诺。",
       "followup_hint": "这是关系的重要里程碑",
       "confidence": 0.95
     }
@@ -235,7 +238,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn('"永远在一起"', parsed["summary"])
         self.assertEqual(parsed["familiarity_delta"], 8)
         self.assertEqual(
-            parsed["important_events"][0]["source_event_key"],
+            parsed["event_updates"][0]["thread_key"],
             "eternal_friendship_promise",
         )
 
@@ -279,13 +282,14 @@ class BatchReviewTests(unittest.TestCase):
           "familiarity_delta": 1,
           "user_facts": {},
           "self_facts": {},
-          "important_events": [{
-            "source_event_key": "promise-test",
+          "event_updates": [{
+            "action": "create_thread",
+            "thread_key": "promise-test",
             "title": "测试约定",
             "kind": "promise",
             "event_time": "",
             "time_text": "刚才",
-            "details": "用户和仆仆说好要记住这件事。",
+            "summary": "用户和仆仆说好要记住这件事。",
             "followup_hint": "之后自然提起",
             "confidence": 0.8
           }],
@@ -303,7 +307,7 @@ class BatchReviewTests(unittest.TestCase):
             _maybe_batch_review(self.session_id)
 
         summaries = get_summaries(self.session_id, limit=3)
-        events = get_important_events(self.session_id, limit=3)
+        events = get_event_threads(self.session_id, limit=3)
         review_input = mock_json_task.call_args.kwargs["user_content"]
 
         mock_json_task.assert_called_once()
@@ -315,15 +319,15 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn("待整理对话", review_input)
         self.assertEqual(get_familiarity(self.session_id), 1)
         self.assertEqual(summaries[-1]["summary"], "用户和仆仆聊了一个重要约定。")
-        self.assertEqual(events[0]["source_event_key"], "promise-test")
+        self.assertEqual(events[0]["thread_key"], "promise-test")
         self.assertEqual(list_scheduled_tasks(self.session_id), [])
 
     def test_batch_review_event_candidates_include_recent_steps(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "cake-check",
+                    "thread_key": "cake-check",
                     "title": "草莓蛋糕验收",
                     "kind": "promise",
                     "details": "用户答应带草莓蛋糕让仆仆验收",
@@ -360,7 +364,7 @@ class BatchReviewTests(unittest.TestCase):
           "familiarity_delta": 0,
           "user_facts": {},
           "self_facts": {},
-          "important_events": [],
+          "event_updates": [],
           "task_updates": []
         }"""
 
@@ -421,7 +425,7 @@ class BatchReviewTests(unittest.TestCase):
           "familiarity_delta": 0,
           "user_facts": {},
           "self_facts": {},
-          "important_events": [],
+          "event_updates": [],
           "task_updates": []
         }"""
 
@@ -471,7 +475,7 @@ class BatchReviewTests(unittest.TestCase):
           "familiarity_delta": 0,
           "user_facts": {},
           "self_facts": {},
-          "important_events": [],
+          "event_updates": [],
           "task_updates": []
         }"""
 
@@ -505,7 +509,7 @@ class BatchReviewTests(unittest.TestCase):
           "familiarity_delta": 2,
           "user_facts": {"喜欢": "草莓"},
           "self_facts": {},
-          "important_events": [],
+          "event_updates": [],
           "task_updates": []
         }"""
 
@@ -530,7 +534,7 @@ class BatchReviewTests(unittest.TestCase):
           "familiarity_delta": 7,
           "user_facts": {},
           "self_facts": {},
-          "important_events": [],
+          "event_updates": [],
           "task_updates": []
         }"""
 

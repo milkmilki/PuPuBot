@@ -178,38 +178,6 @@ def init_db():
     )
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS important_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL DEFAULT 'default',
-            source_event_key TEXT NOT NULL,
-            title TEXT NOT NULL,
-            kind TEXT NOT NULL DEFAULT '',
-            event_time TEXT,
-            time_text TEXT NOT NULL DEFAULT '',
-            details TEXT NOT NULL DEFAULT '',
-            followup_hint TEXT NOT NULL DEFAULT '',
-            confidence REAL NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'active',
-            linked_task_id INTEGER,
-            last_seen_at TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """
-    )
-    cursor.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_important_events_key
-        ON important_events(session_id, source_event_key)
-    """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_important_events_prompt
-        ON important_events(session_id, status, event_time, last_seen_at)
-    """
-    )
-    cursor.execute(
-        """
         CREATE TABLE IF NOT EXISTS event_threads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL DEFAULT 'default',
@@ -365,7 +333,7 @@ def init_db():
         )
 
     try:
-        from .important_events import ensure_event_thread_fts, rebuild_event_thread_fts
+        from .event_threads import ensure_event_thread_fts, rebuild_event_thread_fts
         from .people import backfill_default_event_people
 
         backfill_default_event_people(conn)

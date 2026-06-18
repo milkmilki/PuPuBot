@@ -52,17 +52,16 @@ COMMANDS: tuple[CommandSpec, ...] = (
         description="查看定时任务",
     ),
     CommandSpec(
-        "important",
-        "important",
-        aliases=("events", "important_events", "重要事件", "记忆事件"),
+        "events",
+        "events",
+        aliases=("事件线", "记忆事件"),
         category="记忆",
         description="查看事件线记忆",
         usage=(
             "/events\n"
             "/events detail <key>\n"
             "/events search [--debug] <内容>\n"
-            "/events url\n"
-            "/events migrate [simple]"
+            "/events url"
         ),
     ),
     CommandSpec(
@@ -79,14 +78,6 @@ COMMANDS: tuple[CommandSpec, ...] = (
         category="记忆",
         description="调试 memU 会召回哪些记忆",
         usage="/recall <内容>",
-    ),
-    CommandSpec(
-        "memu_rebuild",
-        "memu_rebuild",
-        aliases=("rebuild_memory", "重建记忆"),
-        category="记忆",
-        description="从旧库重建当前会话的 memU 索引",
-        admin_surfaces=_surface_set(("qq",)),
     ),
     CommandSpec(
         "tidy",

@@ -6,16 +6,16 @@ import json
 from datetime import datetime
 
 from ..llm import MODEL, json_task
-from ..storage.important_events import apply_event_thread_maintenance
+from ..storage.event_threads import apply_event_thread_maintenance
 from .parsing import _parse_json_object
 from .prompt import (
     FACTS_MAINTENANCE_PROMPT,
-    IMPORTANT_EVENT_MAINTENANCE_PROMPT,
+    EVENT_THREAD_MAINTENANCE_PROMPT,
     SUMMARY_MAINTENANCE_PROMPT,
 )
 from .snapshot import _normalize_int_list, _should_run_model_compaction
 
-IMPORTANT_EVENT_CHUNK_SIZE = 12
+EVENT_THREAD_CHUNK_SIZE = 12
 
 
 def _commit_quietly(conn) -> None:
@@ -30,8 +30,7 @@ def _run_model_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
         return {
             "dropped_summaries": 0,
             "merged_summaries": 0,
-            "dropped_important_events": 0,
-            "updated_important_events": 0,
+            "updated_event_threads": 0,
             "deleted_facts": 0,
             "updated_facts": 0,
             "note": "",
@@ -46,11 +45,11 @@ def _run_model_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
     )
     if apply:
         _commit_quietly(conn)
-    print(f"[pupu][maintenance] session={session_id} phase=important_events start")
-    important_event_result = _run_important_event_compaction(conn, snapshot, apply=apply)
+    print(f"[pupu][maintenance] session={session_id} phase=event_threads start")
+    event_thread_result = _run_event_thread_compaction(conn, snapshot, apply=apply)
     print(
-        f"[pupu][maintenance] session={session_id} phase=important_events done "
-        f"dropped={important_event_result['dropped_important_events']} updated={important_event_result['updated_important_events']}"
+        f"[pupu][maintenance] session={session_id} phase=event_threads done "
+        f"updated={event_thread_result['updated_event_threads']}"
     )
     if apply:
         _commit_quietly(conn)
@@ -67,7 +66,7 @@ def _run_model_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
         part
         for part in (
             summary_result["note"],
-            important_event_result["note"],
+            event_thread_result["note"],
             fact_result["note"],
         )
         if part
@@ -75,8 +74,7 @@ def _run_model_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
     return {
         "dropped_summaries": summary_result["dropped_summaries"],
         "merged_summaries": summary_result["merged_summaries"],
-        "dropped_important_events": important_event_result["dropped_important_events"],
-        "updated_important_events": important_event_result["updated_important_events"],
+        "updated_event_threads": event_thread_result["updated_event_threads"],
         "deleted_facts": fact_result["deleted_facts"],
         "updated_facts": fact_result["updated_facts"],
         "note": " | ".join(notes),
@@ -166,44 +164,35 @@ def _run_summary_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict
     }
 
 
-def _run_important_event_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
-    events = snapshot["important_events"]
+def _run_event_thread_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
+    events = snapshot["event_threads"]
     if not events:
         return {
-            "dropped_important_events": 0,
-            "updated_important_events": 0,
+            "updated_event_threads": 0,
             "note": "",
         }
 
-    dropped_total = 0
     updated_total = 0
     notes: list[str] = []
     tasks = snapshot["tasks"]
 
-    for index in range(0, len(events), IMPORTANT_EVENT_CHUNK_SIZE):
-        chunk = events[index : index + IMPORTANT_EVENT_CHUNK_SIZE]
+    for index in range(0, len(events), EVENT_THREAD_CHUNK_SIZE):
+        chunk = events[index : index + EVENT_THREAD_CHUNK_SIZE]
         chunk_by_id = {int(row["id"]): row for row in chunk}
-        droppable_ids = {
-            int(row["id"])
-            for row in chunk
-            if not row.get("linked_task_id") and str(row.get("status") or "active") == "active"
-        }
-
         payload = {
             "session_id": snapshot["session_id"],
             "now": datetime.now().isoformat(timespec="seconds"),
-            "important_events": chunk,
+            "event_threads": chunk,
             "tasks": tasks,
         }
         result = _call_model_json(
-            IMPORTANT_EVENT_MAINTENANCE_PROMPT,
+            EVENT_THREAD_MAINTENANCE_PROMPT,
             payload,
             max_tokens=5000,
-            task_name="important_event_maintenance",
+            task_name="event_thread_maintenance",
         )
 
-        drop_ids = _normalize_int_list(result.get("drop_ids", []), droppable_ids)
-        updates = _normalize_important_event_updates(
+        updates = _normalize_event_thread_updates(
             result.get("updates", []),
             set(chunk_by_id.keys()),
         )
@@ -212,25 +201,21 @@ def _run_important_event_compaction(conn, snapshot: dict, *, apply: bool = True)
             notes.append(note)
 
         if apply:
-            dropped, updated = apply_event_thread_maintenance(
+            updated = apply_event_thread_maintenance(
                 conn,
                 snapshot["session_id"],
-                drop_ids=drop_ids,
                 updates=updates,
                 now=datetime.now().isoformat(),
             )
-            dropped_total += dropped
             updated_total += updated
         else:
-            dropped_total += len(drop_ids)
             updated_total += len(updates)
 
-        if apply and (drop_ids or updates):
+        if apply and updates:
             _commit_quietly(conn)
 
     return {
-        "dropped_important_events": dropped_total,
-        "updated_important_events": updated_total,
+        "updated_event_threads": updated_total,
         "note": " | ".join(notes[:4]),
     }
 
@@ -352,7 +337,7 @@ def _normalize_fact_delete_keys(values, allowed_keys: set[str]) -> list[str]:
     return out
 
 
-def _normalize_important_event_updates(values, allowed_ids: set[int]) -> list[dict]:
+def _normalize_event_thread_updates(values, allowed_ids: set[int]) -> list[dict]:
     if not isinstance(values, list):
         return []
 

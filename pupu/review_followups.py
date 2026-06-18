@@ -10,12 +10,12 @@ from .storage import (
     cancel_matching_scheduled_tasks,
     count_scheduled_tasks,
     create_scheduled_task,
-    derive_source_event_key,
+    derive_thread_key,
     find_matching_scheduled_task,
-    get_important_event_by_key,
-    link_important_event_task,
+    get_event_thread_by_key,
+    link_event_thread_task,
     reschedule_matching_scheduled_tasks,
-    upsert_important_events,
+    upsert_event_threads,
 )
 
 DATE_ONLY_DEFAULT_KINDS = {"birthday", "anniversary"}
@@ -101,64 +101,6 @@ def _replace_relative_dates(text: str, now: datetime, event_date: date | None = 
     return value
 
 
-def normalize_review_important_events(value, *, now: datetime | None = None) -> list[dict]:
-    if not isinstance(value, list):
-        return []
-
-    now = now or datetime.now()
-    cleaned = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-
-        title = str(item.get("title", "")).strip()
-        kind = str(item.get("kind", "")).strip().lower()
-        event_time = str(item.get("event_time", "")).strip()
-        time_text = str(item.get("time_text", "")).strip()
-        details = str(item.get("details", "")).strip()
-        followup_hint = str(item.get("followup_hint", "")).strip()
-        event_date = _parse_event_date(event_time) or _relative_date_from_text(
-            " ".join(part for part in (time_text, title, details, followup_hint) if part),
-            now,
-        )
-        if not event_time and event_date:
-            event_time = event_date.isoformat()
-        title = _replace_relative_dates(title, now, event_date)
-        time_text = _replace_relative_dates(time_text, now, event_date)
-        details = _replace_relative_dates(details, now, event_date)
-        followup_hint = _replace_relative_dates(followup_hint, now, event_date)
-        source_event_key = derive_source_event_key(
-            item.get("source_event_key"),
-            title=title,
-            kind=kind,
-            event_time=event_time,
-            time_text=time_text,
-        )
-        if not (title or details or time_text or event_time):
-            continue
-
-        try:
-            confidence = float(item.get("confidence", 0.0))
-        except Exception:
-            confidence = 0.0
-        confidence = max(0.0, min(1.0, confidence))
-
-        cleaned.append(
-            {
-                "source_event_key": source_event_key,
-                "title": title or details[:40] or "未命名事件",
-                "kind": kind,
-                "event_time": event_time,
-                "time_text": time_text,
-                "details": details,
-                "followup_hint": followup_hint,
-                "confidence": confidence,
-                "status": "active",
-            }
-        )
-    return cleaned
-
-
 def normalize_review_event_updates(value, *, now: datetime | None = None) -> list[dict]:
     if not isinstance(value, list):
         return []
@@ -172,7 +114,7 @@ def normalize_review_event_updates(value, *, now: datetime | None = None) -> lis
         if action not in {"append_step", "create_thread"}:
             continue
         title = str(item.get("title") or "").strip()
-        thread_key = str(item.get("thread_key") or item.get("source_event_key") or "").strip()
+        thread_key = str(item.get("thread_key") or "").strip()
         kind = str(item.get("kind") or "").strip().lower()
         event_time = str(item.get("event_time") or item.get("occurred_at") or "").strip()
         time_text = str(item.get("time_text") or "").strip()
@@ -204,7 +146,7 @@ def normalize_review_event_updates(value, *, now: datetime | None = None) -> lis
         confidence = max(0.0, min(1.0, confidence))
         if not (thread_key or title or summary):
             continue
-        source_event_key = derive_source_event_key(
+        thread_key = derive_thread_key(
             thread_key,
             title=title or summary,
             kind=kind,
@@ -214,8 +156,7 @@ def normalize_review_event_updates(value, *, now: datetime | None = None) -> lis
         cleaned.append(
             {
                 "action": action,
-                "thread_key": source_event_key,
-                "source_event_key": source_event_key,
+                "thread_key": thread_key,
                 "title": title or summary[:40] or "未命名事件",
                 "kind": kind,
                 "event_time": event_time,
@@ -229,56 +170,6 @@ def normalize_review_event_updates(value, *, now: datetime | None = None) -> lis
                 "step_type": step_type,
                 "confidence": confidence,
                 "status": str(item.get("status") or "active").strip() or "active",
-            }
-        )
-    return cleaned
-
-
-def normalize_review_task_drafts(value) -> list[dict]:
-    if not isinstance(value, list):
-        return []
-
-    cleaned = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-
-        should_create = item.get("should_create", False)
-        if isinstance(should_create, str):
-            should_create = should_create.strip().lower() in {"1", "true", "yes", "y"}
-        else:
-            should_create = bool(should_create)
-
-        title = str(item.get("title", "")).strip() or "提醒"
-        instruction = str(item.get("instruction", "")).strip()
-        run_at = str(item.get("run_at", "")).strip()
-        kind = str(item.get("kind", "")).strip().lower()
-        repeat = str(item.get("repeat", "once")).strip().lower()
-        repeat = REPEAT_ALIASES.get(repeat, repeat)
-        if repeat not in VALID_REPEATS:
-            repeat = "once"
-
-        try:
-            interval_seconds = int(item.get("interval_seconds"))
-        except Exception:
-            interval_seconds = None
-
-        source_event_key = derive_source_event_key(
-            item.get("source_event_key"),
-            title=title,
-            kind=kind,
-            event_time=run_at,
-        )
-        cleaned.append(
-            {
-                "source_event_key": source_event_key,
-                "should_create": should_create,
-                "title": title,
-                "instruction": instruction,
-                "run_at": run_at,
-                "repeat": repeat,
-                "interval_seconds": interval_seconds,
-                "kind": kind,
             }
         )
     return cleaned
@@ -311,7 +202,7 @@ def normalize_review_task_updates(value) -> list[dict]:
             {
                 "action": action,
                 "query": query,
-                "source_event_key": str(item.get("source_event_key", "")).strip(),
+                "thread_key": str(item.get("thread_key", "")).strip(),
                 "title": str(item.get("title", "")).strip(),
                 "instruction": str(item.get("instruction", "")).strip(),
                 "run_at": str(item.get("run_at", "")).strip(),
@@ -346,26 +237,6 @@ def _with_review_source_range(
     return out
 
 
-def save_review_important_events(
-    identity_session: str,
-    important_events: list[dict],
-    *,
-    context_session: str | None = None,
-    source_msg_start_id: int | None = None,
-    source_msg_end_id: int | None = None,
-) -> dict[str, dict]:
-    rows = upsert_important_events(
-        identity_session,
-        _with_review_source_range(
-            important_events,
-            context_session=context_session,
-            source_msg_start_id=source_msg_start_id,
-            source_msg_end_id=source_msg_end_id,
-        ),
-    )
-    return {str(row["source_event_key"]): row for row in rows}
-
-
 def save_review_event_updates(
     identity_session: str,
     event_updates: list[dict],
@@ -374,7 +245,7 @@ def save_review_event_updates(
     source_msg_start_id: int | None = None,
     source_msg_end_id: int | None = None,
 ) -> dict[str, dict]:
-    rows = upsert_important_events(
+    rows = upsert_event_threads(
         identity_session,
         _with_review_source_range(
             event_updates,
@@ -383,204 +254,158 @@ def save_review_event_updates(
             source_msg_end_id=source_msg_end_id,
         ),
     )
-    return {str(row["source_event_key"]): row for row in rows}
+    return {str(row["thread_key"]): row for row in rows}
 
 
-def apply_review_task_drafts(
+def _create_review_task(
     session_id: str,
-    task_drafts: list[dict],
-    important_event_rows: dict[str, dict] | None = None,
+    update: dict,
+    event_rows: dict[str, dict] | None = None,
     now: datetime | None = None,
     *,
     identity_session: str | None = None,
-) -> list[dict]:
-    results = []
+) -> dict:
     identity_session = str(identity_session or session_id)
     current = now or datetime.now()
-    event_rows = dict(important_event_rows or {})
+    event_rows = dict(event_rows or {})
+    thread_key = derive_thread_key(
+        update.get("thread_key"),
+        title=str(update.get("title", "")),
+        kind=str(update.get("kind", "")),
+        event_time=str(update.get("run_at", "")),
+    )
 
-    for draft in task_drafts:
-        source_event_key = derive_source_event_key(
-            draft.get("source_event_key"),
-            title=str(draft.get("title", "")),
-            kind=str(draft.get("kind", "")),
-            event_time=str(draft.get("run_at", "")),
+    event_row = event_rows.get(thread_key) or get_event_thread_by_key(
+        identity_session, thread_key
+    )
+    if event_row is None:
+        placeholder_rows = upsert_event_threads(
+            identity_session,
+            [
+                {
+                    "thread_key": thread_key,
+                    "title": update.get("title") or "未命名事件",
+                    "kind": update.get("kind") or "",
+                    "event_time": update.get("run_at") or "",
+                    "time_text": "",
+                    "details": update.get("instruction") or "",
+                    "followup_hint": update.get("instruction") or "",
+                    "confidence": 0.0,
+                    "status": "active",
+                }
+            ],
         )
-        draft["source_event_key"] = source_event_key
+        if placeholder_rows:
+            event_row = placeholder_rows[0]
+            event_rows[thread_key] = event_row
 
-        if not draft.get("should_create"):
-            results.append(
-                {
-                    "source_event_key": source_event_key,
-                    "status": "skipped",
-                    "reason": "model_declined",
-                }
-            )
-            continue
+    if event_row and event_row.get("linked_task_id"):
+        return {
+            "thread_key": thread_key,
+            "status": "linked_existing",
+            "task_id": int(event_row["linked_task_id"]),
+            "reason": "already_linked",
+        }
 
-        event_row = event_rows.get(source_event_key) or get_important_event_by_key(
-            identity_session, source_event_key
-        )
-        if event_row is None:
-            placeholder_rows = upsert_important_events(
-                identity_session,
-                [
-                    {
-                        "source_event_key": source_event_key,
-                        "title": draft.get("title") or "未命名事件",
-                        "kind": draft.get("kind") or "",
-                        "event_time": draft.get("run_at") or "",
-                        "time_text": "",
-                        "details": draft.get("instruction") or "",
-                        "followup_hint": draft.get("instruction") or "",
-                        "confidence": 0.0,
-                        "status": "active",
-                    }
-                ],
-            )
-            if placeholder_rows:
-                event_row = placeholder_rows[0]
-                event_rows[source_event_key] = event_row
+    run_at, error = _normalize_task_run_at(update, event_row, current)
+    if error:
+        return {
+            "thread_key": thread_key,
+            "status": "skipped",
+            "reason": error,
+        }
 
-        if event_row and event_row.get("linked_task_id"):
-            results.append(
-                {
-                    "source_event_key": source_event_key,
-                    "status": "linked_existing",
-                    "task_id": int(event_row["linked_task_id"]),
-                    "reason": "already_linked",
-                }
-            )
-            continue
-
-        run_at, error = _normalize_task_run_at(draft, event_row, current)
-        if error:
-            results.append(
-                {
-                    "source_event_key": source_event_key,
-                    "status": "skipped",
-                    "reason": error,
-                }
-            )
-            continue
-
-        repeat = str(draft.get("repeat") or "once").strip().lower()
-        repeat = REPEAT_ALIASES.get(repeat, repeat)
-        interval_seconds = draft.get("interval_seconds")
-        if repeat == "interval":
-            if interval_seconds is None or interval_seconds < 60 or interval_seconds > 604800:
-                results.append(
-                    {
-                        "source_event_key": source_event_key,
-                        "status": "skipped",
-                        "reason": "invalid_interval_seconds",
-                    }
-                )
-                continue
-        else:
-            interval_seconds = None
-
-        if count_scheduled_tasks(session_id) >= MAX_SCHEDULED_TASKS_PER_SESSION:
-            results.append(
-                {
-                    "source_event_key": source_event_key,
-                    "status": "skipped",
-                    "reason": "task_limit_reached",
-                }
-            )
-            continue
-
-        title = str(draft.get("title") or "提醒").strip()[:80] or "提醒"
-        instruction = str(draft.get("instruction") or "").strip()
-        if not instruction:
-            results.append(
-                {
-                    "source_event_key": source_event_key,
-                    "status": "skipped",
-                    "reason": "missing_instruction",
-                }
-            )
-            continue
-
-        existing = find_matching_scheduled_task(
-            session_id,
-            title,
-            instruction,
-            run_at,
-            repeat,
-            interval_seconds,
-        )
-        if existing:
-            link_important_event_task(
-                identity_session,
-                source_event_key,
-                int(existing["id"]),
-            )
-            results.append(
-                {
-                    "source_event_key": source_event_key,
-                    "status": "linked_existing",
-                    "task_id": int(existing["id"]),
-                    "reason": "matched_existing_task",
-                }
-            )
-            continue
-
-        task_id = create_scheduled_task(
-            session_id,
-            title,
-            instruction,
-            run_at,
-            repeat,
-            interval_seconds,
-        )
-        link_important_event_task(identity_session, source_event_key, task_id)
-        results.append(
-            {
-                "source_event_key": source_event_key,
-                "status": "created",
-                "task_id": task_id,
-                "run_at": run_at,
+    repeat = str(update.get("repeat") or "once").strip().lower()
+    repeat = REPEAT_ALIASES.get(repeat, repeat)
+    interval_seconds = update.get("interval_seconds")
+    if repeat == "interval":
+        if interval_seconds is None or interval_seconds < 60 or interval_seconds > 604800:
+            return {
+                "thread_key": thread_key,
+                "status": "skipped",
+                "reason": "invalid_interval_seconds",
             }
-        )
+    else:
+        interval_seconds = None
 
-    return results
+    if count_scheduled_tasks(session_id) >= MAX_SCHEDULED_TASKS_PER_SESSION:
+        return {
+            "thread_key": thread_key,
+            "status": "skipped",
+            "reason": "task_limit_reached",
+        }
+
+    title = str(update.get("title") or "提醒").strip()[:80] or "提醒"
+    instruction = str(update.get("instruction") or "").strip()
+    if not instruction:
+        return {
+            "thread_key": thread_key,
+            "status": "skipped",
+            "reason": "missing_instruction",
+        }
+
+    existing = find_matching_scheduled_task(
+        session_id,
+        title,
+        instruction,
+        run_at,
+        repeat,
+        interval_seconds,
+    )
+    if existing:
+        link_event_thread_task(
+            identity_session,
+            thread_key,
+            int(existing["id"]),
+        )
+        return {
+            "thread_key": thread_key,
+            "status": "linked_existing",
+            "task_id": int(existing["id"]),
+            "reason": "matched_existing_task",
+        }
+
+    task_id = create_scheduled_task(
+        session_id,
+        title,
+        instruction,
+        run_at,
+        repeat,
+        interval_seconds,
+    )
+    link_event_thread_task(identity_session, thread_key, task_id)
+    return {
+        "thread_key": thread_key,
+        "status": "created",
+        "task_id": task_id,
+        "run_at": run_at,
+    }
 
 
 def apply_review_task_updates(
     session_id: str,
     task_updates: list[dict],
-    important_event_rows: dict[str, dict] | None = None,
+    event_rows: dict[str, dict] | None = None,
     now: datetime | None = None,
     *,
     identity_session: str | None = None,
 ) -> list[dict]:
     results = []
     identity_session = str(identity_session or session_id)
-    event_rows = dict(important_event_rows or {})
+    event_rows = dict(event_rows or {})
     current = now or datetime.now()
     for update in task_updates:
         action = str(update.get("action", "")).strip().lower()
         query = str(update.get("query", "")).strip()
         if action == "create":
-            draft = {
-                "source_event_key": update.get("source_event_key"),
-                "should_create": True,
-                "title": update.get("title") or "提醒",
-                "instruction": update.get("instruction") or "",
-                "run_at": update.get("run_at") or "",
-                "repeat": update.get("repeat") or "once",
-                "interval_seconds": update.get("interval_seconds"),
-                "kind": update.get("kind") or "",
-            }
-            draft_results = apply_review_task_drafts(
+            item = _create_review_task(
                 session_id,
-                [draft],
+                update,
                 event_rows,
                 current,
                 identity_session=identity_session,
             )
-            item = dict(draft_results[0] if draft_results else {})
+            item = dict(item)
             item["action"] = "create"
             item["query"] = query
             item["reason"] = str(update.get("reason", "")).strip()

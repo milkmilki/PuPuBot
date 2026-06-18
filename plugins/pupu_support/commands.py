@@ -15,7 +15,7 @@ from pupu.command_registry import command_aliases, command_usage, render_help
 from pupu.config import load_arbiter_base_url, load_arbiter_timeout_seconds, load_owner_ids
 
 from pupu.facts_report import format_facts_report
-from pupu.important_event_report import format_important_events_report
+from pupu.event_thread_report import format_event_threads_report
 from pupu.familiarity import PROACTIVE_THRESHOLD, get_proactive_freq
 from pupu.llm import (
     SUPPORTED_PROVIDERS,
@@ -33,7 +33,6 @@ from pupu.memory import (
 from pupu.memory_index import (
     clear_memu_session,
     format_memu_recall_report,
-    rebuild_memu_session,
     run_memu_maintenance,
 )
 from pupu.proactive import (
@@ -62,9 +61,9 @@ help_cmd = on_command(
 )
 score_cmd = on_command("score", priority=5, block=True)
 tasks_cmd = on_command("tasks", aliases=command_aliases("tasks"), priority=5, block=True)
-important_cmd = on_command(
-    "important",
-    aliases=command_aliases("important"),
+events_cmd = on_command(
+    "events",
+    aliases=command_aliases("events"),
     priority=5,
     block=True,
 )
@@ -77,12 +76,6 @@ facts_cmd = on_command(
 recall_cmd = on_command(
     "recall",
     aliases=command_aliases("recall"),
-    priority=5,
-    block=True,
-)
-memu_rebuild_cmd = on_command(
-    "memu_rebuild",
-    aliases=command_aliases("memu_rebuild"),
     priority=5,
     block=True,
 )
@@ -149,12 +142,12 @@ async def handle_tasks(event: Event):
     await tasks_cmd.finish(manage_scheduled_task(context_sid, {"action": "list"}))
 
 
-@important_cmd.handle()
-async def handle_important(event: Event, args: Message = CommandArg()):
+@events_cmd.handle()
+async def handle_events(event: Event, args: Message = CommandArg()):
     _context_sid, identity_sid = resolve_sessions(event)
     query = args.extract_plain_text().strip()
-    report = await asyncio.to_thread(format_important_events_report, identity_sid, query=query)
-    await important_cmd.finish(report)
+    report = await asyncio.to_thread(format_event_threads_report, identity_sid, query=query)
+    await events_cmd.finish(report)
 
 
 @facts_cmd.handle()
@@ -177,16 +170,6 @@ async def handle_recall(event: Event, args: Message = CommandArg()):
         context_sid,
     )
     await recall_cmd.finish(report)
-
-
-@memu_rebuild_cmd.handle()
-async def handle_memu_rebuild(event: Event):
-    user_id = event.get_user_id()
-    if not is_owner(user_id):
-        await memu_rebuild_cmd.finish("只有管理员才能重建 memU 记忆索引")
-    context_sid, identity_sid = resolve_sessions(event)
-    report = await asyncio.to_thread(rebuild_memu_session, identity_sid, context_sid)
-    await memu_rebuild_cmd.finish(report)
 
 
 @history_cmd.handle()

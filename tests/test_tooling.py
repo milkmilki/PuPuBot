@@ -17,6 +17,7 @@ from pupu.memory import (
     list_scheduled_tasks,
     reset_session,
 )
+from pupu.agent import REVIEW_INTERVAL
 import pupu.tools as tools
 from pupu.tools import (
     describe_tool_servers,
@@ -67,7 +68,10 @@ class ToolingRegistryTests(unittest.TestCase):
             session_id="test_tooling_registry",
         )
         self.assertIn("当前没有待执行的定时任务", result)
-        self.assertIn("总结进度：0/10，还差 10 条消息触发自动总结", result)
+        self.assertIn(
+            f"总结进度：0/{REVIEW_INTERVAL}，还差 {REVIEW_INTERVAL} 条消息触发自动总结",
+            result,
+        )
 
     def test_tool_reason_hint_is_hidden_by_default(self):
         with patch.dict(os.environ, {}, clear=False):

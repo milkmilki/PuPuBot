@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from ..message_sources import WAIT_FOLLOWUP
 from .db import get_conn
-from .important_events import _append_event_step
+from .event_threads import _append_event_step
 
 MAX_SCHEDULED_TASKS_PER_SESSION = 30
 SCHEDULED_TASK_GRACE_SECONDS = 3600

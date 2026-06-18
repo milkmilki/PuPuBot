@@ -10,7 +10,7 @@ from pupu.command_registry import (
 
 class CommandRegistryTests(unittest.TestCase):
     def test_resolve_cli_aliases(self) -> None:
-        self.assertEqual(resolve_command("/events", surface="cli").command_id, "important")
+        self.assertEqual(resolve_command("/events", surface="cli").command_id, "events")
         self.assertEqual(resolve_command("/帮助", surface="cli").command_id, "help")
         self.assertEqual(resolve_command("/q", surface="cli").command_id, "quit")
 
@@ -33,7 +33,7 @@ class CommandRegistryTests(unittest.TestCase):
         self.assertIn("（管理员）", qq_help)
 
     def test_aliases_and_usage_helpers(self) -> None:
-        self.assertIn("events", command_aliases("important"))
+        self.assertIn("事件线", command_aliases("events"))
         self.assertEqual(command_usage("tidy"), "/tidy [check|apply]")
 
 
