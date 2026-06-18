@@ -564,7 +564,7 @@ class LLMProviderTests(unittest.TestCase):
         ):
             os.environ.pop("PUPU_CODEX_TOOL_MODE", None)
             text = provider.chat_complete(
-                system="system",
+                system="## 当前身份\n你就是璐璐。\n\n## 对话输出协议\n只输出 JSON。",
                 messages=[{"role": "user", "content": "hello"}],
                 max_tokens=100,
                 tools=[
@@ -585,7 +585,10 @@ class LLMProviderTests(unittest.TestCase):
         self.assertEqual(captured["session_id"], OWNER_SESSION)
         self.assertTrue(captured["is_admin"])
         self.assertIn("不要用文字、JSON 或代码块模拟工具调用", captured["prompt"])
-        self.assertIn("不要输出 JSON", captured["prompt"])
+        self.assertIn("直接输出璐璐接下来要发给用户的话", captured["prompt"])
+        self.assertIn("遵守上文已经给出的输出协议", captured["prompt"])
+        self.assertNotIn("直接输出仆仆接下来", captured["prompt"])
+        self.assertNotIn("不要输出 JSON", captured["prompt"])
 
     def test_codex_command_includes_external_mcp_servers_from_env(self):
         provider = CodexCliProvider(

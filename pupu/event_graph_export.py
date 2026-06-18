@@ -349,7 +349,6 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
           <option value="scheduled">scheduled</option>
           <option value="done">done</option>
           <option value="missed">missed</option>
-          <option value="dropped">dropped</option>
         </select>
         <div class="layout-choice">
           <label for="layout-mode">布局</label>
@@ -450,7 +449,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
     function threadText(thread) {{
       return [
         thread.title,
-        thread.source_event_key,
+        thread.thread_key,
         thread.kind,
         thread.status,
         thread.people_label,
@@ -483,7 +482,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
           + `<div class="badges">`
           + `<span class="badge">${{escapeHtml(thread.status || "active")}}</span>`
           + peopleBadge
-          + `<span class="badge">key=${{escapeHtml(thread.source_event_key || "")}}</span>`
+          + `<span class="badge">key=${{escapeHtml(thread.thread_key || "")}}</span>`
           + `<span class="badge">steps=${{(stepsByThread.get(String(thread.id)) || []).length}}</span>`
           + `</div></div>`;
       }}).join("");
@@ -756,7 +755,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       const threadSteps = stepsByThread.get(String(thread.id)) || [];
       detailEl.innerHTML = `
         <h2>${{escapeHtml(thread.title || "未命名事件线")}}</h2>
-        <div class="small">key=${{escapeHtml(thread.source_event_key || "")}}</div>
+        <div class="small">key=${{escapeHtml(thread.thread_key || "")}}</div>
         <div class="badges">
           <span class="badge">${{escapeHtml(thread.status || "active")}}</span>
           <span class="badge">${{escapeHtml(thread.kind || "event")}}</span>

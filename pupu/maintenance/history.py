@@ -36,7 +36,6 @@ def _list_all_session_ids(conn) -> list[str]:
         "messages",
         "familiarity",
         "events",
-        "important_events",
         "user_facts",
         "self_facts",
         "summaries",

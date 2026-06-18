@@ -12,11 +12,9 @@ from typing import Any
 
 from ..llm import JUDGE_MODEL, json_task
 from .memu_adapter import (
-    _delete_legacy_source,
     _json_compact,
-    _legacy_source_action,
     _list_items,
-    _load_legacy_event_map,
+    _load_event_thread_map,
     _log,
     _get_service,
     _norm_text,
@@ -28,7 +26,7 @@ from .memu_adapter import (
 )
 from .memu_tidy_prompt import MEMU_TIDY_JUDGE_PROMPT
 
-TIDY_TARGET_KINDS = {"user_fact", "self_fact", "important_event"}
+TIDY_TARGET_KINDS = {"user_fact", "self_fact", "event_thread"}
 DEFAULT_TIDY_CHUNK_ITEMS = 20
 DEFAULT_TIDY_CHUNK_CHARS = 6000
 DEFAULT_TIDY_MAX_TOKENS = 12000
@@ -126,23 +124,10 @@ def _normalize_reason_map(values: object, allowed_ids: set[str]) -> dict[str, st
     return out
 
 
-def _reason_is_duplicate(reason: str) -> bool:
-    normalized = reason.strip().lower()
-    return "duplicate" in normalized or "重复" in reason
-
-
-def _should_delete_legacy_source(record: dict[str, Any], reason: str) -> bool:
-    if not record.get("legacy_key"):
-        return False
-    if _reason_is_duplicate(reason):
-        return False
-    return record.get("legacy_table") in {"user_facts", "self_facts", "important_events"}
-
-
 def _build_tidy_record(
     item: dict[str, Any],
     *,
-    legacy_events: dict[str, dict[str, Any]],
+    event_threads: dict[str, dict[str, Any]],
 ) -> dict[str, Any] | None:
     payload, _parse_failed = _payload_from_item(item)
     kind = str(payload.get("kind") or item.get("memory_type") or "").strip()
@@ -154,18 +139,16 @@ def _build_tidy_record(
         return None
 
     text = _norm_text(payload.get("text") or item.get("summary") or item.get("content"))
-    legacy_table = "user_facts" if kind == "user_fact" else "self_facts" if kind == "self_fact" else "important_events"
-    legacy_key = str(payload.get("key") or payload.get("source_event_key") or "").strip()
-    legacy_action = f"delete {legacy_table}:{legacy_key}" if legacy_key else "none"
-    legacy_info: dict[str, Any] = {}
-    if kind == "important_event" and legacy_key:
-        legacy_row = legacy_events.get(legacy_key) or {}
-        legacy_info = {
-            "kind": str(legacy_row.get("kind") or "").strip(),
-            "status": str(legacy_row.get("status") or "").strip(),
-            "linked_task_id": legacy_row.get("linked_task_id"),
-            "event_time": str(legacy_row.get("event_time") or "").strip(),
-            "created_at": str(legacy_row.get("created_at") or "").strip(),
+    thread_info: dict[str, Any] = {}
+    thread_key = str(payload.get("thread_key") or "").strip()
+    if kind == "event_thread" and thread_key:
+        thread_row = event_threads.get(thread_key) or {}
+        thread_info = {
+            "kind": str(thread_row.get("kind") or "").strip(),
+            "status": str(thread_row.get("status") or "").strip(),
+            "linked_task_id": thread_row.get("linked_task_id"),
+            "event_time": str(thread_row.get("event_time") or "").strip(),
+            "created_at": str(thread_row.get("created_at") or "").strip(),
         }
 
     return {
@@ -175,12 +158,9 @@ def _build_tidy_record(
         "memory_type": str(item.get("memory_type") or "").strip(),
         "score": item.get("score"),
         "created_at": str(payload.get("created_at") or item.get("created_at") or "").strip(),
-        "legacy_table": legacy_table,
-        "legacy_key": legacy_key,
-        "legacy_action": legacy_action,
-        "source_event_key": str(payload.get("source_event_key") or "").strip(),
+        "thread_key": thread_key,
         "event_time": str(payload.get("event_time") or "").strip(),
-        "legacy_info": legacy_info,
+        "thread_info": thread_info,
     }
 
 
@@ -239,12 +219,8 @@ def _judge_tidy_chunk(
 def _format_candidate_preview(candidates: list[dict[str, Any]], limit: int = 5) -> str:
     parts = []
     for item in candidates[:limit]:
-        action = _legacy_source_action(item)
         preview = _preview(item.get("text"), 80)
-        parts.append(
-            f"{item.get('kind')}:{item.get('reason')}:{preview}"
-            + (f" old={action}" if action != "none" else "")
-        )
+        parts.append(f"{item.get('kind')}:{item.get('reason')}:{preview}")
     return " | ".join(parts)
 
 
@@ -266,7 +242,8 @@ def _busy_result(mode: str) -> dict[str, Any]:
         "candidate_items": [],
         "deleted": 0,
         "failed": 0,
-        "legacy_deleted": 0,
+        "source_deleted": 0,
+        "local_deleted": 0,
         "updated": 0,
         "reason_counts": {},
         "scanned_kind_counts": {},
@@ -319,11 +296,11 @@ def analyze_memu_tidy(
         }
 
     run_at = now or datetime.now()
-    legacy_events = _load_legacy_event_map(identity_session)
+    event_threads = _load_event_thread_map(identity_session)
     records: list[dict[str, Any]] = []
     scanned_kind_counts: Counter[str] = Counter()
     for item in items:
-        record = _build_tidy_record(item, legacy_events=legacy_events)
+        record = _build_tidy_record(item, event_threads=event_threads)
         if not record:
             continue
         records.append(record)
@@ -397,8 +374,6 @@ def analyze_memu_tidy(
             reason = batch_reason_by_id.get(item_id, "judged_drop")
             candidate = dict(record)
             candidate["reason"] = reason
-            candidate["delete_legacy"] = _should_delete_legacy_source(record, reason)
-            candidate["legacy_action"] = _legacy_source_action(candidate)
             candidate["judge_note"] = batch_notes
             candidates.append(candidate)
             drop_kind_counts[candidate["kind"]] += 1
@@ -407,7 +382,6 @@ def analyze_memu_tidy(
                 "maintenance candidate "
                 f"identity={identity_session} item_id={candidate['item_id']} "
                 f"kind={candidate['kind']} reason={candidate['reason']} "
-                f"old_source_action={candidate['legacy_action']} "
                 f"text_preview={_preview(candidate['text'])}"
             )
 
@@ -431,10 +405,10 @@ def analyze_memu_tidy(
     }
 
 
-def _load_active_legacy_important_events(identity_session: str) -> list[dict[str, Any]]:
-    from ..storage.important_events import get_recent_important_events
+def _load_active_event_threads(identity_session: str) -> list[dict[str, Any]]:
+    from ..storage.event_threads import get_recent_event_threads
 
-    return get_recent_important_events(identity_session, limit=None)
+    return get_recent_event_threads(identity_session, limit=None)
 
 
 def _sync_status_note(status: dict[str, Any]) -> str:
@@ -445,18 +419,18 @@ def _sync_status_note(status: dict[str, Any]) -> str:
     return f"{value}:checked={checked},missing={missing},synced={synced}"
 
 
-def _check_legacy_source_sync(identity_session: str) -> dict[str, Any]:
-    events = _load_active_legacy_important_events(identity_session)
-    from .memu_adapter import sync_missing_memu_important_events
+def _check_event_thread_sync(identity_session: str) -> dict[str, Any]:
+    events = _load_active_event_threads(identity_session)
+    from .memu_adapter import sync_missing_memu_event_threads
 
-    return sync_missing_memu_important_events(identity_session, events, dry_run=True)
+    return sync_missing_memu_event_threads(identity_session, events, dry_run=True)
 
 
-def _sync_legacy_sources_after_tidy(identity_session: str) -> dict[str, Any]:
-    events = _load_active_legacy_important_events(identity_session)
-    from .memu_adapter import sync_missing_memu_important_events
+def _sync_event_threads_after_tidy(identity_session: str) -> dict[str, Any]:
+    events = _load_active_event_threads(identity_session)
+    from .memu_adapter import sync_missing_memu_event_threads
 
-    return sync_missing_memu_important_events(identity_session, events)
+    return sync_missing_memu_event_threads(identity_session, events)
 
 
 def _run_memu_tidy_unlocked(
@@ -481,7 +455,8 @@ def _run_memu_tidy_unlocked(
             "candidate_items": candidates,
             "deleted": 0,
             "failed": 0,
-            "legacy_deleted": 0,
+            "source_deleted": 0,
+            "local_deleted": 0,
             "updated": 0,
             "reason_counts": analysis.get("reason_counts") or {},
             "scanned_kind_counts": analysis.get("scanned_kind_counts") or {},
@@ -494,12 +469,12 @@ def _run_memu_tidy_unlocked(
         }
 
     if mode == "check":
-        sync_status = _check_legacy_source_sync(identity_session)
+        sync_status = _check_event_thread_sync(identity_session)
         note = (
             f"memU mode=check, scanned={analysis['scanned']}, candidates={len(candidates)}, "
             f"reasons={analysis['reason_counts']}"
         )
-        note += f", source_sync={_sync_status_note(sync_status)}"
+        note += f", event_cache_sync={_sync_status_note(sync_status)}"
         if analysis.get("judge_failures"):
             note += f", judge_failures={analysis['judge_failures']}"
         if analysis.get("unknown_drop_ids"):
@@ -517,7 +492,8 @@ def _run_memu_tidy_unlocked(
             "candidate_items": candidates,
             "deleted": 0,
             "failed": 0,
-            "legacy_deleted": 0,
+            "source_deleted": 0,
+            "local_deleted": 0,
             "updated": 0,
             "reason_counts": analysis.get("reason_counts") or {},
             "scanned_kind_counts": analysis.get("scanned_kind_counts") or {},
@@ -526,6 +502,7 @@ def _run_memu_tidy_unlocked(
             "judge_failures": int(analysis.get("judge_failures") or 0),
             "unknown_drop_ids": int(analysis.get("unknown_drop_ids") or 0),
             "source_sync": sync_status,
+            "event_cache_sync": sync_status,
             "note": note,
             "status": analysis.get("status") or "ok",
         }
@@ -543,7 +520,8 @@ def _run_memu_tidy_unlocked(
             "candidate_items": candidates,
             "deleted": 0,
             "failed": len(candidates),
-            "legacy_deleted": 0,
+            "source_deleted": 0,
+            "local_deleted": 0,
             "updated": 0,
             "reason_counts": analysis.get("reason_counts") or {},
             "scanned_kind_counts": analysis.get("scanned_kind_counts") or {},
@@ -555,10 +533,9 @@ def _run_memu_tidy_unlocked(
             "status": "unavailable",
         }
 
-    async def _delete(items_to_delete: list[dict[str, Any]]) -> tuple[int, int, int]:
+    async def _delete(items_to_delete: list[dict[str, Any]]) -> tuple[int, int]:
         deleted = 0
         failed = 0
-        legacy_deleted = 0
         for candidate in items_to_delete:
             item_id = str(candidate.get("item_id") or "")
             if not item_id:
@@ -566,7 +543,7 @@ def _run_memu_tidy_unlocked(
             _log(
                 "maintenance delete item "
                 f"identity={identity_session} item_id={item_id} kind={candidate.get('kind')} "
-                f"reason={candidate.get('reason')} old_source_action={candidate.get('legacy_action')}"
+                f"reason={candidate.get('reason')} local_source=untouched"
             )
             try:
                 await service.delete_memory_item(memory_id=item_id, user={"identity_session": identity_session})
@@ -578,31 +555,20 @@ def _run_memu_tidy_unlocked(
                 )
                 continue
             deleted += 1
-            if candidate.get("delete_legacy"):
-                try:
-                    legacy_deleted += _delete_legacy_source(identity_session, candidate)
-                except Exception as exc:
-                    _log(
-                        "maintenance legacy delete failed "
-                        f"identity={identity_session} item_id={item_id} "
-                        f"old_source_action={candidate.get('legacy_action')} "
-                        f"error={type(exc).__name__}: {_preview(exc, 500)}"
-                    )
-        return deleted, failed, legacy_deleted
+        return deleted, failed
 
     deleted = 0
     failed = 0
-    legacy_deleted = 0
     if candidates:
         with _op_lock:
-            deleted, failed, legacy_deleted = _run(_delete(candidates))
-    sync_status = _sync_legacy_sources_after_tidy(identity_session)
+            deleted, failed = _run(_delete(candidates))
+    sync_status = _sync_event_threads_after_tidy(identity_session)
 
     note = (
         f"memU mode=apply, scanned={analysis['scanned']}, candidates={len(candidates)}, "
-        f"reasons={analysis['reason_counts']}, deleted={deleted}, "
-        f"legacy_deleted={legacy_deleted}, failed={failed}, "
-        f"source_sync={_sync_status_note(sync_status)}"
+        f"reasons={analysis['reason_counts']}, memu_deleted={deleted}, "
+        f"local_deleted=0, failed={failed}, "
+        f"event_cache_sync={_sync_status_note(sync_status)}"
     )
     if analysis.get("judge_failures"):
         note += f", judge_failures={analysis['judge_failures']}"
@@ -621,7 +587,8 @@ def _run_memu_tidy_unlocked(
         "candidate_items": candidates,
         "deleted": deleted,
         "failed": failed,
-        "legacy_deleted": legacy_deleted,
+        "source_deleted": 0,
+        "local_deleted": 0,
         "updated": 0,
         "reason_counts": analysis.get("reason_counts") or {},
         "scanned_kind_counts": analysis.get("scanned_kind_counts") or {},
@@ -630,6 +597,7 @@ def _run_memu_tidy_unlocked(
         "judge_failures": int(analysis.get("judge_failures") or 0),
         "unknown_drop_ids": int(analysis.get("unknown_drop_ids") or 0),
         "source_sync": sync_status,
+        "event_cache_sync": sync_status,
         "note": note,
         "status": analysis.get("status") or "ok",
     }
@@ -661,66 +629,6 @@ def run_memu_tidy(
         _tidy_lock.release()
 
 
-def format_memu_tidy_report(
-    result: dict[str, Any],
-    *,
-    identity_session: str,
-    mode: str,
-    trigger: str | None = None,
-) -> str:
-    title = "memU tidy 检查完成" if mode == "check" else "memU tidy 完成"
-    if trigger:
-        title = f"{title}（{trigger}）"
-
-    lines = [title]
-    lines.append(f"- identity: {identity_session}")
-    lines.append(f"- 扫描条数：{int(result.get('scanned') or 0)}")
-    lines.append(f"- 候选条数：{int(result.get('candidates') or 0)}")
-    if mode == "apply":
-        lines.append(f"- 删除条数：{int(result.get('deleted') or 0)}")
-        lines.append(f"- 旧库删除条数：{int(result.get('legacy_deleted') or 0)}")
-        lines.append(f"- 失败条数：{int(result.get('failed') or 0)}")
-    if result.get("scanned_kind_counts"):
-        lines.append(f"- 扫描 kinds：{_json_compact(result['scanned_kind_counts'])}")
-    if result.get("reason_counts"):
-        lines.append(f"- 删除 reasons：{_json_compact(result['reason_counts'])}")
-    if result.get("judge_failures"):
-        lines.append(f"- judge 失败批次：{int(result.get('judge_failures') or 0)}")
-    if result.get("unknown_drop_ids"):
-        lines.append(f"- judge 无效 id：{int(result.get('unknown_drop_ids') or 0)}")
-    preview = _format_candidate_preview(_result_candidate_items(result))
-    if preview:
-        lines.append(f"- 预览：{preview}")
-    judge_notes = [str(item).strip() for item in (result.get("judge_notes") or []) if str(item).strip()]
-    if judge_notes:
-        lines.append(f"- notes：{' | '.join(judge_notes[:3])}")
-    if result.get("note"):
-        lines.append(f"- 结果：{result['note']}")
-    return "\n".join(lines)
-
-
-def run_memu_maintenance(
-    identity_session: str,
-    *,
-    mode: str = "apply",
-    now: datetime | None = None,
-    expire_days: int = 14,
-    trigger: str = "manual",
-) -> str:
-    from .memu_adapter import _log as _legacy_log
-
-    result = run_memu_tidy(identity_session, mode=mode, now=now, expire_days=expire_days)
-    _legacy_log(
-        f"maintenance wrapper identity={identity_session} mode={mode} status={result.get('status')}"
-    )
-    return format_memu_tidy_report(
-        result,
-        identity_session=identity_session,
-        mode=mode,
-        trigger=trigger,
-    )
-
-
 __all__ = [
     "analyze_memu_tidy",
     "format_memu_tidy_report",
@@ -745,8 +653,8 @@ def format_memu_tidy_report(
     lines.append(f"- scanned: {int(result.get('scanned') or 0)}")
     lines.append(f"- candidates: {int(result.get('candidates') or 0)}")
     if mode == "apply":
-        lines.append(f"- deleted: {int(result.get('deleted') or 0)}")
-        lines.append(f"- legacy_deleted: {int(result.get('legacy_deleted') or 0)}")
+        lines.append(f"- memu_deleted: {int(result.get('deleted') or 0)}")
+        lines.append(f"- local_deleted: {int(result.get('local_deleted') or 0)}")
         lines.append(f"- failed: {int(result.get('failed') or 0)}")
     if result.get("scanned_kind_counts"):
         lines.append(f"- scanned_kinds: {_json_compact(result['scanned_kind_counts'])}")
@@ -757,7 +665,7 @@ def format_memu_tidy_report(
     if result.get("unknown_drop_ids"):
         lines.append(f"- unknown_drop_ids: {int(result.get('unknown_drop_ids') or 0)}")
     if result.get("source_sync"):
-        lines.append(f"- source_sync: {_sync_status_note(result['source_sync'])}")
+        lines.append(f"- event_cache_sync: {_sync_status_note(result['source_sync'])}")
     preview = _format_candidate_preview(_result_candidate_items(result))
     if preview:
         lines.append(f"- preview: {preview}")

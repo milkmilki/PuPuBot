@@ -9,7 +9,6 @@ from ..storage.db import get_conn, init_db
 from .constants import BUSY_REPORT_PREFIX
 from .dedupe import (
     _dedupe_events,
-    _dedupe_important_events,
     _dedupe_scheduled_tasks,
     _dedupe_summaries,
 )
@@ -50,8 +49,7 @@ def run_memory_maintenance(
                     "sessions": len(session_ids),
                     "model_dropped_summaries": 0,
                     "model_merged_summaries": 0,
-                    "model_dropped_important_events": 0,
-                    "model_updated_important_events": 0,
+                    "model_updated_event_threads": 0,
                     "model_deleted_facts": 0,
                     "model_updated_facts": 0,
                     "model_notes": [],
@@ -74,11 +72,8 @@ def run_memory_maintenance(
                         report["model_merged_summaries"] += int(
                             session_result.get("merged_summaries") or 0
                         )
-                        report["model_dropped_important_events"] += int(
-                            session_result.get("dropped_important_events") or 0
-                        )
-                        report["model_updated_important_events"] += int(
-                            session_result.get("updated_important_events") or 0
+                        report["model_updated_event_threads"] += int(
+                            session_result.get("updated_event_threads") or 0
                         )
                         report["model_deleted_facts"] += int(
                             session_result.get("deleted_facts") or 0
@@ -92,7 +87,6 @@ def run_memory_maintenance(
                             "[pupu][maintenance] "
                             f"session={session_id} phase=model_check done "
                             f"dropped_summaries={session_result.get('dropped_summaries', 0)} "
-                            f"dropped_important_events={session_result.get('dropped_important_events', 0)} "
                             f"deleted_facts={session_result.get('deleted_facts', 0)}"
                         )
 
@@ -101,8 +95,7 @@ def run_memory_maintenance(
                     f"- 会话数：{report['sessions']}",
                     f"- 模型删除摘要：{report['model_dropped_summaries']}",
                     f"- 模型合并摘要：{report['model_merged_summaries']}",
-                    f"- 模型删除重要事件：{report['model_dropped_important_events']}",
-                    f"- 模型重排重要事件：{report['model_updated_important_events']}",
+                    f"- 模型更新事件线：{report['model_updated_event_threads']}",
                     f"- 模型删除事实：{report['model_deleted_facts']}",
                     f"- 模型更新事实：{report['model_updated_facts']}",
                 ]
@@ -117,7 +110,6 @@ def run_memory_maintenance(
                 "sessions": len(session_ids),
                 "deduped_summaries": _dedupe_summaries(conn),
                 "deduped_events": _dedupe_events(conn),
-                "deduped_important_events": _dedupe_important_events(conn),
                 "deduped_tasks": _dedupe_scheduled_tasks(conn),
                 "deleted_chat_messages": 0,
                 "deleted_internal_messages": 0,
@@ -127,8 +119,7 @@ def run_memory_maintenance(
                 ),
                 "model_dropped_summaries": 0,
                 "model_merged_summaries": 0,
-                "model_dropped_important_events": 0,
-                "model_updated_important_events": 0,
+                "model_updated_event_threads": 0,
                 "model_deleted_facts": 0,
                 "model_updated_facts": 0,
                 "model_notes": [],
@@ -158,11 +149,8 @@ def run_memory_maintenance(
                         continue
                     report["model_dropped_summaries"] += int(session_result.get("dropped_summaries") or 0)
                     report["model_merged_summaries"] += int(session_result.get("merged_summaries") or 0)
-                    report["model_dropped_important_events"] += int(
-                        session_result.get("dropped_important_events") or 0
-                    )
-                    report["model_updated_important_events"] += int(
-                        session_result.get("updated_important_events") or 0
+                    report["model_updated_event_threads"] += int(
+                        session_result.get("updated_event_threads") or 0
                     )
                     report["model_deleted_facts"] += int(session_result.get("deleted_facts") or 0)
                     report["model_updated_facts"] += int(session_result.get("updated_facts") or 0)
@@ -174,7 +162,6 @@ def run_memory_maintenance(
                         "[pupu][maintenance] "
                         f"session={session_id} phase=model done "
                         f"dropped_summaries={session_result.get('dropped_summaries', 0)} "
-                        f"dropped_important_events={session_result.get('dropped_important_events', 0)} "
                         f"deleted_facts={session_result.get('deleted_facts', 0)}"
                     )
                 conn.commit()
@@ -184,7 +171,6 @@ def run_memory_maintenance(
                 f"- 会话数：{report['sessions']}",
                 f"- 去重摘要：{report['deduped_summaries']}",
                 f"- 去重旧好感度记录：{report['deduped_events']}",
-                f"- 去重重要事件：{report['deduped_important_events']}",
                 f"- 去重定时任务：{report['deduped_tasks']}",
                 f"- 清理旧聊天消息：{report['deleted_chat_messages']}",
                 f"- 清理旧内部消息：{report['deleted_internal_messages']}",
@@ -195,8 +181,7 @@ def run_memory_maintenance(
                     [
                         f"- 模型删除摘要：{report['model_dropped_summaries']}",
                         f"- 模型合并摘要：{report['model_merged_summaries']}",
-                        f"- 模型删除重要事件：{report['model_dropped_important_events']}",
-                        f"- 模型重排重要事件：{report['model_updated_important_events']}",
+                        f"- 模型更新事件线：{report['model_updated_event_threads']}",
                         f"- 模型删除事实：{report['model_deleted_facts']}",
                         f"- 模型更新事实：{report['model_updated_facts']}",
                     ]

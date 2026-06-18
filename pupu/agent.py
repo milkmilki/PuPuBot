@@ -20,7 +20,7 @@ from .memory import (
     find_related_event_threads,
     has_successful_memu_sync,
     get_event_thread_recent_steps,
-    get_important_events,
+    get_event_threads,
     get_oldest_unsummarized_msg_id,
     get_recent_messages,
     get_review_candidate_batch,
@@ -45,11 +45,8 @@ from .persona import build_batch_review_prompt, build_system_prompt, get_pupu_na
 from .review_followups import (
     apply_review_task_updates,
     normalize_review_event_updates,
-    normalize_review_important_events,
-    normalize_review_task_drafts,
     normalize_review_task_updates,
     save_review_event_updates,
-    save_review_important_events,
 )
 from .tools import execute_tool, get_chat_tool_definitions, is_admin_tool
 
@@ -57,7 +54,7 @@ REVIEW_INTERVAL = 10
 REVIEW_SOURCE = CHAT
 CHAT_HISTORY_LIMIT = 10
 PROMPT_SUMMARY_LIMIT = 2
-PROMPT_IMPORTANT_EVENT_LIMIT = 6
+PROMPT_EVENT_THREAD_LIMIT = 6
 BATCH_REVIEW_MAX_TOKENS = 10000
 REVIEW_TASK_CONTEXT_LIMIT = 30
 REVIEW_TASK_FIELD_LIMIT = 120
@@ -93,45 +90,10 @@ def _normalize_batch_review_result(value) -> dict:
             "user_facts": {},
             "self_facts": {},
             "event_updates": [],
-            "important_events": [],
             "task_updates": [],
         }
 
-    task_updates = normalize_review_task_updates(value.get("task_updates", []))
-    if not task_updates:
-        legacy_drafts = normalize_review_task_drafts(value.get("task_drafts", []))
-        for draft in legacy_drafts:
-            if not draft.get("should_create"):
-                continue
-            task_updates.append(
-                {
-                    "action": "create",
-                    "query": "",
-                    "source_event_key": draft.get("source_event_key", ""),
-                    "title": draft.get("title", ""),
-                    "instruction": draft.get("instruction", ""),
-                    "run_at": draft.get("run_at", ""),
-                    "repeat": draft.get("repeat", "once"),
-                    "interval_seconds": draft.get("interval_seconds"),
-                    "kind": draft.get("kind", ""),
-                    "reason": "legacy_task_draft",
-                }
-            )
-
     event_updates = normalize_review_event_updates(value.get("event_updates", []))
-    legacy_events = normalize_review_important_events(value.get("important_events", []))
-    if not event_updates:
-        event_updates = [
-            {
-                **event,
-                "action": "create_thread",
-                "thread_key": event.get("source_event_key"),
-                "summary": event.get("details") or event.get("title"),
-                "cause": "batch review legacy important_event",
-                "step_type": "user",
-            }
-            for event in legacy_events
-        ]
 
     return {
         "summary": str(value.get("summary", "")).strip(),
@@ -141,8 +103,7 @@ def _normalize_batch_review_result(value) -> dict:
         "user_facts": _normalize_fact_map(value.get("user_facts", {})),
         "self_facts": _normalize_fact_map(value.get("self_facts", {})),
         "event_updates": event_updates,
-        "important_events": legacy_events,
-        "task_updates": task_updates,
+        "task_updates": normalize_review_task_updates(value.get("task_updates", [])),
     }
 
 
@@ -261,7 +222,7 @@ def _format_event_thread_candidates_for_review(
         return "候选事件线：无"
     lines = ["候选事件线（优先把新进展归并到这些 thread_key；确实无关才 create_thread）："]
     for item in candidates:
-        key = str(item.get("source_event_key") or "")
+        key = str(item.get("thread_key") or "")
         title = str(item.get("title") or "未命名事件")
         status = str(item.get("status") or "active")
         current = str(item.get("current_summary") or item.get("details") or "")
@@ -574,21 +535,20 @@ def chat(
         user_facts = {}
         self_facts = {}
         summaries = get_summaries(context_session, limit=PROMPT_SUMMARY_LIMIT)
-        important_events = []
+        event_threads = []
     else:
         user_facts = get_user_facts(identity_session)
         self_facts = get_self_facts(identity_session)
         summaries = get_summaries(context_session, limit=PROMPT_SUMMARY_LIMIT)
-        important_events = get_important_events(identity_session, limit=PROMPT_IMPORTANT_EVENT_LIMIT)
+        event_threads = get_event_threads(identity_session, limit=PROMPT_EVENT_THREAD_LIMIT)
     system_prompt = build_system_prompt(
         score,
-        None,
-        user_facts,
-        summaries,
-        self_facts,
-        important_events,
-        reply_speed_hint,
-        recalled_memories,
+        user_facts=user_facts,
+        summaries=summaries,
+        self_facts=self_facts,
+        event_threads=event_threads,
+        reply_speed_hint=reply_speed_hint,
+        recalled_memories=recalled_memories,
     )
 
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
@@ -799,7 +759,6 @@ def _maybe_batch_review_unlocked(
                 "user_facts": {},
                 "self_facts": {},
                 "event_updates": [],
-                "important_events": [],
                 "task_updates": [],
             }
             print("[pupu] batch review fallback summary enabled")
@@ -851,7 +810,6 @@ def _maybe_batch_review_unlocked(
             print("[pupu] batch review self_facts empty")
 
         event_updates = result.get("event_updates", [])
-        legacy_important_events = result.get("important_events", [])
         saved_event_rows = {}
         if event_updates:
             saved_event_rows = save_review_event_updates(
@@ -865,21 +823,9 @@ def _maybe_batch_review_unlocked(
                 "[pupu] batch review event_updates saved: "
                 f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"
             )
-        elif legacy_important_events:
-            saved_event_rows = save_review_important_events(
-                identity_session,
-                legacy_important_events,
-                context_session=context_session,
-                source_msg_start_id=batch[0]["id"],
-                source_msg_end_id=batch[-1]["id"],
-            )
-            print(
-                "[pupu] batch review important_events saved: "
-                f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"
-            )
         else:
             print("[pupu] batch review event_updates empty")
-        important_events = list(saved_event_rows.values())
+        event_threads = list(saved_event_rows.values())
 
         task_updates = result.get("task_updates", [])
         if task_updates:
@@ -937,7 +883,7 @@ def _maybe_batch_review_unlocked(
                     summary=summary,
                     user_facts=user_facts,
                     self_facts=self_facts,
-                    important_events=important_events,
+                    event_threads=event_threads,
                 )
                 record_memu_sync(
                     context_session=context_session,

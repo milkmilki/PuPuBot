@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from ..persona.core import get_pupu_name
 from ..storage.db import get_conn, get_data_dir
-from ..storage.important_events import drop_event_thread, get_recent_important_events
+from ..storage.event_threads import get_recent_event_threads
 
 DEFAULT_TOP_K = 6
 DEFAULT_LOG_PREVIEW_CHARS = 220
@@ -77,7 +77,7 @@ class MemuWriteResult:
     error: str = ""
 
 
-TARGET_MAINTENANCE_KINDS = {"user_fact", "self_fact", "important_event"}
+TARGET_MAINTENANCE_KINDS = {"user_fact", "self_fact", "event_thread"}
 RELATIVE_TIME_TERMS = (
     "今天",
     "今晚",
@@ -232,7 +232,7 @@ def _canonical_memory_payload_for_hash(value: object) -> tuple[str, dict[str, An
     text = " ".join(str(payload.get("text") or "").split())
     if not text:
         return "", {}
-    stable_keys = ("kind", "text", "key", "source_event_key", "event_time", "confidence")
+    stable_keys = ("kind", "text", "key", "thread_key", "event_time", "confidence")
     stable = {key: payload.get(key) for key in stable_keys if payload.get(key) not in (None, "")}
     stable["text"] = text
     volatile = {key: val for key, val in payload.items() if key not in stable}
@@ -950,29 +950,20 @@ def _is_low_info_fact(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _load_legacy_event_map(identity_session: str) -> dict[str, dict[str, Any]]:
-    rows = get_recent_important_events(
-        identity_session,
-        limit=None,
-        statuses=("active", "scheduled", "done", "cancelled", "missed", "dropped"),
-    )
-    return {str(row["source_event_key"]): dict(row) for row in rows}
-
-
-def _legacy_source_action(candidate: dict[str, Any]) -> str:
-    if not candidate.get("delete_legacy"):
+def _source_action(candidate: dict[str, Any]) -> str:
+    if not candidate.get("delete_source"):
         return "none"
-    table = candidate.get("legacy_table") or ""
-    key = candidate.get("legacy_key") or ""
+    table = candidate.get("source_table") or ""
+    key = candidate.get("source_key") or ""
     return f"delete {table}:{key}" if table and key else "none"
 
 
-def _delete_legacy_source(identity_session: str, candidate: dict[str, Any]) -> int:
-    if not candidate.get("delete_legacy"):
+def _delete_source(identity_session: str, candidate: dict[str, Any]) -> int:
+    if not candidate.get("delete_source"):
         return 0
-    table = str(candidate.get("legacy_table") or "")
-    key = str(candidate.get("legacy_key") or "")
-    if table not in {"user_facts", "self_facts", "important_events"} or not key:
+    table = str(candidate.get("source_table") or "")
+    key = str(candidate.get("source_key") or "")
+    if table not in {"user_facts", "self_facts"} or not key:
         return 0
     conn = get_conn()
     try:
@@ -981,13 +972,6 @@ def _delete_legacy_source(identity_session: str, candidate: dict[str, Any]) -> i
                 f"DELETE FROM {table} WHERE session_id = ? AND fact_key = ?",
                 (identity_session, key),
             )
-        if table == "important_events":
-            conn.close()
-            return drop_event_thread(
-                identity_session,
-                key,
-                reason=str(candidate.get("reason") or "memU tidy requested source removal"),
-            )
         conn.commit()
         return int(cur.rowcount or 0)
     finally:
@@ -995,6 +979,16 @@ def _delete_legacy_source(identity_session: str, candidate: dict[str, Any]) -> i
             conn.close()
         except Exception:
             pass
+
+
+def _load_event_thread_map(identity_session: str) -> dict[str, dict[str, Any]]:
+    events = get_recent_event_threads(identity_session, limit=None)
+    out: dict[str, dict[str, Any]] = {}
+    for event in events:
+        key = str(event.get("thread_key") or "").strip()
+        if key:
+            out[key] = dict(event)
+    return out
 
 
 def _event_date_label(value: date) -> str:
@@ -1053,7 +1047,7 @@ def _categories_for(kind: str) -> list[str]:
         return ["personal_info", "preferences"]
     if kind == "self_fact":
         return ["relationships", "knowledge"]
-    if kind == "important_event":
+    if kind == "event_thread":
         return ["experiences", "goals", "relationships"]
     if kind == "summary":
         return ["experiences"]
@@ -1061,7 +1055,7 @@ def _categories_for(kind: str) -> list[str]:
 
 
 def _memory_type_for(kind: str) -> str:
-    if kind == "important_event":
+    if kind == "event_thread":
         return "event"
     if kind in {"user_fact", "self_fact"}:
         return "profile"
@@ -1090,7 +1084,7 @@ def _build_review_entries(
     summary: str,
     user_facts: dict[str, str] | None = None,
     self_facts: dict[str, str] | None = None,
-    important_events: list[dict] | None = None,
+    event_threads: list[dict] | None = None,
 ) -> list[tuple[str, str, dict[str, Any]]]:
     entries: list[tuple[str, str, dict[str, Any]]] = []
     character_name = _current_character_name()
@@ -1103,9 +1097,10 @@ def _build_review_entries(
     for key, value in (self_facts or {}).items():
         text = _replace_default_character_name(f"{key}: {value}", character_name)
         entries.append(("self_fact", f"{character_name} | {text}", {"key": key}))
-    for event in important_events or []:
+    for event in event_threads or []:
         event_date = _parse_event_date(event.get("event_time"))
         event_label = _event_date_label(event_date) if event_date else ""
+        people_label = str(event.get("people_label") or "").strip()
         title = _replace_default_character_name(
             _absolutize_event_text(str(event.get("title") or "").strip(), event_date),
             character_name,
@@ -1123,13 +1118,15 @@ def _build_review_entries(
             text_parts.insert(0, event_label)
         event_text = "; ".join(text_parts)
         if event_text:
-            event_text = f"相关人物: 用户、{character_name}; {event_text}"
+            if not people_label:
+                people_label = f"用户、{character_name}"
+            event_text = f"相关人物: {people_label}; {event_text}"
             entries.append(
                 (
-                    "important_event",
+                    "event_thread",
                     event_text,
                     {
-                        "source_event_key": event.get("source_event_key"),
+                        "thread_key": event.get("thread_key"),
                         "event_time": event.get("event_time"),
                         "confidence": event.get("confidence"),
                     },
@@ -1147,13 +1144,13 @@ def sync_review_memory(
     summary: str,
     user_facts: dict[str, str] | None = None,
     self_facts: dict[str, str] | None = None,
-    important_events: list[dict] | None = None,
+    event_threads: list[dict] | None = None,
 ) -> MemuWriteResult:
     _log(
         "sync start "
         f"context={context_session} identity={identity_session} range={start_msg_id}..{end_msg_id} "
         f"summary_chars={len(summary or '')} user_facts={len(user_facts or {})} "
-        f"self_facts={len(self_facts or {})} important_events={len(important_events or [])}"
+        f"self_facts={len(self_facts or {})} event_threads={len(event_threads or [])}"
     )
     if not is_memu_long_term_enabled():
         _log(
@@ -1176,7 +1173,7 @@ def sync_review_memory(
         summary=summary,
         user_facts=user_facts,
         self_facts=self_facts,
-        important_events=important_events,
+        event_threads=event_threads,
     )
     kind_counts = Counter(kind for kind, _, _ in entries)
     _log(
@@ -1397,14 +1394,14 @@ def _list_items(identity_session: str, limit: int = 200) -> list[dict[str, Any]]
     return limited
 
 
-def sync_missing_memu_important_events(
+def sync_missing_memu_event_threads(
     identity_session: str,
     events: list[dict[str, Any]],
     *,
     context_session: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Ensure structured important_events have corresponding memU items."""
+    """Ensure structured event_threads have corresponding memU items."""
     identity_session = str(identity_session)
     context_session = str(context_session or identity_session)
     if not is_memu_long_term_enabled():
@@ -1420,13 +1417,13 @@ def sync_missing_memu_important_events(
     keyed_events = [
         event
         for event in (events or [])
-        if str(event.get("source_event_key") or "").strip()
+        if str(event.get("thread_key") or "").strip()
     ]
     try:
         items = _list_items(identity_session, limit=10000)
     except Exception as exc:
         _log(
-            "important_events sync check failed "
+            "event_threads sync check failed "
             f"identity={identity_session} error={type(exc).__name__}: {_preview(exc, 500)}"
         )
         return {
@@ -1441,16 +1438,16 @@ def sync_missing_memu_important_events(
     memu_keys: set[str] = set()
     for item in items:
         payload = _parse_memory_payload(item.get("summary") or item.get("content"))
-        if str(payload.get("kind") or "") != "important_event":
+        if str(payload.get("kind") or "") != "event_thread":
             continue
-        key = str(payload.get("source_event_key") or "").strip()
+        key = str(payload.get("thread_key") or "").strip()
         if key:
             memu_keys.add(key)
 
     missing_events = [
         event
         for event in keyed_events
-        if str(event.get("source_event_key") or "").strip() not in memu_keys
+        if str(event.get("thread_key") or "").strip() not in memu_keys
     ]
     if not missing_events:
         return {
@@ -1468,15 +1465,15 @@ def sync_missing_memu_important_events(
             "present": len(keyed_events) - len(missing_events),
             "missing": len(missing_events),
             "synced": 0,
-            "missing_keys": [event.get("source_event_key") for event in missing_events],
+            "missing_keys": [event.get("thread_key") for event in missing_events],
             "error": "",
         }
 
     _log(
-        "important_events sync missing "
+        "event_threads sync missing "
         f"identity={identity_session} context={context_session} "
         f"missing={len(missing_events)} keys="
-        f"{_json_compact([event.get('source_event_key') for event in missing_events[:20]])}"
+        f"{_json_compact([event.get('thread_key') for event in missing_events[:20]])}"
     )
     result = sync_review_memory(
         context_session=context_session,
@@ -1486,7 +1483,7 @@ def sync_missing_memu_important_events(
         summary="",
         user_facts={},
         self_facts={},
-        important_events=missing_events,
+        event_threads=missing_events,
     )
     status = "synced" if result.status in {"success", "empty"} else result.status
     return {
@@ -1540,10 +1537,10 @@ def format_memu_facts_report(identity_session: str) -> str | None:
     return _format_items(identity_session, {"user_fact", "self_fact"}, "当前 memU 里没有 facts 记忆。")
 
 
-def format_memu_important_events_report(identity_session: str) -> str | None:
+def format_memu_event_threads_report(identity_session: str) -> str | None:
     if not is_memu_long_term_enabled():
         return None
-    return _format_items(identity_session, {"important_event"}, "当前 memU 里没有重要事件记忆。")
+    return _format_items(identity_session, {"event_thread"}, "当前 memU 里没有事件线记忆。")
 
 
 def format_memu_recall_report(query: str, identity_session: str, context_session: str | None = None) -> str:
@@ -1628,443 +1625,8 @@ def clear_memu_session(identity_session: str) -> int:
     return total
 
 
-def rebuild_memu_session(identity_session: str, context_session: str | None = None) -> str:
-    _log(f"rebuild start identity={identity_session} context={context_session or identity_session}")
-    if not is_memu_long_term_enabled():
-        _log(f"rebuild skipped status=disabled identity={identity_session}")
-        return "memU 未启用，无法重建。"
-
-    identity_session = str(identity_session)
-    context_session = str(context_session or identity_session)
-    removed = clear_memu_session(identity_session)
-    conn = get_conn()
-    try:
-        summaries = [
-            dict(row)
-            for row in conn.execute(
-                """SELECT summary, start_msg_id, end_msg_id, created_at
-                   FROM summaries
-                   WHERE session_id = ?
-                   ORDER BY created_at ASC, id ASC""",
-                (context_session,),
-            ).fetchall()
-        ]
-        user_facts = {
-            row["fact_key"]: row["fact_value"]
-            for row in conn.execute(
-                "SELECT fact_key, fact_value FROM user_facts WHERE session_id = ?",
-                (identity_session,),
-            ).fetchall()
-        }
-        self_facts = {
-            row["fact_key"]: row["fact_value"]
-            for row in conn.execute(
-                "SELECT fact_key, fact_value FROM self_facts WHERE session_id = ?",
-                (identity_session,),
-            ).fetchall()
-        }
-    finally:
-        conn.close()
-    events = list(reversed(get_recent_important_events(identity_session, limit=None)))
-
-    _log(
-        "rebuild loaded "
-        f"identity={identity_session} context={context_session} removed={removed} "
-        f"summaries={len(summaries)} user_facts={len(user_facts)} self_facts={len(self_facts)} "
-        f"important_events={len(events)}"
-    )
-    ids: list[str] = []
-    failures = 0
-    for index, row in enumerate(summaries, start=1):
-        summary_text = str(row.get("summary") or "").strip()
-        if not summary_text:
-            continue
-        start_msg_id = int(row.get("start_msg_id") or 0)
-        end_msg_id = int(row.get("end_msg_id") or 0)
-        _log(
-            "rebuild sync summary "
-            f"index={index}/{len(summaries)} context={context_session} "
-            f"range={start_msg_id}..{end_msg_id}"
-        )
-        result = sync_review_memory(
-            context_session=context_session,
-            identity_session=identity_session,
-            start_msg_id=start_msg_id,
-            end_msg_id=end_msg_id,
-            summary=summary_text,
-            user_facts={},
-            self_facts={},
-            important_events=[],
-        )
-        ids.extend(result.ids)
-        if result.status not in {"success", "empty"}:
-            failures += 1
-
-    result = sync_review_memory(
-        context_session=context_session,
-        identity_session=identity_session,
-        start_msg_id=0,
-        end_msg_id=0,
-        summary="",
-        user_facts=user_facts,
-        self_facts=self_facts,
-        important_events=events,
-    )
-    ids.extend(result.ids)
-    if result.status not in {"success", "empty"}:
-        failures += 1
-    _log(
-        "rebuild done "
-        f"identity={identity_session} context={context_session} removed={removed} "
-        f"written={len(ids)} failures={failures} summaries={len(summaries)}"
-    )
-    return (
-        f"memU 重建完成：清理 {removed} 项，写入 {len(ids)} 项，"
-        f"失败 {failures} 批，迁移旧摘要 {len(summaries)} 条。"
-    )
-
-
-def _maintenance_candidate(
-    *,
-    item_id: str,
-    kind: str,
-    reason: str,
-    text: str,
-    delete_legacy: bool = False,
-    legacy_table: str = "",
-    legacy_key: str = "",
-) -> dict[str, Any]:
-    return {
-        "item_id": item_id,
-        "kind": kind,
-        "reason": reason,
-        "text": text,
-        "delete_legacy": delete_legacy,
-        "legacy_table": legacy_table,
-        "legacy_key": legacy_key,
-    }
-
-
-def _event_is_protected(payload: dict[str, Any], legacy: dict[str, Any] | None, now: datetime) -> bool:
-    kind = str((legacy or {}).get("kind") or payload.get("kind") or "").strip().lower()
-    if kind in PROTECTED_EVENT_KINDS:
-        return True
-    status = str((legacy or {}).get("status") or payload.get("status") or "").strip().lower()
-    if status == "scheduled":
-        return True
-    if (legacy or {}).get("linked_task_id") or payload.get("linked_task_id"):
-        return True
-    event_dt = _parse_datetime((legacy or {}).get("event_time") or payload.get("event_time"))
-    if event_dt and event_dt >= now:
-        return True
-    text = _norm_text(payload.get("text"))
-    return any(term in text for term in LONG_TERM_EVENT_TERMS)
-
-
-def _build_maintenance_candidate(
-    item: dict[str, Any],
-    payload: dict[str, Any],
-    *,
-    parse_failed: bool,
-    seen: set[tuple[str, str]],
-    legacy_events: dict[str, dict[str, Any]],
-    now: datetime,
-    expire_days: int,
-) -> dict[str, Any] | None:
-    item_id = str(item.get("id") or "")
-    if not item_id:
-        return None
-    kind = str(payload.get("kind") or item.get("memory_type") or "").strip()
-    text = _norm_text(payload.get("text"))
-    if kind == "summary":
-        return None
-    if kind not in TARGET_MAINTENANCE_KINDS:
-        if parse_failed and str(item.get("memory_type") or "") in {"profile", "event"}:
-            return _maintenance_candidate(
-                item_id=item_id,
-                kind=kind or str(item.get("memory_type") or "unknown"),
-                reason="invalid_payload",
-                text=text or str(item.get("summary") or item.get("content") or ""),
-            )
-        return None
-
-    if parse_failed:
-        return _maintenance_candidate(item_id=item_id, kind=kind, reason="invalid_payload", text=text)
-
-    key = (kind, text)
-    if key in seen:
-        return _maintenance_candidate(item_id=item_id, kind=kind, reason="duplicate", text=text)
-    seen.add(key)
-
-    if not text or len(text) < 4:
-        legacy_table = "user_facts" if kind == "user_fact" else "self_facts" if kind == "self_fact" else ""
-        legacy_key = str(payload.get("key") or payload.get("source_event_key") or "").strip()
-        return _maintenance_candidate(
-            item_id=item_id,
-            kind=kind,
-            reason="low_value",
-            text=text,
-            delete_legacy=bool(legacy_table and legacy_key),
-            legacy_table=legacy_table,
-            legacy_key=legacy_key,
-        )
-
-    if kind in {"user_fact", "self_fact"}:
-        fact_key, _value = _fact_key_value(payload)
-        legacy_table = "user_facts" if kind == "user_fact" else "self_facts"
-        if _is_low_info_fact(payload):
-            return _maintenance_candidate(
-                item_id=item_id,
-                kind=kind,
-                reason="low_info_fact",
-                text=text,
-                delete_legacy=bool(fact_key),
-                legacy_table=legacy_table,
-                legacy_key=fact_key,
-            )
-        if _has_relative_time(text) and not _looks_stable_fact(text):
-            return _maintenance_candidate(
-                item_id=item_id,
-                kind=kind,
-                reason="temporary_fact",
-                text=text,
-                delete_legacy=bool(fact_key),
-                legacy_table=legacy_table,
-                legacy_key=fact_key,
-            )
-        return None
-
-    if kind == "important_event":
-        source_key = str(payload.get("source_event_key") or "").strip()
-        legacy = legacy_events.get(source_key) if source_key else None
-        if _event_is_protected(payload, legacy, now):
-            return None
-        cutoff = now - timedelta(days=max(1, int(expire_days or 14)))
-        event_dt = _parse_datetime((legacy or {}).get("event_time") or payload.get("event_time"))
-        created_dt = _parse_datetime(payload.get("created_at") or item.get("created_at") or (legacy or {}).get("created_at"))
-        if event_dt and event_dt < cutoff:
-            return _maintenance_candidate(
-                item_id=item_id,
-                kind=kind,
-                reason="expired_important_event",
-                text=text,
-                delete_legacy=bool(source_key),
-                legacy_table="important_events",
-                legacy_key=source_key,
-            )
-        if not event_dt and created_dt and created_dt < cutoff and _has_relative_time(text):
-            return _maintenance_candidate(
-                item_id=item_id,
-                kind=kind,
-                reason="stale_relative_event",
-                text=text,
-                delete_legacy=bool(source_key),
-                legacy_table="important_events",
-                legacy_key=source_key,
-            )
-    return None
-
-
-def analyze_memu_maintenance(
-    identity_session: str,
-    *,
-    now: datetime | None = None,
-    expire_days: int = 14,
-) -> dict[str, Any]:
-    _log(f"maintenance analyze start identity={identity_session} expire_days={expire_days}")
-    if not is_memu_long_term_enabled():
-        _log(f"maintenance analyze skipped status=disabled identity={identity_session}")
-        return {
-            "status": "disabled",
-            "scanned": 0,
-            "candidates": [],
-            "kind_counts": {},
-            "reason_counts": {},
-            "note": "memU disabled",
-        }
-    try:
-        items = _list_items(identity_session, limit=10000)
-    except Exception as exc:
-        _log(f"maintenance analyze skipped identity={identity_session} error={type(exc).__name__}: {exc}")
-        return {
-            "status": "unavailable",
-            "scanned": 0,
-            "candidates": [],
-            "kind_counts": {},
-            "reason_counts": {},
-            "note": f"memU skipped ({exc})",
-        }
-
-    run_at = now or datetime.now()
-    legacy_events = _load_legacy_event_map(identity_session)
-    seen: set[tuple[str, str]] = set()
-    candidates: list[dict[str, Any]] = []
-    kind_counts: Counter[str] = Counter()
-    for item in items:
-        payload, parse_failed = _payload_from_item(item)
-        kind = str(payload.get("kind") or item.get("memory_type") or "unknown")
-        kind_counts[kind] += 1
-        candidate = _build_maintenance_candidate(
-            item,
-            payload,
-            parse_failed=parse_failed,
-            seen=seen,
-            legacy_events=legacy_events,
-            now=run_at,
-            expire_days=expire_days,
-        )
-        if candidate:
-            candidates.append(candidate)
-            _log(
-                "maintenance candidate "
-                f"identity={identity_session} item_id={candidate['item_id']} "
-                f"kind={candidate['kind']} reason={candidate['reason']} "
-                f"old_source_action={_legacy_source_action(candidate)} "
-                f"text_preview={_preview(candidate['text'])}"
-            )
-
-    reason_counts = Counter(str(item["reason"]) for item in candidates)
-    _log(
-        "maintenance analyze done "
-        f"identity={identity_session} scanned={len(items)} candidates={len(candidates)} "
-        f"kinds={_json_compact(dict(kind_counts))} reasons={_json_compact(dict(reason_counts))}"
-    )
-    return {
-        "status": "ok",
-        "scanned": len(items),
-        "candidates": candidates,
-        "kind_counts": dict(kind_counts),
-        "reason_counts": dict(reason_counts),
-        "note": "",
-    }
-
-
-def _format_candidate_preview(candidates: list[dict[str, Any]], limit: int = 5) -> str:
-    parts = []
-    for item in candidates[:limit]:
-        action = _legacy_source_action(item)
-        parts.append(
-            f"{item.get('kind')}:{item.get('reason')}:{_preview(item.get('text'), 80)}"
-            + (f" old={action}" if action != "none" else "")
-        )
-    return " | ".join(parts)
-
-
-def run_memu_maintenance(
-    identity_session: str,
-    *,
-    mode: str = "apply",
-    now: datetime | None = None,
-    expire_days: int = 14,
-) -> dict[str, Any]:
-    _log(f"maintenance start identity={identity_session}")
-    mode = str(mode or "apply").strip().lower()
-    if mode not in {"apply", "check"}:
-        raise ValueError("memU maintenance mode must be 'apply' or 'check'")
-    analysis = analyze_memu_maintenance(identity_session, now=now, expire_days=expire_days)
-    candidates = list(analysis.get("candidates") or [])
-    if analysis.get("status") != "ok":
-        return {
-            "mode": mode,
-            "scanned": int(analysis.get("scanned") or 0),
-            "candidates": len(candidates),
-            "deleted": 0,
-            "failed": 0,
-            "legacy_deleted": 0,
-            "updated": 0,
-            "reason_counts": analysis.get("reason_counts") or {},
-            "kind_counts": analysis.get("kind_counts") or {},
-            "note": analysis.get("note") or "",
-        }
-    if mode == "check":
-        note = (
-            f"memU mode=check, scanned={analysis['scanned']}, candidates={len(candidates)}, "
-            f"reasons={analysis['reason_counts']}"
-        )
-        preview = _format_candidate_preview(candidates)
-        if preview:
-            note += f", preview={preview}"
-        _log(f"maintenance check done identity={identity_session} note={note}")
-        return {
-            "mode": mode,
-            "scanned": int(analysis.get("scanned") or 0),
-            "candidates": len(candidates),
-            "deleted": 0,
-            "failed": 0,
-            "legacy_deleted": 0,
-            "updated": 0,
-            "reason_counts": analysis.get("reason_counts") or {},
-            "kind_counts": analysis.get("kind_counts") or {},
-            "note": note,
-        }
-
-    service = _get_service()
-
-    async def _delete(items_to_delete: list[dict[str, Any]]) -> tuple[int, int, int]:
-        deleted = 0
-        failed = 0
-        legacy_deleted = 0
-        for candidate in items_to_delete:
-            item_id = str(candidate.get("item_id") or "")
-            if not item_id:
-                continue
-            _log(
-                "maintenance delete item "
-                f"identity={identity_session} item_id={item_id} kind={candidate.get('kind')} "
-                f"reason={candidate.get('reason')} old_source_action={_legacy_source_action(candidate)}"
-            )
-            try:
-                await service.delete_memory_item(memory_id=item_id, user={"identity_session": identity_session})
-            except Exception as exc:
-                failed += 1
-                _log(
-                    "maintenance delete failed "
-                    f"identity={identity_session} item_id={item_id} error={type(exc).__name__}: {_preview(exc, 500)}"
-                )
-                continue
-            deleted += 1
-            try:
-                legacy_deleted += _delete_legacy_source(identity_session, candidate)
-            except Exception as exc:
-                _log(
-                    "maintenance legacy delete failed "
-                    f"identity={identity_session} item_id={item_id} "
-                    f"old_source_action={_legacy_source_action(candidate)} "
-                    f"error={type(exc).__name__}: {_preview(exc, 500)}"
-                )
-        return deleted, failed, legacy_deleted
-
-    deleted = 0
-    failed = 0
-    legacy_deleted = 0
-    if candidates:
-        with _op_lock:
-            deleted, failed, legacy_deleted = _run(_delete(candidates))
-    note = (
-        f"memU mode=apply, scanned={analysis['scanned']}, candidates={len(candidates)}, "
-        f"reasons={analysis['reason_counts']}, deleted={deleted}, "
-        f"legacy_deleted={legacy_deleted}, failed={failed}"
-    )
-    preview = _format_candidate_preview(candidates)
-    if preview:
-        note += f", preview={preview}"
-    _log(f"maintenance done identity={identity_session} deleted={deleted} updated=0 note={note}")
-    return {
-        "mode": mode,
-        "scanned": int(analysis.get("scanned") or 0),
-        "candidates": len(candidates),
-        "deleted": deleted,
-        "failed": failed,
-        "legacy_deleted": legacy_deleted,
-        "updated": 0,
-        "reason_counts": analysis.get("reason_counts") or {},
-        "kind_counts": analysis.get("kind_counts") or {},
-        "note": note,
-    }
-
-
-# Compatibility wrappers. The judge-driven memU tidy lives in memu_tidy.py,
-# but these names stay available for older import paths.
+# Judge-driven memU tidy lives in memu_tidy.py; keep these public names as the
+# maintenance entrypoint for callers that import from this adapter module.
 def analyze_memu_maintenance(
     identity_session: str,
     *,

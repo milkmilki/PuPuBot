@@ -8,10 +8,10 @@ from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
 from .llm import JUDGE_MODEL, MODEL, chat_complete
 from .tools import execute_tool, get_proactive_tool_definitions
 from .familiarity import get_proactive_freq, score_to_level, PROACTIVE_THRESHOLD
-from .important_event_context import format_important_events_section
+from .event_thread_context import format_event_threads_section
 from .memory import (
     get_familiarity,
-    get_important_events,
+    get_event_threads,
     get_last_message_time,
     get_recent_messages,
     get_self_facts,
@@ -200,7 +200,7 @@ def _format_recalled_memories_section(memories: list[dict]) -> str:
             subject = "用户"
         elif kind == "self_fact":
             subject = character_name
-        elif kind in {"summary", "important_event"}:
+        elif kind in {"summary", "event_thread"}:
             subject = f"用户 / {character_name}"
         else:
             subject = "相关记忆"
@@ -324,7 +324,7 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
         return prompt
 
     self_facts = get_self_facts(OWNER_SESSION)
-    important_events = get_important_events(OWNER_SESSION, limit=4)
+    event_threads = get_event_threads(OWNER_SESSION, limit=4)
     user_facts = get_user_facts(OWNER_SESSION)
 
     sf_section = ""
@@ -354,16 +354,16 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
         topic_hint=topic,
         recent_context=recent_ctx,
     )
-    important_events_section = format_important_events_section(
-        important_events,
+    event_threads_section = format_event_threads_section(
+        event_threads,
         heading=f"## {character_name}最近会自然记着的事",
         subject_label=f"用户 / {character_name}",
         character_name=character_name,
     )
-    if important_events_section:
+    if event_threads_section:
         prompt += (
             "\n\n"
-            + important_events_section
+            + event_threads_section
             + "\n如果其中有临近的事、刚说好的事、或你已经设过提醒但还想自然关心一下，可以顺着当前情境轻轻提一句。"
         )
     return prompt

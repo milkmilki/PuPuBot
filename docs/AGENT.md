@@ -49,7 +49,7 @@ User (QQ / Terminal)
 | [pupu/dialogue_loop.py](../pupu/dialogue_loop.py) | **`schedule_wait_timer` / `cancel_wait_timer` / `has_wait_timer`**; **`register_sender(sid, fn)`** — sync `fn(text)` delivers assistant text when timer fires; **`_on_timer_fire`** calls `chat(..., message_source=WAIT_FOLLOWUP)` then sender |
 | [pupu/followup_manager.py](../pupu/followup_manager.py) | Per-session `threading.Timer` + worker queue (used by `dialogue_loop`) |
 | [pupu/proactive.py](../pupu/proactive.py) | Idle proactive messages; generation uses **`system + DIALOGUE_OUTPUT_PROTOCOL`**, parses output; **`schedule_wait_timer(OWNER_SESSION)`** if `should_wait`; cancels pending wait timer before generating |
-| [pupu/review_followups.py](../pupu/review_followups.py) | Batch review outputs: summaries, familiarity delta, facts, important events, scheduled task updates |
+| [pupu/review_followups.py](../pupu/review_followups.py) | Batch review outputs: summaries, familiarity delta, facts, event thread updates, scheduled task updates |
 | [pupu/scheduler.py](../pupu/scheduler.py) | Due **DB** `scheduled_tasks` → synthetic user message → `chat(..., message_source="scheduled")` → send via OneBot / CLI print; **`_is_wait_followup_task`** filters legacy `wait_followup*` DB rows (real wait is in-memory now) |
 | [pupu/cli.py](../pupu/cli.py) | Terminal REPL; imports **`OWNER_SESSION`** from [`sessions.py`](../pupu/sessions.py); **`register_sender(OWNER_SESSION, ...)`** so timer follow-ups print in-terminal |
 | [plugins/pupu_plugin.py](../plugins/pupu_plugin.py) | NoneBot plugin load entry |
@@ -57,7 +57,7 @@ User (QQ / Terminal)
 | [pupu_console/arbitrator.py](../pupu_console/arbitrator.py) | Group speaker arbitration. `observe()` records each group message (deduped on `(group_id, message_id)`) and upserts the reporter into `group_bots`. `run_judge()` runs **once per debounce flush** under a per-group threading lock and writes to `group_decisions`. `await_decision_async()` is the long-poll backing `/api/await_decision` (uses `asyncio.Event`). Legacy `arbitrate()` (`/api/group_arbitrate`) kept for the deprecation window with the same per-group lock. |
 | [pupu_console/arbiter_server.py](../pupu_console/arbiter_server.py) | FastAPI app for the arbiter. Routes: `POST /api/observe`, `GET /api/await_decision`, `POST /api/group_arbitrate` (legacy), `GET /health`. Owns the per-group debounce watchdog (idle reset + hard cap). |
 | [plugins/pupu_support/onebot_handlers.py](../plugins/pupu_support/onebot_handlers.py) | OneBot v11 private/group; on connect **`register_owner_wait_followup_sender`** so proactive/timer can reach owner without a recent user turn |
-| [pupu/memory.py](../pupu/memory.py) | Facade re-exporting [pupu/storage/*](../pupu/storage/) (messages, familiarity, facts, summaries, important events, scheduled tasks, …) |
+| [pupu/memory.py](../pupu/memory.py) | Facade re-exporting [pupu/storage/*](../pupu/storage/) (messages, familiarity, facts, summaries, event threads, scheduled tasks, people indexes, …) |
 | [pupu/persona/](../pupu/persona/) | **`build_system_prompt`** (persona + memory + scheduler tool rules only; **no** duplicate JSON format block — that lives in `followup.DIALOGUE_OUTPUT_PROTOCOL`) |
 
 ## Dialogue output protocol (every normal model turn)
@@ -78,13 +78,13 @@ The chat system prompt ends with **`DIALOGUE_OUTPUT_PROTOCOL`** ([followup.py](.
 1. Ingress builds **`session_id`** (see table below) → **`chat(text, session_id, …)`**.
 2. **`cancel_wait_timer(session_id)`**.
 3. User message saved to SQLite (`messages`), with optional **`source=message_source`**.
-4. Recent history (**`CHAT_HISTORY_LIMIT = 30`**), familiarity, facts, summaries, important events loaded; **`build_system_prompt`** + **`DIALOGUE_OUTPUT_PROTOCOL`**.
+4. Recent history (**`CHAT_HISTORY_LIMIT = 30`**), familiarity, facts, summaries, and event threads loaded; **`build_system_prompt`** + **`DIALOGUE_OUTPUT_PROTOCOL`**.
 5. Model + tool loop via **`chat_complete`**.
 6. **`_parse_dialogue_output`** → `final_text`, `should_wait`; assistant message saved.
 7. If **`should_wait`**: **`schedule_wait_timer`** (if eligible); batch review may run when **`message_source == REVIEW_SOURCE`** (`"chat"`).
 8. Return **`final_text`** to caller (CLI prints; QQ sends segments).
 
-**Batch review** (not per-message judge calls): after enough **`chat`** turns or idle time, **`_maybe_batch_review`** runs a structured review (summary, familiarity delta, facts, important events, task updates). Tunables: **`REVIEW_INTERVAL`**, **`REVIEW_IDLE_SECONDS`** in [agent.py](../pupu/agent.py).
+**Batch review** (not per-message judge calls): after enough **`chat`** messages, **`_maybe_batch_review`** runs a structured review (summary, familiarity delta, facts, event_updates, task_updates). Tunable: **`REVIEW_INTERVAL`** in [agent.py](../pupu/agent.py).
 
 ## Session ID Mapping
 
@@ -105,7 +105,9 @@ High-signal tables (not exhaustive):
 - **`messages`** — conversation; columns include role, content, session_id, timestamps / sources as implemented in storage.
 - **`familiarity`**, **`events`** — score 0–100 and relationship events.
 - **`user_facts`**, **`self_facts`** — long-term facts.
-- **`summaries`**, **`important_events`** — compression and notable episodes.
+- **`summaries`** — batch-review compression.
+- **`event_threads`**, **`event_steps`** — event-line memory. Threads hold the current event state; steps hold state transitions and causes.
+- **`people`**, **`event_people`** — stable person identities and event participants.
 - **`scheduled_tasks`** — user/assistant scheduled reminders; legacy rows titled `wait_followup*` are ignored by the scheduler loop; **live** wait-followup uses **memory timers** only.
 
 ## Session model
@@ -113,7 +115,7 @@ High-signal tables (not exhaustive):
 Runtime code separates the old single `session_id` concept into two meanings while keeping the SQLite schema unchanged:
 
 - **Context session** — where the conversation happens. `messages`, `summaries`, pending review cursors, and scheduled-task delivery use this. Private chats use `owner` / `private_<QQ>`; groups use `group_<群号>`.
-- **Identity session** — who the speaker is. `familiarity`, legacy familiarity `events`, `user_facts`, `self_facts`, and `important_events` use this. Owner maps to `owner`; other users map to `private_<QQ>`.
+- **Identity session** — who the speaker is. `familiarity`, legacy familiarity `events`, `user_facts`, `self_facts`, and event threads use this. Owner maps to `owner`; other users map to `private_<QQ>`.
 
 In normal private chat these two values are identical. In open groups, `context_session=group_<群号>` and `identity_session=owner|private_<QQ>`, so group context stays shared while each person keeps their own score and facts.
 

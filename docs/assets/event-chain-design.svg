@@ -1,22 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="720" viewBox="0 0 1180 720" role="img" aria-labelledby="title desc">
-  <title id="title">PuPu 事件链记忆设计图</title>
-  <desc id="desc">展示 PuPu 从对话进入 batch review，经事件线召回与归并，写入 event_threads 和 event_steps，再回流到提示词、memU 与可视化控制台。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">PuPuBot 记忆系统设计图</title>
+  <desc id="desc">展示 PuPuBot 从对话输入到 SQLite 主记忆库、事件线召回归并、可选 memU 缓存、提示词注入、维护整理和可视化的完整记忆链路。</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#f8fafc"/>
-      <stop offset="1" stop-color="#eef2ff"/>
+      <stop offset="0.55" stop-color="#f4f7fb"/>
+      <stop offset="1" stop-color="#eef6f3"/>
     </linearGradient>
     <linearGradient id="blue" x1="0" x2="1">
       <stop offset="0" stop-color="#2563eb"/>
-      <stop offset="1" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#0891b2"/>
     </linearGradient>
     <linearGradient id="green" x1="0" x2="1">
-      <stop offset="0" stop-color="#059669"/>
-      <stop offset="1" stop-color="#22c55e"/>
+      <stop offset="0" stop-color="#047857"/>
+      <stop offset="1" stop-color="#16a34a"/>
     </linearGradient>
     <linearGradient id="pink" x1="0" x2="1">
-      <stop offset="0" stop-color="#db2777"/>
-      <stop offset="1" stop-color="#a855f7"/>
+      <stop offset="0" stop-color="#be185d"/>
+      <stop offset="1" stop-color="#7c3aed"/>
     </linearGradient>
     <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
       <path d="M2,2 L10,6 L2,10 Z" fill="#64748b"/>
@@ -24,99 +25,142 @@
     <style>
       .title { font: 700 30px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #0f172a; }
       .subtitle { font: 15px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #475569; }
-      .label { font: 700 18px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #0f172a; }
-      .body { font: 14px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #475569; }
+      .label { font: 700 17px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #0f172a; }
+      .body { font: 13.5px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #475569; }
       .small { font: 12px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #64748b; }
-      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.4; rx: 16; }
-      .soft { fill: #f8fafc; stroke: #dbeafe; stroke-width: 1.4; rx: 14; }
-      .node-text { font: 700 14px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #ffffff; }
-      .edge { stroke: #64748b; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
-      .thin { stroke: #94a3b8; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
-      .pill { fill: #eff6ff; stroke: #bfdbfe; rx: 10; }
+      .white { fill: #ffffff; }
+      .box { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.35; rx: 14; }
+      .soft { fill: #f8fafc; stroke: #dbeafe; stroke-width: 1.25; rx: 12; }
+      .greenbox { fill: #f0fdf4; stroke: #bbf7d0; stroke-width: 1.25; rx: 12; }
+      .amberbox { fill: #fffbeb; stroke: #fde68a; stroke-width: 1.25; rx: 12; }
+      .purplebox { fill: #faf5ff; stroke: #e9d5ff; stroke-width: 1.25; rx: 12; }
+      .node-text { font: 700 13px "Microsoft YaHei", "Segoe UI", sans-serif; fill: #ffffff; }
+      .edge { stroke: #64748b; stroke-width: 2.05; fill: none; marker-end: url(#arrow); }
+      .thin { stroke: #94a3b8; stroke-width: 1.55; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #94a3b8; stroke-width: 1.55; fill: none; stroke-dasharray: 6 6; marker-end: url(#arrow); }
+      .pill { fill: #eff6ff; stroke: #bfdbfe; rx: 9; }
+      .muted-pill { fill: #f1f5f9; stroke: #cbd5e1; rx: 9; }
     </style>
   </defs>
 
-  <rect width="1180" height="720" fill="url(#bg)"/>
-  <text x="54" y="64" class="title">PuPuBot 事件链记忆</text>
-  <text x="54" y="94" class="subtitle">把“重要事件”从孤立条目升级为可延续、可召回、可可视化的事件线。</text>
+  <rect width="1280" height="760" fill="url(#bg)"/>
 
-  <rect x="54" y="132" width="235" height="126" class="box"/>
-  <text x="78" y="166" class="label">对话入口</text>
-  <text x="78" y="195" class="body">CLI / QQ / Console 实例</text>
-  <text x="78" y="221" class="body">消息、任务、主动聊天</text>
+  <text x="52" y="58" class="title">PuPuBot 记忆系统</text>
+  <text x="52" y="88" class="subtitle">SQLite 是唯一事实源；memU 是可删除、可重建的 RAG 缓存；事件线负责把持续事件串成可追踪的状态变化。</text>
 
-  <rect x="358" y="118" width="266" height="154" class="box"/>
-  <text x="386" y="153" class="label">Batch Review</text>
-  <text x="386" y="184" class="body">抽取 summary / facts / event_updates</text>
-  <text x="386" y="210" class="body">判断是创建事件线还是追加进展</text>
-  <text x="386" y="236" class="body">旧 important_events 自动兼容</text>
+  <rect x="52" y="126" width="178" height="108" class="box"/>
+  <text x="76" y="158" class="label">对话入口</text>
+  <text x="76" y="186" class="body">CLI / QQ / Console</text>
+  <text x="76" y="210" class="body">私聊、群聊、主动消息</text>
 
-  <rect x="700" y="118" width="300" height="154" class="box"/>
-  <text x="728" y="153" class="label">增强召回与归并</text>
-  <text x="728" y="184" class="body">SQLite FTS5 倒排召回候选</text>
-  <text x="728" y="210" class="body">关键词 overlap + 近期 + 状态重排</text>
-  <text x="728" y="236" class="body">候选相关时优先 append_step</text>
+  <rect x="288" y="112" width="224" height="136" class="box"/>
+  <text x="314" y="145" class="label">chat()</text>
+  <text x="314" y="174" class="body">保存 messages + speaker</text>
+  <text x="314" y="198" class="body">构建 prompt，执行工具 loop</text>
+  <text x="314" y="222" class="body">按消息数触发 batch review</text>
 
-  <path class="edge" d="M289 195 C318 195 328 195 358 195"/>
-  <path class="edge" d="M624 195 C656 195 668 195 700 195"/>
+  <rect x="570" y="112" width="242" height="136" class="box"/>
+  <text x="596" y="145" class="label">Batch Review</text>
+  <text x="596" y="174" class="body">预处理：人物名：发言 &lt;end&gt;</text>
+  <text x="596" y="198" class="body">输出 summary / facts</text>
+  <text x="596" y="222" class="body">输出 event_updates / task_updates</text>
 
-  <rect x="116" y="340" width="910" height="238" class="box"/>
-  <text x="146" y="376" class="label">事件线数据模型</text>
-  <text x="146" y="405" class="body">一条 thread 表示持续事件；多个 step 表示状态变化和触发因素。</text>
+  <rect x="870" y="112" width="250" height="136" class="box"/>
+  <text x="896" y="145" class="label">事件线召回归并</text>
+  <text x="896" y="174" class="body">FTS5 倒排召回候选</text>
+  <text x="896" y="198" class="body">overlap + 状态 + 近期 + 置信度</text>
+  <text x="896" y="222" class="body">人物匹配加权，优先 append_step</text>
 
-  <rect x="156" y="438" width="192" height="80" fill="url(#blue)" rx="18"/>
-  <text x="252" y="471" text-anchor="middle" class="node-text">event_threads</text>
-  <text x="252" y="496" text-anchor="middle" class="node-text">当前状态 / 标题 / key</text>
+  <path class="edge" d="M230 180 C252 180 266 180 288 180"/>
+  <path class="edge" d="M512 180 C536 180 548 180 570 180"/>
+  <path class="edge" d="M812 180 C836 180 848 180 870 180"/>
 
-  <circle cx="472" cy="478" r="42" fill="url(#green)"/>
-  <text x="472" y="474" text-anchor="middle" class="node-text">step</text>
-  <text x="472" y="494" text-anchor="middle" class="node-text">user</text>
+  <rect x="72" y="306" width="742" height="286" class="box"/>
+  <text x="102" y="341" class="label">SQLite 主记忆库</text>
+  <text x="102" y="366" class="body">所有长期记忆的唯一事实源。memU、可视化和 prompt 都从这里派生。</text>
 
-  <circle cx="608" cy="478" r="42" fill="url(#pink)"/>
-  <text x="608" y="474" text-anchor="middle" class="node-text">step</text>
-  <text x="608" y="494" text-anchor="middle" class="node-text">instance</text>
+  <rect x="108" y="398" width="150" height="58" class="soft"/>
+  <text x="183" y="423" text-anchor="middle" class="label">messages</text>
+  <text x="183" y="444" text-anchor="middle" class="small">原始对话 + speaker</text>
 
-  <circle cx="744" cy="478" r="42" fill="#b45309"/>
-  <text x="744" y="474" text-anchor="middle" class="node-text">step</text>
-  <text x="744" y="494" text-anchor="middle" class="node-text">time</text>
+  <rect x="286" y="398" width="150" height="58" class="soft"/>
+  <text x="361" y="423" text-anchor="middle" class="label">summaries</text>
+  <text x="361" y="444" text-anchor="middle" class="small">批次摘要</text>
 
-  <circle cx="880" cy="478" r="42" fill="#64748b"/>
-  <text x="880" y="474" text-anchor="middle" class="node-text">step</text>
-  <text x="880" y="494" text-anchor="middle" class="node-text">system</text>
+  <rect x="464" y="398" width="150" height="58" class="soft"/>
+  <text x="539" y="423" text-anchor="middle" class="label">facts</text>
+  <text x="539" y="444" text-anchor="middle" class="small">user / self</text>
 
-  <path class="edge" d="M348 478 L424 478"/>
-  <path class="edge" d="M514 478 L560 478"/>
-  <path class="edge" d="M650 478 L696 478"/>
-  <path class="edge" d="M786 478 L832 478"/>
+  <rect x="642" y="398" width="150" height="58" class="soft"/>
+  <text x="717" y="423" text-anchor="middle" class="label">tasks</text>
+  <text x="717" y="444" text-anchor="middle" class="small">提醒与后续动作</text>
 
-  <rect x="170" y="535" width="185" height="26" class="pill"/>
-  <text x="262" y="553" text-anchor="middle" class="small">status / confidence / merge_hint</text>
-  <rect x="424" y="535" width="250" height="26" class="pill"/>
-  <text x="549" y="553" text-anchor="middle" class="small">summary + cause + optional reflection</text>
-  <rect x="724" y="535" width="195" height="26" class="pill"/>
-  <text x="821" y="553" text-anchor="middle" class="small">time steps 必须是推测语气</text>
+  <rect x="108" y="490" width="210" height="66" fill="url(#blue)" rx="16"/>
+  <text x="213" y="518" text-anchor="middle" class="node-text">event_threads</text>
+  <text x="213" y="541" text-anchor="middle" class="node-text">标题 / 当前状态 / merge_hint</text>
 
-  <path class="thin" d="M492 272 C492 306 492 318 492 340"/>
-  <path class="thin" d="M850 272 C850 306 760 318 714 340"/>
+  <circle cx="420" cy="523" r="36" fill="url(#green)"/>
+  <text x="420" y="519" text-anchor="middle" class="node-text">step</text>
+  <text x="420" y="538" text-anchor="middle" class="node-text">user</text>
 
-  <rect x="68" y="632" width="214" height="56" class="soft"/>
-  <text x="175" y="657" text-anchor="middle" class="label">Prompt Recall</text>
-  <text x="175" y="678" text-anchor="middle" class="small">当前事件线回到角色提示词</text>
+  <circle cx="528" cy="523" r="36" fill="url(#pink)"/>
+  <text x="528" y="519" text-anchor="middle" class="node-text">step</text>
+  <text x="528" y="538" text-anchor="middle" class="node-text">instance</text>
 
-  <rect x="354" y="632" width="214" height="56" class="soft"/>
-  <text x="461" y="657" text-anchor="middle" class="label">memU Sync</text>
-  <text x="461" y="678" text-anchor="middle" class="small">同步长期记忆快照</text>
+  <circle cx="636" cy="523" r="36" fill="#b45309"/>
+  <text x="636" y="519" text-anchor="middle" class="node-text">step</text>
+  <text x="636" y="538" text-anchor="middle" class="node-text">time</text>
 
-  <rect x="640" y="632" width="214" height="56" class="soft"/>
-  <text x="747" y="657" text-anchor="middle" class="label">CLI /events</text>
-  <text x="747" y="678" text-anchor="middle" class="small">列表、详情、搜索、URL 导出</text>
+  <circle cx="744" cy="523" r="36" fill="#64748b"/>
+  <text x="744" y="519" text-anchor="middle" class="node-text">step</text>
+  <text x="744" y="538" text-anchor="middle" class="node-text">system</text>
 
-  <rect x="926" y="632" width="214" height="56" class="soft"/>
-  <text x="1033" y="657" text-anchor="middle" class="label">Console Graph</text>
-  <text x="1033" y="678" text-anchor="middle" class="small">横向事件链 / 中心发散图</text>
+  <path class="edge" d="M318 523 L384 523"/>
+  <path class="edge" d="M456 523 L492 523"/>
+  <path class="edge" d="M564 523 L600 523"/>
+  <path class="edge" d="M672 523 L708 523"/>
 
-  <path class="thin" d="M288 578 C252 604 218 614 175 632"/>
-  <path class="thin" d="M500 578 C490 600 478 614 461 632"/>
-  <path class="thin" d="M708 578 C724 604 734 614 747 632"/>
-  <path class="thin" d="M894 578 C944 602 992 615 1033 632"/>
+  <rect x="338" y="562" width="270" height="22" class="pill"/>
+  <text x="473" y="578" text-anchor="middle" class="small">event_steps = summary + cause + reflection</text>
+
+  <rect x="848" y="320" width="352" height="104" class="greenbox"/>
+  <text x="878" y="353" class="label">人物索引</text>
+  <text x="878" y="382" class="body">people / event_people 绑定事件参与者</text>
+  <text x="878" y="406" class="body">QQ 号映射固定昵称，群聊也能区分人物</text>
+
+  <rect x="848" y="464" width="352" height="128" class="amberbox"/>
+  <text x="878" y="497" class="label">可选 memU 召回缓存</text>
+  <text x="878" y="526" class="body">缓存 summary / facts / event_thread 快照</text>
+  <text x="878" y="550" class="body">聊天时按 query + 最近历史做 RAG 召回</text>
+  <text x="878" y="574" class="body">tidy 只删缓存条目，不删除 SQLite 主库</text>
+
+  <path class="thin" d="M690 248 C690 278 690 288 690 306"/>
+  <path class="thin" d="M996 248 C996 286 998 294 1016 320"/>
+  <path class="dash" d="M814 522 C830 522 836 522 848 522"/>
+  <rect x="822" y="498" width="98" height="22" class="muted-pill"/>
+  <text x="871" y="514" text-anchor="middle" class="small">派生缓存副本</text>
+  <path class="dash" d="M1024 464 C1024 442 1024 434 1024 424"/>
+
+  <rect x="86" y="648" width="200" height="60" class="purplebox"/>
+  <text x="186" y="674" text-anchor="middle" class="label">Prompt 注入</text>
+  <text x="186" y="696" text-anchor="middle" class="small">SQLite 直读或 memU 缓存召回</text>
+
+  <rect x="332" y="648" width="200" height="60" class="purplebox"/>
+  <text x="432" y="674" text-anchor="middle" class="label">/events</text>
+  <text x="432" y="696" text-anchor="middle" class="small">列表 / detail / search / url</text>
+
+  <rect x="578" y="648" width="200" height="60" class="purplebox"/>
+  <text x="678" y="674" text-anchor="middle" class="label">Console 图谱</text>
+  <text x="678" y="696" text-anchor="middle" class="small">人物、事件线、step 可视化</text>
+
+  <rect x="824" y="648" width="200" height="60" class="purplebox"/>
+  <text x="924" y="674" text-anchor="middle" class="label">每日维护 / tidy</text>
+  <text x="924" y="696" text-anchor="middle" class="small">主库轻量整理、缓存补齐</text>
+  <rect x="1040" y="664" width="116" height="24" class="muted-pill"/>
+  <text x="1098" y="681" text-anchor="middle" class="small">本地库不删除</text>
+
+  <path class="thin" d="M248 592 C224 616 204 630 186 648"/>
+  <path class="thin" d="M438 592 C436 616 434 630 432 648"/>
+  <path class="thin" d="M654 592 C666 616 672 630 678 648"/>
+  <path class="thin" d="M978 592 C962 616 944 630 924 648"/>
 </svg>

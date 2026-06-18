@@ -1,7 +1,7 @@
 """Prompt assembly helpers for persona-aware chat."""
 
 from ..familiarity import score_to_level
-from ..important_event_context import format_important_events_section
+from ..event_thread_context import format_event_threads_section
 from .core import get_core_persona, get_pupu_name
 from .familiarity_prompts import FAMILIARITY_PROMPTS
 
@@ -26,7 +26,7 @@ def _memory_subject(kind: str, character_name: str) -> str:
         return "用户"
     if kind == "self_fact":
         return character_name
-    if kind in {"summary", "important_event"}:
+    if kind in {"summary", "event_thread"}:
         return f"用户 / {character_name}"
     return "相关记忆"
 
@@ -45,17 +45,24 @@ def _format_recalled_memories(memories: list[dict], character_name: str) -> str:
 
 def build_system_prompt(
     familiarity_score: int,
-    event_log: list[dict] = None,
     user_facts: dict[str, str] = None,
     summaries: list[dict] = None,
     self_facts: dict[str, str] = None,
-    important_events: list[dict] = None,
+    event_threads: list[dict] = None,
     reply_speed_hint: str = None,
     recalled_memories: list[dict] = None,
 ) -> str:
     level = score_to_level(familiarity_score)
     character_name = get_pupu_name()
-    prompt = get_core_persona() + "\n" + FAMILIARITY_PROMPTS[level]
+    core_persona = _replace_default_character_name(get_core_persona(), character_name)
+    prompt = (
+        f"## 当前身份\n"
+        f"你就是{character_name}。用户现在是在和{character_name}说话，"
+        f"不要把自己说成其他名字或其他角色。\n\n"
+        + core_persona
+        + "\n"
+        + FAMILIARITY_PROMPTS[level]
+    )
 
     if self_facts:
         prompt += f"\n\n## {character_name}自己的设定\n" + _format_facts(
@@ -84,14 +91,14 @@ def build_system_prompt(
             for item in summaries
         )
 
-    important_events_section = format_important_events_section(
-        important_events,
+    event_threads_section = format_event_threads_section(
+        event_threads,
         heading=f"## {character_name}记得并在意的事",
         subject_label=f"用户 / {character_name}",
         character_name=character_name,
     )
-    if important_events_section:
-        prompt += "\n\n" + important_events_section
+    if event_threads_section:
+        prompt += "\n\n" + event_threads_section
 
     recalled_section = _format_recalled_memories(recalled_memories or [], character_name)
     if recalled_section:

@@ -15,16 +15,16 @@ from pupu.memory import (
     find_related_event_threads,
     get_event_thread_recent_steps,
     get_event_thread_steps,
-    get_important_events,
+    get_event_threads,
     _get_conn,
     init_db,
-    link_important_event_task,
+    link_event_thread_task,
     reset_session,
     save_message_with_speaker,
-    upsert_important_events,
+    upsert_event_threads,
 )
 from pupu.storage.people import qq_person_key, upsert_person
-import pupu.storage.important_events as important_event_store
+import pupu.storage.event_threads as event_thread_store
 from pupu.storage.db import get_conn
 from pupu.storage.scheduled_tasks import cancel_scheduled_task
 
@@ -44,12 +44,12 @@ class EventGraphMemoryTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_legacy_upsert_creates_thread_and_step(self):
-        rows = upsert_important_events(
+    def test_upsert_creates_thread_and_step(self):
+        rows = upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "first-camp",
+                    "thread_key": "first-camp",
                     "title": "第一次露营约定",
                     "kind": "promise",
                     "details": "用户和仆仆约定周末一起看露营攻略",
@@ -61,18 +61,18 @@ class EventGraphMemoryTests(unittest.TestCase):
 
         event, steps = get_event_thread_steps(self.session_id, "first-camp")
 
-        self.assertEqual(rows[0]["source_event_key"], "first-camp")
+        self.assertEqual(rows[0]["thread_key"], "first-camp")
         self.assertEqual(event["title"], "第一次露营约定")
         self.assertEqual(len(steps), 1)
         self.assertEqual(steps[0]["step_type"], "user")
         self.assertIn("看露营攻略", steps[0]["summary"])
 
     def test_similar_event_without_key_merges_into_existing_thread(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "camp-plan",
+                    "thread_key": "camp-plan",
                     "title": "露营动画计划",
                     "kind": "promise",
                     "details": "用户和仆仆约定晚上一起看摇曳露营",
@@ -81,7 +81,7 @@ class EventGraphMemoryTests(unittest.TestCase):
             ],
         )
 
-        rows = upsert_important_events(
+        rows = upsert_event_threads(
             self.session_id,
             [
                 {
@@ -92,20 +92,20 @@ class EventGraphMemoryTests(unittest.TestCase):
                 }
             ],
         )
-        events = get_important_events(self.session_id, limit=5)
+        events = get_event_threads(self.session_id, limit=5)
         _event, steps = get_event_thread_steps(self.session_id, "camp-plan")
 
         self.assertEqual(len(events), 1)
-        self.assertEqual(rows[0]["source_event_key"], "camp-plan")
+        self.assertEqual(rows[0]["thread_key"], "camp-plan")
         self.assertEqual(len(steps), 2)
         self.assertIn("洗澡后继续", steps[-1]["summary"])
 
     def test_time_step_is_marked_as_inferred(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "commute",
+                    "thread_key": "commute",
                     "title": "用户通勤状态",
                     "kind": "state",
                     "details": "用户正在坐地铁回家",
@@ -127,11 +127,11 @@ class EventGraphMemoryTests(unittest.TestCase):
         self.assertTrue(steps[-1]["summary"].startswith("推测："))
 
     def test_related_search_uses_current_step_and_merge_hint(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "cake-check",
+                    "thread_key": "cake-check",
                     "title": "草莓蛋糕验收",
                     "kind": "promise",
                     "details": "用户答应带草莓蛋糕让仆仆验收",
@@ -144,15 +144,36 @@ class EventGraphMemoryTests(unittest.TestCase):
 
         matches = find_related_event_threads(self.session_id, "今天要检查草莓蛋糕", limit=3)
 
-        self.assertEqual(matches[0]["source_event_key"], "cake-check")
+        self.assertEqual(matches[0]["thread_key"], "cake-check")
         self.assertGreater(matches[0]["score"], 0)
 
-    def test_event_thread_fts_index_is_created_and_refreshed(self):
-        upsert_important_events(
+    def test_related_search_includes_non_active_statuses_by_default(self):
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "fts-cake",
+                    "thread_key": "finished-cake",
+                    "title": "完成草莓蛋糕验收",
+                    "kind": "promise",
+                    "status": "completed",
+                    "details": "用户和仆仆已经完成草莓蛋糕验收",
+                    "merge_hint": "草莓 蛋糕 验收",
+                    "confidence": 0.8,
+                }
+            ],
+        )
+
+        matches = find_related_event_threads(self.session_id, "草莓蛋糕验收", limit=3)
+
+        self.assertEqual(matches[0]["thread_key"], "finished-cake")
+        self.assertEqual(matches[0]["status"], "completed")
+
+    def test_event_thread_fts_index_is_created_and_refreshed(self):
+        upsert_event_threads(
+            self.session_id,
+            [
+                {
+                    "thread_key": "fts-cake",
                     "title": "草莓蛋糕验收",
                     "kind": "promise",
                     "details": "用户答应带草莓蛋糕让仆仆验收",
@@ -185,11 +206,11 @@ class EventGraphMemoryTests(unittest.TestCase):
         self.assertIsNotNone(fts_row)
 
     def test_related_search_marks_fts_candidate_in_debug(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "debug-cake",
+                    "thread_key": "debug-cake",
                     "title": "草莓蛋糕验收",
                     "kind": "promise",
                     "details": "用户答应带草莓蛋糕让仆仆验收",
@@ -206,17 +227,17 @@ class EventGraphMemoryTests(unittest.TestCase):
             debug=True,
         )
 
-        self.assertEqual(matches[0]["source_event_key"], "debug-cake")
+        self.assertEqual(matches[0]["thread_key"], "debug-cake")
         self.assertTrue(matches[0]["match_debug"]["fts_attempted"])
         self.assertTrue(matches[0]["match_debug"]["used_fts_candidate"])
         self.assertGreater(matches[0]["match_debug"]["fts_score"], 0)
 
     def test_related_search_falls_back_when_fts_unavailable(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "fallback-cake",
+                    "thread_key": "fallback-cake",
                     "title": "草莓蛋糕验收",
                     "kind": "promise",
                     "details": "用户答应带草莓蛋糕让仆仆验收",
@@ -226,8 +247,8 @@ class EventGraphMemoryTests(unittest.TestCase):
             ],
         )
 
-        original = important_event_store._event_thread_fts_available
-        important_event_store._event_thread_fts_available = lambda conn: False
+        original = event_thread_store._event_thread_fts_available
+        event_thread_store._event_thread_fts_available = lambda conn: False
         try:
             matches = find_related_event_threads(
                 self.session_id,
@@ -236,18 +257,18 @@ class EventGraphMemoryTests(unittest.TestCase):
                 debug=True,
             )
         finally:
-            important_event_store._event_thread_fts_available = original
+            event_thread_store._event_thread_fts_available = original
 
-        self.assertEqual(matches[0]["source_event_key"], "fallback-cake")
+        self.assertEqual(matches[0]["thread_key"], "fallback-cake")
         self.assertFalse(matches[0]["match_debug"]["fts_attempted"])
         self.assertFalse(matches[0]["match_debug"]["used_fts_candidate"])
 
     def test_recent_steps_returns_last_steps_in_chronological_order(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "steps-demo",
+                    "thread_key": "steps-demo",
                     "title": "事件线步骤测试",
                     "kind": "promise",
                     "details": "第一步",
@@ -271,11 +292,11 @@ class EventGraphMemoryTests(unittest.TestCase):
             "once",
             None,
         )
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "birthday",
+                    "thread_key": "birthday",
                     "title": "用户生日",
                     "kind": "birthday",
                     "details": "用户生日需要祝福",
@@ -283,7 +304,7 @@ class EventGraphMemoryTests(unittest.TestCase):
                 }
             ],
         )
-        link_important_event_task(self.session_id, "birthday", task_id)
+        link_event_thread_task(self.session_id, "birthday", task_id)
 
         self.assertTrue(cancel_scheduled_task(self.session_id, task_id))
         event, steps = get_event_thread_steps(self.session_id, "birthday")
@@ -294,11 +315,11 @@ class EventGraphMemoryTests(unittest.TestCase):
         self.assertIn("取消", steps[-1]["summary"] + steps[-1]["cause"])
 
     def test_event_graph_payload_contains_nodes_and_edges(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "graph-demo",
+                    "thread_key": "graph-demo",
                     "title": "图谱测试",
                     "kind": "milestone",
                     "details": "第一步",
@@ -331,11 +352,11 @@ class EventGraphMemoryTests(unittest.TestCase):
         )
 
     def test_event_threads_have_default_people(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "people-default",
+                    "thread_key": "people-default",
                     "title": "People Default",
                     "kind": "milestone",
                     "details": "User and instance share this event.",
@@ -371,11 +392,11 @@ class EventGraphMemoryTests(unittest.TestCase):
             speaker_key="instance",
             speaker_name="Lulu",
         )
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "alice-cake",
+                    "thread_key": "alice-cake",
                     "title": "Alice cake check",
                     "kind": "promise",
                     "details": "Alice and Lulu agreed to check the cake.",
@@ -405,11 +426,11 @@ class EventGraphMemoryTests(unittest.TestCase):
             speaker_name="Alice",
             speaker_qq="123456",
         )
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "fixed-alice",
+                    "thread_key": "fixed-alice",
                     "title": "Alice fixed name",
                     "kind": "promise",
                     "details": "Alice starts a cake thread.",
@@ -428,12 +449,12 @@ class EventGraphMemoryTests(unittest.TestCase):
             speaker_name="Cake Captain",
             speaker_qq="123456",
         )
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
                     "action": "append_step",
-                    "source_event_key": "fixed-alice",
+                    "thread_key": "fixed-alice",
                     "summary": "The same QQ account continues the cake thread.",
                     "source_context_session": self.session_id,
                     "source_msg_start_id": second_id,
@@ -481,11 +502,11 @@ class EventGraphMemoryTests(unittest.TestCase):
             speaker_name="群昵称会变",
             speaker_qq="424225912",
         )
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "fixed-owner",
+                    "thread_key": "fixed-owner",
                     "title": "Owner fixed name",
                     "kind": "promise",
                     "details": "Owner starts a cake thread.",
@@ -515,11 +536,11 @@ class EventGraphMemoryTests(unittest.TestCase):
         self.assertIn("群昵称会变", person["aliases"])
 
     def test_related_search_boosts_matching_people(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "owner-cake",
+                    "thread_key": "owner-cake",
                     "title": "Cake check",
                     "kind": "promise",
                     "details": "Owner agreed to check the strawberry cake.",
@@ -537,11 +558,11 @@ class EventGraphMemoryTests(unittest.TestCase):
             speaker_name="Friend",
             speaker_qq="9988",
         )
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "friend-cake",
+                    "thread_key": "friend-cake",
                     "title": "Cake check",
                     "kind": "promise",
                     "details": "Friend agreed to check the strawberry cake.",
@@ -562,7 +583,7 @@ class EventGraphMemoryTests(unittest.TestCase):
             debug=True,
         )
 
-        self.assertEqual(matches[0]["source_event_key"], "friend-cake")
+        self.assertEqual(matches[0]["thread_key"], "friend-cake")
         self.assertGreater(matches[0]["match_debug"]["people_bonus"], 0)
 
 

@@ -10,18 +10,16 @@ os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from pupu.memory import (
     create_scheduled_task,
-    get_important_events,
+    get_event_threads,
     init_db,
     list_scheduled_tasks,
     reset_session,
 )
 from pupu.review_followups import (
-    apply_review_task_drafts,
     apply_review_task_updates,
-    normalize_review_important_events,
-    normalize_review_task_drafts,
+    normalize_review_event_updates,
     normalize_review_task_updates,
-    save_review_important_events,
+    save_review_event_updates,
 )
 
 
@@ -34,16 +32,17 @@ class ReviewFollowupTests(unittest.TestCase):
         self.session_id = "test_review_followups"
         reset_session(self.session_id)
 
-    def test_important_event_relative_time_is_absolutized(self):
-        important_events = normalize_review_important_events(
+    def test_event_update_relative_time_is_absolutized(self):
+        event_updates = normalize_review_event_updates(
             [
                 {
-                    "source_event_key": "watch-yurucamp",
+                    "action": "create_thread",
+                    "thread_key": "watch-yurucamp",
                     "title": "今晚一起看摇曳露营",
                     "kind": "promise",
                     "event_time": "",
                     "time_text": "今晚",
-                    "details": "用户答应今晚和仆仆一起看摇曳露营",
+                    "summary": "用户答应今晚和仆仆一起看摇曳露营",
                     "followup_hint": "晚上可以询问用户是否开始看摇曳露营",
                     "confidence": 0.9,
                 }
@@ -51,36 +50,37 @@ class ReviewFollowupTests(unittest.TestCase):
             now=datetime(2026, 5, 12, 15, 0, 0),
         )
 
-        event = important_events[0]
+        event = event_updates[0]
         self.assertEqual(event["event_time"], "2026-05-12")
         self.assertIn("2026年5月12日晚上", event["title"])
         self.assertEqual(event["time_text"], "2026年5月12日晚上")
-        self.assertIn("2026年5月12日晚上", event["details"])
+        self.assertIn("2026年5月12日晚上", event["summary"])
         self.assertIn("2026年5月12日晚上", event["followup_hint"])
-        for field in ("title", "time_text", "details", "followup_hint"):
+        for field in ("title", "time_text", "summary", "followup_hint"):
             self.assertNotIn("今晚", event[field])
 
-    def test_birthday_date_only_task_draft_creates_task_and_links_event(self):
-        important_events = normalize_review_important_events(
+    def test_birthday_date_only_task_update_creates_task_and_links_event(self):
+        event_updates = normalize_review_event_updates(
             [
                 {
-                    "source_event_key": "birthday-2026-04-27",
+                    "action": "create_thread",
+                    "thread_key": "birthday-2026-04-27",
                     "title": "user birthday tomorrow",
                     "kind": "birthday",
                     "event_time": "2026-04-27",
                     "time_text": "tomorrow",
-                    "details": "user said birthday tomorrow",
+                    "summary": "user said birthday tomorrow",
                     "followup_hint": "wish happy birthday",
                     "confidence": 0.95,
                 }
             ]
         )
-        saved = save_review_important_events(self.session_id, important_events)
-        task_drafts = normalize_review_task_drafts(
+        saved = save_review_event_updates(self.session_id, event_updates)
+        task_updates = normalize_review_task_updates(
             [
                 {
-                    "source_event_key": "birthday-2026-04-27",
-                    "should_create": True,
+                    "action": "create",
+                    "thread_key": "birthday-2026-04-27",
                     "title": "birthday wish",
                     "instruction": "wish happy birthday",
                     "run_at": "2026-04-27",
@@ -90,9 +90,9 @@ class ReviewFollowupTests(unittest.TestCase):
             ]
         )
 
-        results = apply_review_task_drafts(
+        results = apply_review_task_updates(
             self.session_id,
-            task_drafts,
+            task_updates,
             saved,
             now=datetime(2026, 4, 26, 20, 0, 0),
         )
@@ -102,32 +102,33 @@ class ReviewFollowupTests(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertEqual(tasks[0]["run_at"], "2026-04-27T09:00:00")
 
-        events = get_important_events(self.session_id, limit=5)
+        events = get_event_threads(self.session_id, limit=5)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["linked_task_id"], results[0]["task_id"])
         self.assertEqual(events[0]["status"], "scheduled")
 
-    def test_duplicate_task_draft_links_existing_task_instead_of_creating_second_one(self):
-        important_events = normalize_review_important_events(
+    def test_duplicate_task_update_links_existing_task_instead_of_creating_second_one(self):
+        event_updates = normalize_review_event_updates(
             [
                 {
-                    "source_event_key": "birthday-2026-04-27",
+                    "action": "create_thread",
+                    "thread_key": "birthday-2026-04-27",
                     "title": "user birthday tomorrow",
                     "kind": "birthday",
                     "event_time": "2026-04-27",
                     "time_text": "tomorrow",
-                    "details": "user said birthday tomorrow",
+                    "summary": "user said birthday tomorrow",
                     "followup_hint": "wish happy birthday",
                     "confidence": 0.95,
                 }
             ]
         )
-        saved = save_review_important_events(self.session_id, important_events)
-        task_drafts = normalize_review_task_drafts(
+        saved = save_review_event_updates(self.session_id, event_updates)
+        task_updates = normalize_review_task_updates(
             [
                 {
-                    "source_event_key": "birthday-2026-04-27",
-                    "should_create": True,
+                    "action": "create",
+                    "thread_key": "birthday-2026-04-27",
                     "title": "birthday wish",
                     "instruction": "wish happy birthday",
                     "run_at": "2026-04-27",
@@ -137,15 +138,15 @@ class ReviewFollowupTests(unittest.TestCase):
             ]
         )
 
-        first = apply_review_task_drafts(
+        first = apply_review_task_updates(
             self.session_id,
-            task_drafts,
+            task_updates,
             saved,
             now=datetime(2026, 4, 26, 20, 0, 0),
         )
-        second = apply_review_task_drafts(
+        second = apply_review_task_updates(
             self.session_id,
-            task_drafts,
+            task_updates,
             saved,
             now=datetime(2026, 4, 26, 20, 1, 0),
         )
@@ -184,7 +185,7 @@ class ReviewFollowupTests(unittest.TestCase):
             [
                 {
                     "action": "create",
-                    "source_event_key": "wake-up",
+                    "thread_key": "wake-up",
                     "title": "早起提醒",
                     "instruction": "提醒用户起床",
                     "run_at": "2026-04-27T06:00:00",

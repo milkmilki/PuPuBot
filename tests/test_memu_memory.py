@@ -12,7 +12,7 @@ os.environ["PUPU_MEMU_ENABLED"] = "false"
 
 from pupu.agent import REVIEW_INTERVAL, chat, _maybe_batch_review
 from pupu.facts_report import format_facts_report
-from pupu.important_event_report import format_important_events_report
+from pupu.event_thread_report import format_event_threads_report
 import pupu.proactive as proactive
 from pupu.memory import (
     get_familiarity,
@@ -23,7 +23,7 @@ from pupu.memory import (
     save_summary,
     set_familiarity,
     upsert_self_facts,
-    upsert_important_events,
+    upsert_event_threads,
     upsert_user_facts,
 )
 from pupu.memory_index.memu_adapter import (
@@ -36,9 +36,9 @@ from pupu.memory_index.memu_adapter import (
     _memorize_config,
     _retrieve_item_config,
     is_memu_long_term_enabled,
-    sync_missing_memu_important_events,
+    sync_missing_memu_event_threads,
 )
-from pupu.memory_index import rebuild_memu_session, run_memu_maintenance, run_memu_tidy
+from pupu.memory_index import run_memu_maintenance, run_memu_tidy
 from pupu.message_sources import CHAT
 from pupu.persona import build_system_prompt
 
@@ -154,7 +154,7 @@ class MemuMemoryTests(unittest.TestCase):
                 summary="用户和仆仆在2026年5月19日晚上讨论星露谷接入。",
                 user_facts={"nickname": "xiaofu"},
                 self_facts={},
-                important_events=[],
+                event_threads=[],
             )
 
         self.assertEqual([kind for kind, _text, _extra in entries], ["summary", "user_fact"])
@@ -176,15 +176,15 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("用户: 我想画画", text)
         self.assertIn("璐璐: 我想买二手屏", text)
 
-    def test_adapter_absolutizes_important_event_text_for_memu(self):
+    def test_adapter_absolutizes_event_thread_text_for_memu(self):
         with patch("pupu.memory_index.memu_adapter.get_pupu_name", return_value="璐璐"):
             entries = _build_review_entries(
                 summary="",
                 user_facts={},
                 self_facts={},
-                important_events=[
+                event_threads=[
                     {
-                        "source_event_key": "watch-yurucamp",
+                        "thread_key": "watch-yurucamp",
                         "title": "今晚一起看摇曳露营",
                         "kind": "promise",
                         "event_time": "2026-05-12",
@@ -192,17 +192,18 @@ class MemuMemoryTests(unittest.TestCase):
                         "details": "用户答应今晚和仆仆一起看摇曳露营",
                         "followup_hint": "晚上可以询问用户是否开始看摇曳露营",
                         "confidence": 0.9,
+                        "people_label": "小夫 / 璐璐",
                     }
                 ],
             )
 
-        self.assertEqual(entries[0][0], "important_event")
+        self.assertEqual(entries[0][0], "event_thread")
         text = entries[0][1]
         self.assertIn("2026年5月12日", text)
         self.assertIn("2026年5月12日晚上一起看摇曳露营", text)
         self.assertIn("用户答应2026年5月12日晚上和璐璐一起看摇曳露营", text)
         self.assertIn("2026年5月12日晚上可以询问用户是否开始看摇曳露营", text)
-        self.assertIn("相关人物: 用户、璐璐", text)
+        self.assertIn("相关人物: 小夫 / 璐璐", text)
         self.assertNotIn("今晚", text)
         self.assertNotIn("仆仆", text)
 
@@ -213,7 +214,7 @@ class MemuMemoryTests(unittest.TestCase):
                 user_facts={},
                 summaries=[],
                 self_facts={},
-                important_events=[],
+                event_threads=[],
                 recalled_memories=[
                     {
                         "kind": "user_fact",
@@ -224,6 +225,15 @@ class MemuMemoryTests(unittest.TestCase):
 
         self.assertIn("本轮自然想起的记忆", prompt)
         self.assertIn("[user_fact | 用户] 用户最近在玩星露谷", prompt)
+
+    def test_system_prompt_anchors_current_instance_name(self):
+        with patch("pupu.persona.builder.get_pupu_name", return_value="璐璐"):
+            prompt = build_system_prompt(50)
+
+        self.assertIn("你就是璐璐", prompt)
+        self.assertIn("用户现在是在和璐璐说话", prompt)
+        self.assertIn("你叫璐璐", prompt)
+        self.assertNotIn("你叫仆仆", prompt)
 
     def test_chat_uses_memu_recall_and_two_recent_summaries(self):
         upsert_user_facts({"旧事实": "不应该被直接读取"}, self.session_id)
@@ -246,8 +256,8 @@ class MemuMemoryTests(unittest.TestCase):
                 with patch("pupu.agent.get_user_facts", side_effect=AssertionError("old user_facts read")):
                     with patch("pupu.agent.get_self_facts", side_effect=AssertionError("old self_facts read")):
                         with patch(
-                                "pupu.agent.get_important_events",
-                                side_effect=AssertionError("old important_events read"),
+                                "pupu.agent.get_event_threads",
+                                side_effect=AssertionError("event_threads should not be read directly when memU recall is enabled"),
                             ):
                                 with patch("pupu.agent.chat_complete", return_value="好呀"):
                                     with patch("pupu.agent._maybe_batch_review", return_value=None):
@@ -294,8 +304,8 @@ class MemuMemoryTests(unittest.TestCase):
                         with patch("pupu.proactive.get_self_facts", side_effect=AssertionError("old self_facts read")):
                             with patch("pupu.proactive.get_user_facts", side_effect=AssertionError("old user_facts read")):
                                 with patch(
-                                    "pupu.proactive.get_important_events",
-                                    side_effect=AssertionError("old important_events read"),
+                                    "pupu.proactive.get_event_threads",
+                                    side_effect=AssertionError("event_threads should not be read directly when memU recall is enabled"),
                                 ):
                                     prompt = proactive._build_proactive_prompt(80, period)
 
@@ -338,7 +348,7 @@ class MemuMemoryTests(unittest.TestCase):
                 with patch("pupu.proactive._load_proactive_context", return_value=(recent, summaries)):
                     with patch("pupu.proactive.get_self_facts", return_value={}):
                         with patch("pupu.proactive.get_user_facts", return_value={}):
-                            with patch("pupu.proactive.get_important_events", return_value=[]):
+                            with patch("pupu.proactive.get_event_threads", return_value=[]):
                                 prompt = proactive._build_proactive_prompt(80, period)
 
         self.assertIn("## 之前聊过的摘要", prompt)
@@ -357,13 +367,14 @@ class MemuMemoryTests(unittest.TestCase):
           "familiarity_delta": 1,
           "user_facts": {"游戏": "用户想在星露谷里和仆仆互动"},
           "self_facts": {"星露谷身份": "仆仆会作为 NPC 出现"},
-          "important_events": [{
-            "source_event_key": "stardew-pupu",
+          "event_updates": [{
+            "action": "create_thread",
+            "thread_key": "stardew-pupu",
             "title": "星露谷仆仆计划",
             "kind": "project",
             "event_time": "",
             "time_text": "最近",
-            "details": "用户想让仆仆接入星露谷。",
+            "summary": "用户想让仆仆接入星露谷。",
             "followup_hint": "以后聊星露谷时可以自然想起",
             "confidence": 0.9
           }],
@@ -386,6 +397,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(sync_kwargs["identity_session"], self.session_id)
         self.assertEqual(sync_kwargs["summary"], "用户和仆仆聊了星露谷接入。")
         self.assertEqual(sync_kwargs["user_facts"]["游戏"], "用户想在星露谷里和仆仆互动")
+        self.assertEqual(sync_kwargs["event_threads"][0]["thread_key"], "stardew-pupu")
         mock_record.assert_called_once()
         self.assertEqual(mock_record.call_args.kwargs["status"], "success")
         self.assertEqual(mock_record.call_args.kwargs["memu_ids"], ["m1", "m2"])
@@ -400,7 +412,7 @@ class MemuMemoryTests(unittest.TestCase):
           "familiarity_delta": 2,
           "user_facts": {},
           "self_facts": {},
-          "important_events": [],
+          "event_updates": [],
           "task_updates": []
         }"""
 
@@ -423,22 +435,22 @@ class MemuMemoryTests(unittest.TestCase):
     def test_reports_use_memu_for_facts_but_local_store_for_events(self):
         with patch("pupu.facts_report.format_memu_facts_report", return_value="memu facts"):
             self.assertEqual(format_facts_report(self.session_id), "memu facts")
-        self.assertNotEqual(format_important_events_report(self.session_id, sync_memu=False), "memu events")
+        self.assertNotEqual(format_event_threads_report(self.session_id, sync_memu=False), "memu events")
 
         upsert_user_facts({"游戏": "星露谷"}, self.session_id)
         with patch("pupu.facts_report.format_memu_facts_report", return_value=None):
             self.assertIn("游戏: 星露谷", format_facts_report(self.session_id))
 
-    def test_sync_missing_memu_important_events_backfills_by_source_key(self):
+    def test_sync_missing_memu_event_threads_backfills_by_source_key(self):
         events = [
             {
-                "source_event_key": "already-there",
+                "thread_key": "already-there",
                 "title": "Already there",
                 "details": "present",
                 "confidence": 1.0,
             },
             {
-                "source_event_key": "missing-event",
+                "thread_key": "missing-event",
                 "title": "Missing event",
                 "details": "needs sync",
                 "confidence": 0.9,
@@ -447,7 +459,7 @@ class MemuMemoryTests(unittest.TestCase):
         memu_items = [
             {
                 "id": "m1",
-                "summary": '{"kind":"important_event","source_event_key":"already-there","text":"present"}',
+                "summary": '{"kind":"event_thread","thread_key":"already-there","text":"present"}',
             }
         ]
 
@@ -457,15 +469,15 @@ class MemuMemoryTests(unittest.TestCase):
                     "pupu.memory_index.memu_adapter.sync_review_memory",
                     return_value=MemuWriteResult(status="success", ids=["new-id"]),
                 ) as mock_sync:
-                    result = sync_missing_memu_important_events(self.session_id, events)
+                    result = sync_missing_memu_event_threads(self.session_id, events)
 
         self.assertEqual(result["status"], "synced")
         self.assertEqual(result["checked"], 2)
         self.assertEqual(result["missing"], 1)
         self.assertEqual(result["synced"], 1)
         sync_kwargs = mock_sync.call_args.kwargs
-        self.assertEqual(len(sync_kwargs["important_events"]), 1)
-        self.assertEqual(sync_kwargs["important_events"][0]["source_event_key"], "missing-event")
+        self.assertEqual(len(sync_kwargs["event_threads"]), 1)
+        self.assertEqual(sync_kwargs["event_threads"][0]["thread_key"], "missing-event")
 
     def legacy_memu_maintenance_deletes_duplicates_and_low_value_items(self):
         deleted_ids = []
@@ -491,7 +503,6 @@ class MemuMemoryTests(unittest.TestCase):
 
     def test_memu_tidy_apply_deletes_judge_selected_items_and_skips_summary(self):
         deleted_ids = []
-        legacy_deleted = []
 
         class FakeService:
             async def delete_memory_item(self, *, memory_id, user=None):
@@ -528,27 +539,107 @@ class MemuMemoryTests(unittest.TestCase):
             with patch("pupu.memory_index.memu_tidy._list_items", return_value=items):
                 with patch("pupu.memory_index.memu_tidy._get_service", return_value=FakeService()):
                     with patch(
-                        "pupu.memory_index.memu_tidy._delete_legacy_source",
-                        side_effect=lambda identity, candidate: legacy_deleted.append(
-                            (identity, candidate["legacy_key"], candidate["reason"])
-                        )
-                        or 1,
+                        "pupu.memory_index.memu_tidy._sync_event_threads_after_tidy",
+                        return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
                     ):
-                        with patch(
-                            "pupu.memory_index.memu_tidy._sync_legacy_sources_after_tidy",
-                            return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
-                        ):
-                            with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response) as mock_json:
-                                result = run_memu_tidy(self.session_id, mode="apply")
+                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response) as mock_json:
+                            result = run_memu_tidy(self.session_id, mode="apply")
 
         self.assertEqual(result["deleted"], 2)
-        self.assertEqual(result["legacy_deleted"], 1)
+        self.assertEqual(result["source_deleted"], 0)
+        self.assertEqual(result["local_deleted"], 0)
         self.assertEqual(set(deleted_ids), {"dup-fact", "junk-fact"})
-        self.assertEqual(legacy_deleted, [(self.session_id, "temp_note", "低价值")])
         self.assertEqual(result["reason_counts"], {"重复": 1, "低价值": 1})
         payload = json.loads(mock_json.call_args.kwargs["user_content"])
         self.assertNotIn("summary-1", json.dumps(payload, ensure_ascii=False))
         self.assertTrue(all(item["kind"] != "summary" for item in payload["items"]))
+        for item in payload["items"]:
+            self.assertNotIn("source_key", item)
+            self.assertNotIn("source_table", item)
+            self.assertNotIn("source_action", item)
+            self.assertNotIn("delete_source", item)
+
+    def test_memu_tidy_does_not_delete_local_event_thread_source(self):
+        deleted_ids = []
+
+        class FakeService:
+            async def delete_memory_item(self, *, memory_id, user=None):
+                deleted_ids.append(memory_id)
+                return {"id": memory_id}
+
+        items = [
+            {
+                "id": "stale-event-index",
+                "summary": (
+                    '{"kind":"event_thread","thread_key":"old-event",'
+                    '"text":"旧事件索引副本","created_at":"2026-05-11T12:00:00"}'
+                ),
+                "memory_type": "event",
+            },
+        ]
+        judge_response = json.dumps(
+            {
+                "drop_ids": ["stale-event-index"],
+                "reason_by_id": {"stale-event-index": "低价值"},
+                "notes": "只删除 memU 索引副本",
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("pupu.memory_index.memu_tidy.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_tidy._list_items", return_value=items):
+                with patch("pupu.memory_index.memu_tidy._get_service", return_value=FakeService()):
+                    with patch(
+                        "pupu.memory_index.memu_tidy._sync_event_threads_after_tidy",
+                        return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
+                    ):
+                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response):
+                            result = run_memu_tidy(self.session_id, mode="apply")
+
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(result["source_deleted"], 0)
+        self.assertEqual(result["local_deleted"], 0)
+        self.assertEqual(deleted_ids, ["stale-event-index"])
+
+    def test_memu_tidy_ignores_unsupported_model_operations(self):
+        deleted_ids = []
+
+        class FakeService:
+            async def delete_memory_item(self, *, memory_id, user=None):
+                deleted_ids.append(memory_id)
+                return {"id": memory_id}
+
+        items = [
+            {
+                "id": "junk-fact",
+                "summary": '{"kind":"user_fact","key":"temp_note","text":"temp_note: True","created_at":"2026-05-11T12:00:00"}',
+                "memory_type": "profile",
+            }
+        ]
+        judge_response = json.dumps(
+            {
+                "drop_ids": ["junk-fact"],
+                "reason_by_id": {"junk-fact": "低价值"},
+                "delete_source": True,
+                "operations": [{"action": "delete_local_fact", "key": "temp_note"}],
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("pupu.memory_index.memu_tidy.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_tidy._list_items", return_value=items):
+                with patch("pupu.memory_index.memu_tidy._get_service", return_value=FakeService()):
+                    with patch(
+                        "pupu.memory_index.memu_tidy._sync_event_threads_after_tidy",
+                        return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
+                    ):
+                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response):
+                            result = run_memu_tidy(self.session_id, mode="apply")
+
+        self.assertEqual(result["deleted"], 1)
+        self.assertEqual(result["source_deleted"], 0)
+        self.assertEqual(result["local_deleted"], 0)
+        self.assertEqual(deleted_ids, ["junk-fact"])
 
     def test_memu_tidy_check_does_not_delete(self):
         items = [
@@ -570,25 +661,24 @@ class MemuMemoryTests(unittest.TestCase):
         with patch("pupu.memory_index.memu_tidy.is_memu_long_term_enabled", return_value=True):
             with patch("pupu.memory_index.memu_tidy._list_items", return_value=items):
                 with patch("pupu.memory_index.memu_tidy._get_service") as mock_get_service:
-                    with patch("pupu.memory_index.memu_tidy._delete_legacy_source") as mock_delete_legacy:
-                        with patch(
-                            "pupu.memory_index.memu_tidy._check_legacy_source_sync",
-                            return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
-                        ):
-                            with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response):
-                                result = run_memu_tidy(self.session_id, mode="check")
+                    with patch(
+                        "pupu.memory_index.memu_tidy._check_event_thread_sync",
+                        return_value={"status": "ok", "checked": 0, "missing": 0, "synced": 0},
+                    ):
+                        with patch("pupu.memory_index.memu_tidy.json_task", return_value=judge_response):
+                            result = run_memu_tidy(self.session_id, mode="check")
 
         self.assertEqual(result["deleted"], 0)
-        self.assertEqual(result["legacy_deleted"], 0)
+        self.assertEqual(result["source_deleted"], 0)
+        self.assertEqual(result["local_deleted"], 0)
         mock_get_service.assert_not_called()
-        mock_delete_legacy.assert_not_called()
 
     def test_memu_tidy_check_reports_missing_source_sync_without_writing(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "missing-source-event",
+                    "thread_key": "missing-source-event",
                     "title": "Missing source event",
                     "kind": "milestone",
                     "details": "not in memU yet",
@@ -613,11 +703,11 @@ class MemuMemoryTests(unittest.TestCase):
         mock_sync.assert_not_called()
 
     def test_memu_tidy_apply_backfills_missing_source_events_after_cleanup(self):
-        upsert_important_events(
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "missing-source-event",
+                    "thread_key": "missing-source-event",
                     "title": "Missing source event",
                     "kind": "milestone",
                     "details": "not in memU yet",
@@ -644,39 +734,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["source_sync"]["missing"], 1)
         self.assertEqual(result["source_sync"]["synced"], 1)
         sync_kwargs = mock_sync.call_args.kwargs
-        self.assertEqual(sync_kwargs["important_events"][0]["source_event_key"], "missing-source-event")
-
-    def test_rebuild_syncs_context_summaries_and_identity_memory(self):
-        context_id = self.session_id + "_context"
-        identity_id = self.session_id + "_identity"
-        reset_session(context_id)
-        reset_session(identity_id)
-        save_summary("群聊摘要", 1, 2, context_id)
-        upsert_user_facts({"name": "小夫"}, identity_id)
-
-        captured = []
-
-        def fake_sync(**kwargs):
-            captured.append(kwargs)
-            return MemuWriteResult(status="success", ids=[f"id-{len(captured)}"])
-
-        with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
-            with patch("pupu.memory_index.memu_adapter.clear_memu_session", return_value=0):
-                with patch("pupu.memory_index.memu_adapter.sync_review_memory", side_effect=fake_sync):
-                    report = rebuild_memu_session(identity_id, context_id)
-
-        self.assertIn("写入", report)
-        self.assertIn("迁移旧摘要 1 条", report)
-        self.assertEqual(len(captured), 2)
-        self.assertEqual(captured[0]["context_session"], context_id)
-        self.assertEqual(captured[0]["identity_session"], identity_id)
-        self.assertEqual(captured[0]["summary"], "群聊摘要")
-        self.assertEqual(captured[0]["user_facts"], {})
-        self.assertEqual(captured[1]["context_session"], context_id)
-        self.assertEqual(captured[1]["identity_session"], identity_id)
-        self.assertEqual(captured[1]["summary"], "")
-        self.assertEqual(captured[1]["user_facts"], {"name": "小夫"})
-
+        self.assertEqual(sync_kwargs["event_threads"][0]["thread_key"], "missing-source-event")
 
 if __name__ == "__main__":
     unittest.main()

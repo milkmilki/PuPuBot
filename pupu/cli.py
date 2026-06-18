@@ -16,7 +16,7 @@ from .command_registry import command_usage, render_help, resolve_command
 from .dialogue_loop import register_sender
 from .sessions import OWNER_SESSION
 from .facts_report import format_facts_report
-from .important_event_report import format_important_events_report
+from .event_thread_report import format_event_threads_report
 from .logging_utils import (
     is_debug_console_enabled,
     set_debug_console_enabled,
@@ -26,7 +26,6 @@ from .memory import get_familiarity_info, get_recent_messages, init_db, reset_se
 from .memory_index import (
     clear_memu_session,
     format_memu_recall_report,
-    rebuild_memu_session,
     run_memu_maintenance,
 )
 from .proactive_control import is_proactive_enabled, set_proactive_enabled
@@ -61,7 +60,7 @@ def print_banner():
     console.print(
         Panel(
             f"[bold]仆仆[/bold] — 好感度: Lv.{score_info['level']}\n"
-            f"输入消息开始聊天 | /help 命令 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /important 重要事件 | /facts 长期 facts | /tidy 整理 memU 记忆",
+            f"输入消息开始聊天 | /help 命令 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /events 事件线 | /facts 长期 facts | /tidy 整理 memU 记忆",
             style="cyan",
         )
     )
@@ -222,8 +221,8 @@ def handle_command(cmd: str) -> bool:
     elif spec.command_id == "tasks":
         console.print(manage_scheduled_task(OWNER_SESSION, {"action": "list"}))
         return False
-    elif spec.command_id == "important":
-        console.print(format_important_events_report(OWNER_SESSION, query=command_arg))
+    elif spec.command_id == "events":
+        console.print(format_event_threads_report(OWNER_SESSION, query=command_arg))
         return False
     elif spec.command_id == "facts":
         console.print(format_facts_report(OWNER_SESSION))
@@ -270,10 +269,6 @@ def handle_command(cmd: str) -> bool:
             console.print("用法：/recall <内容>")
         else:
             console.print(format_memu_recall_report(query, OWNER_SESSION))
-        return False
-    elif spec.command_id == "memu_rebuild":
-        with console.status("[cyan]正在重建 memU 记忆索引...[/cyan]"):
-            console.print(rebuild_memu_session(OWNER_SESSION))
         return False
     elif spec.command_id == "reset":
         confirm = console.input("[bold red]确认重置仆仆？所有记忆、好感度、聊天记录都会清空 (y/N): [/bold red]").strip().lower()

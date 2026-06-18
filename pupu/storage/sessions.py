@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .db import get_conn
-from .important_events import EVENT_THREAD_FTS_TABLE, _event_thread_fts_available
+from .event_threads import EVENT_THREAD_FTS_TABLE, _event_thread_fts_available
 
 
 def reset_session(session_id: str):
@@ -22,7 +22,6 @@ def reset_session(session_id: str):
         "familiarity",
         "events",
         "event_threads",
-        "important_events",
         "user_facts",
         "summaries",
         "self_facts",

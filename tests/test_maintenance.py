@@ -26,7 +26,7 @@ from pupu.memory import (
     reset_session,
     save_message,
     save_summary,
-    upsert_important_events,
+    upsert_event_threads,
     upsert_self_facts,
     upsert_user_facts,
 )
@@ -49,7 +49,6 @@ class MaintenanceTests(unittest.TestCase):
                 "familiarity",
                 "events",
                 "event_threads",
-                "important_events",
                 "user_facts",
                 "summaries",
                 "self_facts",
@@ -94,48 +93,6 @@ class MaintenanceTests(unittest.TestCase):
                    VALUES (?, ?, ?, ?)""",
                 (self.session_id, "2026-04-26T00:00:00", 2, "same event"),
             )
-            conn.execute(
-                """INSERT INTO important_events
-                   (session_id, source_event_key, title, kind, event_time, time_text,
-                    details, followup_hint, confidence, status, linked_task_id, last_seen_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    self.session_id,
-                    "event-a",
-                    "一起看电影",
-                    "promise",
-                    "2026-05-01",
-                    "五一",
-                    "约好一起看电影",
-                    "之后可以提起这件事",
-                    0.8,
-                    "active",
-                    None,
-                    "2026-04-26T00:00:00",
-                    "2026-04-26T00:00:00",
-                ),
-            )
-            conn.execute(
-                """INSERT INTO important_events
-                   (session_id, source_event_key, title, kind, event_time, time_text,
-                    details, followup_hint, confidence, status, linked_task_id, last_seen_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    self.session_id,
-                    "event-b",
-                    "一起看电影",
-                    "promise",
-                    "2026-05-01",
-                    "五一",
-                    "约好一起看电影",
-                    "之后可以提起这件事",
-                    0.7,
-                    "active",
-                    None,
-                    "2026-04-26T00:00:00",
-                    "2026-04-26T00:00:00",
-                ),
-            )
             conn.commit()
         finally:
             conn.close()
@@ -166,7 +123,6 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn("记忆整理完成（manual）", report)
         self.assertIn("- 去重摘要：1", report)
         self.assertIn("- 去重旧好感度记录：1", report)
-        self.assertIn("- 去重重要事件：1", report)
         self.assertIn("- 去重定时任务：1", report)
         self.assertIn("- 清理旧聊天消息：4", report)
         self.assertIn("- 清理旧内部消息：5", report)
@@ -179,10 +135,6 @@ class MaintenanceTests(unittest.TestCase):
             ).fetchone()["c"]
             enabled_task_count = conn.execute(
                 "SELECT COUNT(*) AS c FROM scheduled_tasks WHERE session_id = ? AND enabled = 1",
-                (self.session_id,),
-            ).fetchone()["c"]
-            important_event_count = conn.execute(
-                "SELECT COUNT(*) AS c FROM important_events WHERE session_id = ?",
                 (self.session_id,),
             ).fetchone()["c"]
             proactive_count = conn.execute(
@@ -207,7 +159,6 @@ class MaintenanceTests(unittest.TestCase):
 
         self.assertEqual(summary_count, 1)
         self.assertEqual(enabled_task_count, 1)
-        self.assertEqual(important_event_count, 1)
         self.assertEqual(proactive_count, 20)
         self.assertEqual(chat_count, 24)
         self.assertEqual(maintenance_count, 1)
@@ -250,11 +201,12 @@ class MaintenanceTests(unittest.TestCase):
             "candidates": 1,
             "deleted": 1,
             "failed": 0,
-            "legacy_deleted": 1,
+            "source_deleted": 0,
+            "local_deleted": 0,
             "updated": 0,
             "reason_counts": {"过期": 1},
-            "scanned_kind_counts": {"important_event": 3},
-            "drop_kind_counts": {"important_event": 1},
+            "scanned_kind_counts": {"event_thread": 3},
+            "drop_kind_counts": {"event_thread": 1},
             "judge_notes": ["ok"],
             "judge_failures": 0,
             "unknown_drop_ids": 0,
@@ -315,8 +267,7 @@ class MaintenanceTests(unittest.TestCase):
             return_value={
                 "dropped_summaries": 0,
                 "merged_summaries": 0,
-                "dropped_important_events": 0,
-                "updated_important_events": 0,
+                "updated_event_threads": 0,
                 "deleted_facts": 0,
                 "updated_facts": 0,
                 "note": "",
@@ -448,8 +399,7 @@ class MaintenanceTests(unittest.TestCase):
             return {
                 "dropped_summaries": 0,
                 "merged_summaries": 0,
-                "dropped_important_events": 0,
-                "updated_important_events": 0,
+                "updated_event_threads": 0,
                 "deleted_facts": 0,
                 "updated_facts": 0,
                 "note": "",
@@ -517,12 +467,12 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn("- 模型删除事实：2", report)
         self.assertIn("- 模型更新事实：1", report)
 
-    def test_model_maintenance_updates_event_threads(self):
-        upsert_important_events(
+    def test_model_maintenance_updates_event_threads_without_dropping(self):
+        upsert_event_threads(
             self.session_id,
             [
                 {
-                    "source_event_key": "movie-plan",
+                    "thread_key": "movie-plan",
                     "title": "一起看电影",
                     "kind": "promise",
                     "event_time": "2026-05-01",
@@ -532,7 +482,7 @@ class MaintenanceTests(unittest.TestCase):
                     "confidence": 0.8,
                 },
                 {
-                    "source_event_key": "stale-plan",
+                    "thread_key": "stale-plan",
                     "title": "过期小事",
                     "kind": "note",
                     "details": "一次性小事",
@@ -573,17 +523,17 @@ class MaintenanceTests(unittest.TestCase):
             )
 
         kept, kept_steps = get_event_thread_steps(self.session_id, "movie-plan")
-        dropped, dropped_steps = get_event_thread_steps(self.session_id, "stale-plan")
+        stale, stale_steps = get_event_thread_steps(self.session_id, "stale-plan")
 
         self.assertEqual(kept["title"], "五一看电影约定")
         self.assertEqual(kept["time_text"], "五一")
         self.assertEqual(kept["followup_hint"], "之后可以提起这件事")
         self.assertEqual(kept["confidence"], 0.95)
         self.assertIn("五一一起看电影", kept_steps[-1]["summary"])
-        self.assertEqual(dropped["status"], "dropped")
-        self.assertEqual(dropped_steps[-1]["step_type"], "system")
-        self.assertIn("- 模型删除重要事件：1", report)
-        self.assertIn("- 模型重排重要事件：1", report)
+        self.assertEqual(stale["status"], "active")
+        self.assertEqual(len(stale_steps), 1)
+        self.assertNotIn("模型删除事件线", report)
+        self.assertIn("- 模型更新事件线：1", report)
 
 
 if __name__ == "__main__":

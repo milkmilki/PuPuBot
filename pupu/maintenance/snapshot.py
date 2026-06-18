@@ -1,6 +1,6 @@
 """Snapshot builders for model-assisted maintenance."""
 
-from ..storage.important_events import get_recent_important_events_from_conn
+from ..storage.event_threads import get_recent_event_threads_from_conn
 
 
 def _build_session_snapshot(conn, session_id: str) -> dict:
@@ -44,8 +44,8 @@ def _build_session_snapshot(conn, session_id: str) -> dict:
             (session_id,),
         ).fetchall()
     ]
-    important_events = list(
-        reversed(get_recent_important_events_from_conn(conn, session_id, limit=None))
+    event_threads = list(
+        reversed(get_recent_event_threads_from_conn(conn, session_id, limit=None))
     )
     return {
         "session_id": session_id,
@@ -53,7 +53,7 @@ def _build_session_snapshot(conn, session_id: str) -> dict:
         "user_facts": user_facts,
         "self_facts": self_facts,
         "tasks": tasks,
-        "important_events": important_events,
+        "event_threads": event_threads,
     }
 
 
@@ -74,7 +74,7 @@ def _normalize_int_list(values, allowed_ids: set[int]) -> list[int]:
 def _should_run_model_compaction(snapshot: dict) -> bool:
     return bool(
         snapshot["summaries"]
-        or snapshot["important_events"]
+        or snapshot["event_threads"]
         or snapshot["tasks"]
         or snapshot["user_facts"]
         or snapshot["self_facts"]

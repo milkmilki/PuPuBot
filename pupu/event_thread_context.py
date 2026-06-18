@@ -1,16 +1,16 @@
-"""Prompt formatting helpers for important events."""
+"""Prompt formatting helpers for event threads."""
 
 from __future__ import annotations
 
 
-def format_important_events_section(
-    important_events: list[dict] | None,
+def format_event_threads_section(
+    event_threads: list[dict] | None,
     *,
     heading: str = "## 你记得并在意的事",
     subject_label: str | None = None,
     character_name: str | None = None,
 ) -> str:
-    items = important_events or []
+    items = event_threads or []
     if not items:
         return ""
 
