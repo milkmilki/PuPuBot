@@ -156,7 +156,6 @@ pupu/storage/               SQLite schema and storage adapters
 pupu/memory_index/          Optional memU adapter and tidy sync
 pupu_console/               Local web console and multi-instance process manager
 plugins/pupu_support/       NoneBot command and message handlers
-integrations/stardew_npc/   Experimental Stardew Valley NPC bridge
 docs/                       Extra guides and architecture notes
 tests/                      Unit tests
 ```

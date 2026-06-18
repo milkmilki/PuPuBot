@@ -288,11 +288,6 @@ def apply_app_config_env(
         "runtime.proactive_enabled": "PUPU_PROACTIVE_ENABLED",
         "runtime.debug_scheduled_tasks": "PUPU_DEBUG_SCHEDULED_TASKS",
         "runtime.backup_dir": "PUPU_BACKUP_DIR",
-        "stardew.host": "PUPU_STARDEW_HOST",
-        "stardew.port": "PUPU_STARDEW_PORT",
-        "stardew.session_id": "PUPU_STARDEW_SESSION_ID",
-        "stardew.token": "PUPU_STARDEW_TOKEN",
-        "stardew.reply_hint": "PUPU_STARDEW_REPLY_HINT",
     }
     for dotted_key, env_name in mapping.items():
         _set_env(env_name, _lookup(cfg, dotted_key), override=override)

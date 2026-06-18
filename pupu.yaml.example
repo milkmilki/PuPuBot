@@ -143,10 +143,3 @@ runtime:
   proactive_enabled: true
   debug_scheduled_tasks: false
   backup_dir: ""
-
-stardew:
-  host: 127.0.0.1
-  port: 18787
-  session_id: owner
-  token: ""
-  reply_hint: ""
