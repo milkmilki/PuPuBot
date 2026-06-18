@@ -103,10 +103,10 @@ class MemuMemoryTests(unittest.TestCase):
 
     def test_memu_reinforcement_hash_ignores_volatile_pupu_metadata(self):
         first, first_extra = _canonical_memory_payload_for_hash(
-            '{"kind":"user_fact","text":"用户喜欢星露谷","source_msg_start_id":1,"created_at":"2026-01-01"}'
+            '{"kind":"user_fact","text":"用户喜欢像素农场","source_msg_start_id":1,"created_at":"2026-01-01"}'
         )
         second, second_extra = _canonical_memory_payload_for_hash(
-            '{"kind":"user_fact","text":"用户喜欢星露谷","source_msg_start_id":99,"created_at":"2026-05-11"}'
+            '{"kind":"user_fact","text":"用户喜欢像素农场","source_msg_start_id":99,"created_at":"2026-05-11"}'
         )
 
         self.assertEqual(first, second)
@@ -117,7 +117,7 @@ class MemuMemoryTests(unittest.TestCase):
         items = [
             {
                 "id": "m1",
-                "summary": '{"kind":"user_fact","text":"用户喜欢星露谷"}',
+                "summary": '{"kind":"user_fact","text":"用户喜欢像素农场"}',
                 "extra": {
                     "pupu_payload_extra": {
                         "created_at": "2026-05-11T12:00:00",
@@ -130,7 +130,7 @@ class MemuMemoryTests(unittest.TestCase):
         with patch("pupu.memory_index.memu_adapter._list_items", return_value=items):
             report = _format_items(self.session_id, {"user_fact"}, "empty")
 
-        self.assertIn("用户喜欢星露谷", report)
+        self.assertIn("用户喜欢像素农场", report)
         self.assertIn("memU 长期记忆 1 条", report)
 
     def test_memu_report_maps_stale_default_character_name(self):
@@ -151,7 +151,7 @@ class MemuMemoryTests(unittest.TestCase):
     def test_adapter_builds_summary_entries(self):
         with patch("pupu.memory_index.memu_adapter.get_pupu_name", return_value="璐璐"):
             entries = _build_review_entries(
-                summary="用户和仆仆在2026年5月19日晚上讨论星露谷接入。",
+                summary="用户和仆仆在2026年5月19日晚上讨论像素农场联动。",
                 user_facts={"nickname": "xiaofu"},
                 self_facts={},
                 event_threads=[],
@@ -160,7 +160,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual([kind for kind, _text, _extra in entries], ["summary", "user_fact"])
         self.assertEqual(
             entries[0][1],
-            "对话摘要（用户 / 璐璐）: 用户和璐璐在2026年5月19日晚上讨论星露谷接入。",
+            "对话摘要（用户 / 璐璐）: 用户和璐璐在2026年5月19日晚上讨论像素农场联动。",
         )
         self.assertEqual(entries[1][1], "用户 | nickname: xiaofu")
 
@@ -218,13 +218,13 @@ class MemuMemoryTests(unittest.TestCase):
                 recalled_memories=[
                     {
                         "kind": "user_fact",
-                        "text": "用户最近在玩星露谷，也聊过杀戮尖塔2。",
+                        "text": "用户最近在玩像素农场，也聊过杀戮尖塔2。",
                     }
                 ],
             )
 
         self.assertIn("本轮自然想起的记忆", prompt)
-        self.assertIn("[user_fact | 用户] 用户最近在玩星露谷", prompt)
+        self.assertIn("[user_fact | 用户] 用户最近在玩像素农场", prompt)
 
     def test_system_prompt_anchors_current_instance_name(self):
         with patch("pupu.persona.builder.get_pupu_name", return_value="璐璐"):
@@ -246,7 +246,7 @@ class MemuMemoryTests(unittest.TestCase):
         recalled = [
             {
                 "kind": "summary",
-                "text": "用户刚刚问起星露谷里的仆仆。",
+                "text": "用户刚刚问起像素农场里的仆仆。",
                 "source": "memu",
             }
         ]
@@ -261,7 +261,7 @@ class MemuMemoryTests(unittest.TestCase):
                             ):
                                 with patch("pupu.agent.chat_complete", return_value="好呀"):
                                     with patch("pupu.agent._maybe_batch_review", return_value=None):
-                                        reply = chat("星露谷里你在干嘛", self.session_id)
+                                        reply = chat("像素农场里你在干嘛", self.session_id)
 
         self.assertEqual(reply, "好呀")
         mock_recall.assert_called_once()
@@ -363,19 +363,19 @@ class MemuMemoryTests(unittest.TestCase):
         set_familiarity(0, session_id=self.session_id)
 
         raw = """{
-          "summary": "用户和仆仆聊了星露谷接入。",
+          "summary": "用户和仆仆聊了像素农场联动。",
           "familiarity_delta": 1,
-          "user_facts": {"游戏": "用户想在星露谷里和仆仆互动"},
-          "self_facts": {"星露谷身份": "仆仆会作为 NPC 出现"},
+          "user_facts": {"游戏": "用户想在像素农场里和仆仆互动"},
+          "self_facts": {"像素农场身份": "仆仆会作为 NPC 出现"},
           "event_updates": [{
             "action": "create_thread",
-            "thread_key": "stardew-pupu",
-            "title": "星露谷仆仆计划",
+            "thread_key": "farm-game-pupu",
+            "title": "像素农场仆仆计划",
             "kind": "project",
             "event_time": "",
             "time_text": "最近",
-            "summary": "用户想让仆仆接入星露谷。",
-            "followup_hint": "以后聊星露谷时可以自然想起",
+            "summary": "用户想让仆仆接入像素农场。",
+            "followup_hint": "以后聊像素农场时可以自然想起",
             "confidence": 0.9
           }],
           "task_updates": []
@@ -395,9 +395,9 @@ class MemuMemoryTests(unittest.TestCase):
         sync_kwargs = mock_sync.call_args.kwargs
         self.assertEqual(sync_kwargs["context_session"], self.session_id)
         self.assertEqual(sync_kwargs["identity_session"], self.session_id)
-        self.assertEqual(sync_kwargs["summary"], "用户和仆仆聊了星露谷接入。")
-        self.assertEqual(sync_kwargs["user_facts"]["游戏"], "用户想在星露谷里和仆仆互动")
-        self.assertEqual(sync_kwargs["event_threads"][0]["thread_key"], "stardew-pupu")
+        self.assertEqual(sync_kwargs["summary"], "用户和仆仆聊了像素农场联动。")
+        self.assertEqual(sync_kwargs["user_facts"]["游戏"], "用户想在像素农场里和仆仆互动")
+        self.assertEqual(sync_kwargs["event_threads"][0]["thread_key"], "farm-game-pupu")
         mock_record.assert_called_once()
         self.assertEqual(mock_record.call_args.kwargs["status"], "success")
         self.assertEqual(mock_record.call_args.kwargs["memu_ids"], ["m1", "m2"])
@@ -437,9 +437,9 @@ class MemuMemoryTests(unittest.TestCase):
             self.assertEqual(format_facts_report(self.session_id), "memu facts")
         self.assertNotEqual(format_event_threads_report(self.session_id, sync_memu=False), "memu events")
 
-        upsert_user_facts({"游戏": "星露谷"}, self.session_id)
+        upsert_user_facts({"游戏": "像素农场"}, self.session_id)
         with patch("pupu.facts_report.format_memu_facts_report", return_value=None):
-            self.assertIn("游戏: 星露谷", format_facts_report(self.session_id))
+            self.assertIn("游戏: 像素农场", format_facts_report(self.session_id))
 
     def test_sync_missing_memu_event_threads_backfills_by_source_key(self):
         events = [
@@ -488,8 +488,8 @@ class MemuMemoryTests(unittest.TestCase):
                 return {"id": memory_id}
 
         items = [
-            {"id": "a", "summary": '{"kind":"summary","text":"用户喜欢星露谷"}'},
-            {"id": "b", "summary": '{"kind":"summary","text":"用户喜欢星露谷"}'},
+            {"id": "a", "summary": '{"kind":"summary","text":"用户喜欢像素农场"}'},
+            {"id": "b", "summary": '{"kind":"summary","text":"用户喜欢像素农场"}'},
             {"id": "c", "summary": '{"kind":"user_fact","text":"嗯"}'},
         ]
 
