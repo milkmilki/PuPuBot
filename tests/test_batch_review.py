@@ -25,11 +25,13 @@ from pupu.memory import (
     list_scheduled_tasks,
     reset_session,
     save_message,
+    save_message_with_speaker,
     save_summary,
     set_familiarity,
     update_familiarity,
     upsert_important_events,
 )
+from pupu.storage import get_conn, upsert_person
 from pupu.persona import build_batch_review_prompt
 
 from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED
@@ -43,6 +45,12 @@ class BatchReviewTests(unittest.TestCase):
     def setUp(self):
         self.session_id = f"test_batch_review_{self._testMethodName}"
         reset_session(self.session_id)
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM people")
+            conn.commit()
+        finally:
+            conn.close()
 
     def _save_chat_turn(self, index: int):
         save_message("user", f"user-{index}", self.session_id, source=CHAT)
@@ -60,7 +68,9 @@ class BatchReviewTests(unittest.TestCase):
         prompt = build_batch_review_prompt(character_name="璐璐")
 
         self.assertIn("你是璐璐的记忆整理器", prompt)
-        self.assertIn("所有输出主语都必须强制改写为“用户”或“璐璐”", prompt)
+        self.assertIn("人物名：发言 <end>", prompt)
+        self.assertIn("不要泛化成“用户”“实例”“双方”", prompt)
+        self.assertIn("不要输出 QQ 号、person_key、qq:xxx", prompt)
         self.assertIn("不要把璐璐写成“仆仆”", prompt)
         self.assertNotIn("不要把璐璐写成“璐璐”", prompt)
 
@@ -365,11 +375,120 @@ class BatchReviewTests(unittest.TestCase):
         review_input = mock_json_task.call_args.kwargs["user_content"]
         review_system = mock_json_task.call_args.kwargs["system"]
 
-        self.assertIn("用户: user-0", review_input)
-        self.assertIn("璐璐: assistant-0", review_input)
+        self.assertIn("用户：user-0 <end>", review_input)
+        self.assertIn("璐璐：assistant-0 <end>", review_input)
+        self.assertNotIn("Current participants", review_input)
         self.assertNotIn("Pupu:", review_input)
         self.assertIn("你是璐璐的记忆整理器", review_system)
         self.assertIn("不要把璐璐写成“仆仆”", review_system)
+
+    def test_batch_review_input_uses_fixed_person_display_names(self):
+        conn = get_conn()
+        try:
+            upsert_person(
+                conn,
+                "owner",
+                kind="owner",
+                display_name="小夫",
+                qq_id="424225912",
+                aliases=["用户"],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        for i in range(5):
+            save_message_with_speaker(
+                "user",
+                f"user-{i}",
+                self.session_id,
+                source=CHAT,
+                speaker_key="owner",
+                speaker_name="群昵称会变",
+                speaker_qq="424225912",
+            )
+            save_message_with_speaker(
+                "assistant",
+                f"assistant-{i}",
+                self.session_id,
+                source=CHAT,
+                speaker_key="instance",
+                speaker_name="璐璐",
+            )
+
+        raw = """{
+          "summary": "小夫和璐璐完成一轮测试对话。",
+          "familiarity_delta": 0,
+          "user_facts": {},
+          "self_facts": {},
+          "important_events": [],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+
+        with (
+            patch("pupu.agent.get_pupu_name", return_value="璐璐"),
+            patch("pupu.agent.json_task", return_value=raw) as mock_json_task,
+        ):
+            _maybe_batch_review(self.session_id)
+
+        review_input = mock_json_task.call_args.kwargs["user_content"]
+
+        self.assertIn("小夫：user-0 <end>", review_input)
+        self.assertIn("璐璐：assistant-0 <end>", review_input)
+        self.assertNotIn("群昵称会变：", review_input)
+        self.assertNotIn("Current participants", review_input)
+        self.assertNotIn("424225912", review_input)
+        self.assertNotIn("qq:", review_input)
+
+    def test_batch_review_strips_open_group_qq_prefixes(self):
+        payload = (
+            '[{"person_key":"qq:123","display_name":"Alice","qq_id":"123","kind":"qq"},'
+            '{"person_key":"qq:456","display_name":"Bob","qq_id":"456","kind":"qq"}]'
+        )
+        save_message_with_speaker(
+            "user",
+            "[Alice(QQ:123)] hi\n[Bob(QQ:456)] hello",
+            self.session_id,
+            source=CHAT,
+            speaker_key=payload,
+            speaker_name="Bob",
+            speaker_qq="456",
+        )
+        for i in range(9):
+            save_message_with_speaker(
+                "assistant",
+                f"assistant-{i}",
+                self.session_id,
+                source=CHAT,
+                speaker_key="instance",
+                speaker_name="璐璐",
+            )
+
+        raw = """{
+          "summary": "Alice、Bob 和璐璐完成群聊测试。",
+          "familiarity_delta": 0,
+          "user_facts": {},
+          "self_facts": {},
+          "important_events": [],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+
+        with (
+            patch("pupu.agent.get_pupu_name", return_value="璐璐"),
+            patch("pupu.agent.json_task", return_value=raw) as mock_json_task,
+        ):
+            _maybe_batch_review(self.session_id)
+
+        review_input = mock_json_task.call_args.kwargs["user_content"]
+
+        self.assertIn("Alice：hi <end>", review_input)
+        self.assertIn("Bob：hello <end>", review_input)
+        self.assertNotIn("QQ:123", review_input)
+        self.assertNotIn("qq:123", review_input)
 
     def test_batch_review_splits_context_summary_and_identity_memory(self):
         context_id = self.session_id + "_context"

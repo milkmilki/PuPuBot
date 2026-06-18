@@ -17,13 +17,13 @@ from pupu.memory import (
     list_scheduled_tasks,
     reset_session,
 )
+import pupu.tools as tools
 from pupu.tools import (
-    PROACTIVE_TOOL_DEFINITIONS,
-    TOOL_DEFINITIONS,
     describe_tool_servers,
     execute_tool,
     get_chat_tool_definitions,
     is_admin_tool,
+    refresh_tool_definitions,
 )
 from pupu.tooling import refresh_registry
 
@@ -37,15 +37,15 @@ class ToolingRegistryTests(unittest.TestCase):
         reset_session("test_tooling_registry")
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
-        refresh_registry()
+        refresh_tool_definitions()
 
     def tearDown(self):
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
-        refresh_registry()
+        refresh_tool_definitions()
 
     def test_chat_tools_are_namespaced(self):
-        names = {tool["name"] for tool in TOOL_DEFINITIONS}
+        names = {tool["name"] for tool in tools.TOOL_DEFINITIONS}
         self.assertNotIn("mcp__web__search", names)
         self.assertIn("mcp__scheduler__manage_scheduled_task", names)
         self.assertNotIn("web_search", names)
@@ -57,7 +57,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertFalse(is_admin_tool("mcp__scheduler__manage_scheduled_task"))
 
     def test_proactive_tools_are_filtered(self):
-        names = {tool["name"] for tool in PROACTIVE_TOOL_DEFINITIONS}
+        names = {tool["name"] for tool in tools.PROACTIVE_TOOL_DEFINITIONS}
         self.assertEqual(names, set())
 
     def test_legacy_dispatch_still_works(self):
@@ -282,7 +282,7 @@ class ToolingRegistryTests(unittest.TestCase):
         os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(config)
         refresh_registry()
 
-        names = {tool["name"] for tool in TOOL_DEFINITIONS}
+        names = {tool["name"] for tool in tools.TOOL_DEFINITIONS}
         self.assertNotIn("mcp__tavily__tavily_search", names)
         refresh_registry()
         fresh_names = {tool["name"] for tool in get_chat_tool_definitions()}
@@ -311,7 +311,7 @@ class ToolingRegistryTests(unittest.TestCase):
             }
         ]
         os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(config)
-        refresh_registry()
+        refresh_tool_definitions()
 
         execute_tool(
             "mcp__tavily__tavily_search",
@@ -341,7 +341,7 @@ class ToolingRegistryTests(unittest.TestCase):
             }
         ]
         os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(config)
-        refresh_registry()
+        refresh_tool_definitions()
 
         execute_tool(
             "mcp__tavily__tavily_search",

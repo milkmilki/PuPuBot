@@ -51,7 +51,10 @@ def init_db():
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             timestamp TEXT NOT NULL,
-            source TEXT NOT NULL DEFAULT 'chat'
+            source TEXT NOT NULL DEFAULT 'chat',
+            speaker_key TEXT NOT NULL DEFAULT '',
+            speaker_name TEXT NOT NULL DEFAULT '',
+            speaker_qq TEXT NOT NULL DEFAULT ''
         )
     """
     )
@@ -215,6 +218,7 @@ def init_db():
             kind TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active',
             current_step_id INTEGER,
+            origin_person_key TEXT NOT NULL DEFAULT '',
             event_time TEXT,
             time_text TEXT NOT NULL DEFAULT '',
             followup_hint TEXT NOT NULL DEFAULT '',
@@ -262,15 +266,46 @@ def init_db():
         ON event_steps(thread_id, created_at, id)
     """
     )
-    try:
-        from .important_events import ensure_event_thread_fts, rebuild_event_thread_fts
-
-        if ensure_event_thread_fts(conn):
-            rebuild_event_thread_fts(conn)
-    except Exception:
-        # FTS5 is an optional recall acceleration. The event graph still works
-        # through the lexical fallback when SQLite was built without it.
-        pass
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS people (
+            person_key TEXT PRIMARY KEY,
+            kind TEXT NOT NULL DEFAULT '',
+            display_name TEXT NOT NULL DEFAULT '',
+            qq_id TEXT NOT NULL DEFAULT '',
+            aliases TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS event_people (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id INTEGER NOT NULL,
+            step_id INTEGER,
+            person_key TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'participant',
+            source TEXT NOT NULL DEFAULT 'inferred',
+            created_at TEXT NOT NULL,
+            UNIQUE(thread_id, step_id, person_key, role),
+            FOREIGN KEY(thread_id) REFERENCES event_threads(id)
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_event_people_thread
+        ON event_people(thread_id, step_id, person_key)
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_event_people_person
+        ON event_people(person_key, thread_id)
+    """
+    )
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS memu_sync_log (
@@ -298,12 +333,48 @@ def init_db():
         cursor.execute(
             "ALTER TABLE messages ADD COLUMN source TEXT NOT NULL DEFAULT 'chat'"
         )
+    if "speaker_key" not in message_columns:
+        cursor.execute(
+            "ALTER TABLE messages ADD COLUMN speaker_key TEXT NOT NULL DEFAULT ''"
+        )
+    if "speaker_name" not in message_columns:
+        cursor.execute(
+            "ALTER TABLE messages ADD COLUMN speaker_name TEXT NOT NULL DEFAULT ''"
+        )
+    if "speaker_qq" not in message_columns:
+        cursor.execute(
+            "ALTER TABLE messages ADD COLUMN speaker_qq TEXT NOT NULL DEFAULT ''"
+        )
     cursor.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_messages_review
         ON messages(session_id, source, role, id)
     """
     )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_messages_speaker_range
+        ON messages(session_id, id, speaker_key)
+    """
+    )
+
+    event_thread_columns = table_columns(conn, "event_threads")
+    if "origin_person_key" not in event_thread_columns:
+        cursor.execute(
+            "ALTER TABLE event_threads ADD COLUMN origin_person_key TEXT NOT NULL DEFAULT ''"
+        )
+
+    try:
+        from .important_events import ensure_event_thread_fts, rebuild_event_thread_fts
+        from .people import backfill_default_event_people
+
+        backfill_default_event_people(conn)
+        if ensure_event_thread_fts(conn):
+            rebuild_event_thread_fts(conn)
+    except Exception:
+        # FTS5 and event-person backfill are optional accelerators. Core storage
+        # still works if this environment cannot initialize them during startup.
+        pass
 
     seed = get_seed_self_facts()
     if seed:

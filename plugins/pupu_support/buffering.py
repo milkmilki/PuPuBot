@@ -18,6 +18,7 @@ is kept unchanged.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import time
 
@@ -37,7 +38,7 @@ from pupu.config import (
 )
 from pupu.dialogue_loop import cancel_wait_timer, is_followup_eligible, register_sender
 from pupu.familiarity import compute_reply_delay
-from pupu.memory import get_familiarity, save_message
+from pupu.memory import get_familiarity, save_message, save_message_with_speaker
 
 from . import state
 from .common import (
@@ -298,7 +299,15 @@ async def act_as_selected_speaker(sid: str) -> None:
     try:
         log("recv", buf.get("session_label") or "", buf.get("nickname") or "", combined_text or "[图片]")
         if combined_text:
-            save_message("user", combined_text, sid)
+            speaker_payload = json.dumps(buf.get("speakers") or [], ensure_ascii=False)
+            save_message_with_speaker(
+                "user",
+                combined_text,
+                sid,
+                speaker_key=speaker_payload,
+                speaker_name=str(buf.get("speaker_name") or buf.get("nickname") or ""),
+                speaker_qq=str(buf.get("speaker_user_id") or ""),
+            )
 
         score = get_familiarity(identity_session)
         delay, replacement = compute_reply_delay(score)
@@ -323,6 +332,7 @@ async def act_as_selected_speaker(sid: str) -> None:
             state.session_phase[sid] = "processing"
 
         speed_hint = compute_reply_speed_hint(sid)
+        speaker_payload = json.dumps(buf.get("speakers") or [], ensure_ascii=False)
         reply = await asyncio.to_thread(
             chat,
             combined_text,
@@ -333,6 +343,9 @@ async def act_as_selected_speaker(sid: str) -> None:
             context_session=sid,
             identity_session=identity_session,
             persist_user=False,
+            speaker_key=speaker_payload,
+            speaker_name=str(buf.get("speaker_name") or buf.get("nickname") or ""),
+            speaker_qq=str(buf.get("speaker_user_id") or ""),
         )
         log("send", buf.get("session_label") or "", buf.get("nickname") or "", reply)
         segments = split_message(reply)
@@ -372,6 +385,7 @@ async def buffer_message(
     is_open_group: bool = False,
     group_id: str | None = None,
     message_id: str | None = None,
+    speaker_key: str | None = None,
     speaker_user_id: str | None = None,
     speaker_name: str | None = None,
     speaker_is_bot: bool = False,
@@ -394,6 +408,8 @@ async def buffer_message(
             "is_open_group": is_open_group,
             "group_id": group_id,
             "last_message_id": message_id,
+            "speakers": [],
+            "speaker_key": speaker_key,
             "speaker_user_id": speaker_user_id,
             "speaker_name": speaker_name,
             "speaker_is_bot": speaker_is_bot,
@@ -428,6 +444,28 @@ async def buffer_message(
         buf["speaker_user_id"] = speaker_user_id
     if speaker_name is not None:
         buf["speaker_name"] = speaker_name
+    if speaker_key is not None:
+        buf["speaker_key"] = speaker_key
+    if speaker_key or speaker_user_id or speaker_name:
+        speaker = {
+            "person_key": str(speaker_key or "").strip(),
+            "display_name": str(speaker_name or speaker_user_id or "").strip(),
+            "qq_id": str(speaker_user_id or "").strip(),
+            "kind": "qq" if speaker_user_id else "user",
+        }
+        speakers = buf.setdefault("speakers", [])
+        signature = (speaker["person_key"], speaker["qq_id"], speaker["display_name"])
+        if not any(
+            (
+                str(item.get("person_key") or ""),
+                str(item.get("qq_id") or ""),
+                str(item.get("display_name") or ""),
+            )
+            == signature
+            for item in speakers
+            if isinstance(item, dict)
+        ):
+            speakers.append(speaker)
     buf["speaker_is_bot"] = bool(speaker_is_bot)
     if reply_prefix is not None:
         buf["reply_prefix"] = reply_prefix
@@ -545,6 +583,7 @@ async def debounce_flush(sid: str):
     try:
         log("recv", buf["session_label"], buf["nickname"], combined_text or "[图片]")
         speed_hint = compute_reply_speed_hint(sid)
+        speaker_payload = json.dumps(buf.get("speakers") or [], ensure_ascii=False)
         reply = await asyncio.to_thread(
             chat,
             combined_text,
@@ -555,6 +594,9 @@ async def debounce_flush(sid: str):
             context_session=sid,
             identity_session=str(buf.get("identity_session") or sid),
             persist_user=True,
+            speaker_key=speaker_payload,
+            speaker_name=str(buf.get("speaker_name") or buf.get("nickname") or ""),
+            speaker_qq=str(buf.get("speaker_user_id") or ""),
         )
         log("send", buf["session_label"], buf["nickname"], reply)
         segments = split_message(reply)

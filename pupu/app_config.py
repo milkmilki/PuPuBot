@@ -326,6 +326,17 @@ def default_owner_ids(config: dict[str, Any] | None = None) -> list[str]:
     return _as_string_list(_lookup(cfg, "user.owner_ids"))
 
 
+def default_private_allowed_ids(config: dict[str, Any] | None = None) -> list[str]:
+    cfg = config if config is not None else load_app_config()
+    return _as_string_list(_lookup(cfg, "user.private_allowed_ids"))
+
+
+def default_private_reply_mode(config: dict[str, Any] | None = None) -> str:
+    cfg = config if config is not None else load_app_config()
+    mode = str(_lookup(cfg, "user.private_reply_mode") or "owner_only").strip().lower()
+    return mode if mode in {"owner_only", "allowlist", "all"} else "owner_only"
+
+
 def default_napcat_settings(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config if config is not None else load_app_config()
     return {
@@ -348,6 +359,8 @@ def default_instance_settings(config: dict[str, Any] | None = None) -> dict[str,
         "qq_app_id": str(_lookup(cfg, "instance.qq_app_id") or "").strip(),
         "qq_app_secret": str(_lookup(cfg, "instance.qq_app_secret") or "").strip(),
         "owner_ids": default_owner_ids(cfg),
+        "private_reply_mode": default_private_reply_mode(cfg),
+        "private_allowed_ids": default_private_allowed_ids(cfg),
         "port": napcat["port"],
         "arbiter_url": f"http://{arbiter_host}:{arbiter_port}/api/group_arbitrate",
         "arbiter_base_url": f"http://{arbiter_host}:{arbiter_port}",

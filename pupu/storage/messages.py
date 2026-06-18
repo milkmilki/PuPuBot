@@ -20,15 +20,49 @@ def save_message(
     source: str = CHAT,
     *,
     context_session: str | None = None,
-):
+) -> int:
+    return save_message_with_speaker(
+        role,
+        content,
+        session_id,
+        source,
+        context_session=context_session,
+    )
+
+
+def save_message_with_speaker(
+    role: str,
+    content: str,
+    session_id: str = "default",
+    source: str = CHAT,
+    *,
+    context_session: str | None = None,
+    speaker_key: str = "",
+    speaker_name: str = "",
+    speaker_qq: str = "",
+) -> int:
     session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
-    conn.execute(
-        "INSERT INTO messages (session_id, role, content, timestamp, source) VALUES (?, ?, ?, ?, ?)",
-        (session_id, role, content, datetime.now().isoformat(), source),
+    cursor = conn.execute(
+        """INSERT INTO messages (
+               session_id, role, content, timestamp, source,
+               speaker_key, speaker_name, speaker_qq
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            session_id,
+            role,
+            content,
+            datetime.now().isoformat(),
+            source,
+            str(speaker_key or ""),
+            str(speaker_name or ""),
+            str(speaker_qq or ""),
+        ),
     )
+    row_id = int(cursor.lastrowid)
     conn.commit()
     conn.close()
+    return row_id
 
 
 def get_recent_messages(
@@ -57,11 +91,14 @@ def get_messages_in_range(
     session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, role, content FROM messages WHERE session_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
+        """SELECT id, role, content, speaker_key, speaker_name, speaker_qq
+           FROM messages
+           WHERE session_id = ? AND id > ?
+           ORDER BY id ASC LIMIT ?""",
         (session_id, after_id, limit),
     ).fetchall()
     conn.close()
-    return [{"id": row["id"], "role": row["role"], "content": row["content"]} for row in rows]
+    return [dict(row) for row in rows]
 
 
 def count_pending_review_turns(
@@ -117,7 +154,7 @@ def get_review_candidate_batch(
 
     end_msg_id = message_rows[-1]["id"]
     rows = conn.execute(
-        """SELECT id, role, content, source
+        """SELECT id, role, content, source, speaker_key, speaker_name, speaker_qq
            FROM messages
            WHERE session_id = ?
              AND source = ?

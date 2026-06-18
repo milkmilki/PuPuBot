@@ -77,6 +77,10 @@ user:
   # Your QQ number(s). Leave empty for CLI-only testing.
   owner_ids:
     - ""
+  # owner_only | allowlist | all
+  private_reply_mode: owner_only
+  # Extra QQ numbers allowed to chat when private_reply_mode is allowlist.
+  private_allowed_ids: []
 
 instance:
   display_name: 仆仆

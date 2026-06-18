@@ -60,6 +60,19 @@ def _scrub_deprecated_instance_keys(cfg: dict[str, Any]) -> None:
 
 def _normalize_instance_config(cfg: dict[str, Any]) -> None:
     _scrub_deprecated_instance_keys(cfg)
+    cfg.setdefault("private_reply_mode", "owner_only")
+    mode = str(cfg.get("private_reply_mode") or "owner_only").strip().lower()
+    cfg["private_reply_mode"] = mode if mode in {"owner_only", "allowlist", "all"} else "owner_only"
+
+    cfg.setdefault("private_allowed_ids", [])
+    if not isinstance(cfg["private_allowed_ids"], list):
+        cfg["private_allowed_ids"] = []
+    cfg["private_allowed_ids"] = [
+        str(value).strip()
+        for value in cfg["private_allowed_ids"]
+        if str(value).strip()
+    ]
+
     cfg.setdefault("open_groups", [])
     if not isinstance(cfg["open_groups"], list):
         cfg["open_groups"] = []
@@ -199,6 +212,8 @@ def create_instance(
         "qq_app_id": defaults["qq_app_id"],
         "qq_app_secret": defaults["qq_app_secret"],
         "owner_ids": default_owner_ids(),
+        "private_reply_mode": defaults.get("private_reply_mode", "owner_only"),
+        "private_allowed_ids": list(defaults.get("private_allowed_ids") or []),
         "open_groups": [],
         "bot_id": instance_id,
         "arbiter_url": defaults.get("arbiter_url") or DEFAULT_ARBITER_URL,
