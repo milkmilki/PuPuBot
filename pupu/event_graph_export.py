@@ -823,7 +823,6 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       state.physicsRunning = false;
     }
     function factsSpringLength(edge) {
-      if (edge.type === "relationship_fact") return 230;
       if (edge.type === "fact_subject" || edge.type === "fact_object") return 125;
       if (edge.type === "person_fact") return 145;
       return 150;
@@ -836,12 +835,11 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       const nodes = state.visibleNodes;
       const visibleIds = new Set(nodes.map((node) => node.id));
       const forces = new Map(nodes.map((node) => [node.id, { x: 0, y: 0 }]));
-      const centerX = nodes.reduce((sum, node) => sum + node.x, 0) / Math.max(1, nodes.length);
-      const centerY = nodes.reduce((sum, node) => sum + node.y, 0) / Math.max(1, nodes.length);
+      const factNodes = nodes.filter((node) => node.type === "fact");
 
-      for (let i = 0; i < nodes.length; i += 1) {
-        for (let j = i + 1; j < nodes.length; j += 1) {
-          const a = nodes[i], b = nodes[j];
+      for (let i = 0; i < factNodes.length; i += 1) {
+        for (let j = i + 1; j < factNodes.length; j += 1) {
+          const a = factNodes[i], b = factNodes[j];
           let dx = b.x - a.x;
           let dy = b.y - a.y;
           let distSq = dx * dx + dy * dy;
@@ -851,7 +849,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
             distSq = dx * dx + dy * dy;
           }
           const dist = Math.sqrt(distSq);
-          const strength = (a.type === "person" && b.type === "person") ? 2800 : 1900;
+          const strength = 1600;
           const force = Math.min(2.8, strength / distSq);
           const fx = (dx / dist) * force;
           const fy = (dy / dist) * force;
@@ -863,22 +861,29 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       }
 
       for (const edge of state.visibleEdges) {
+        if (!["person_fact", "fact_subject", "fact_object"].includes(edge.type || "")) continue;
         if (!visibleIds.has(edge.source) || !visibleIds.has(edge.target)) continue;
         const source = byNodeId.get(edge.source);
         const target = byNodeId.get(edge.target);
         if (!source || !target) continue;
+        const factNode = source.type === "fact" ? source : target.type === "fact" ? target : null;
+        const parentNode = source.type === "person" ? source : target.type === "person" ? target : null;
+        if (!factNode || !parentNode) continue;
         const dx = target.x - source.x;
         const dy = target.y - source.y;
         const dist = Math.hypot(dx, dy) || 1;
         const targetLen = factsSpringLength(edge);
-        const spring = edge.type === "relationship_fact" ? 0.015 : 0.035;
+        const spring = 0.04;
         const force = (dist - targetLen) * spring;
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
-        forces.get(source.id).x += fx;
-        forces.get(source.id).y += fy;
-        forces.get(target.id).x -= fx;
-        forces.get(target.id).y -= fy;
+        if (factNode === source) {
+          forces.get(factNode.id).x += fx;
+          forces.get(factNode.id).y += fy;
+        } else {
+          forces.get(factNode.id).x -= fx;
+          forces.get(factNode.id).y -= fy;
+        }
       }
 
       let maxVelocity = 0;
@@ -890,9 +895,12 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
           node.vy = 0;
           continue;
         }
+        if (node.type === "person") {
+          node.vx = 0;
+          node.vy = 0;
+          continue;
+        }
         const force = forces.get(node.id) || { x: 0, y: 0 };
-        force.x += (centerX - node.x) * 0.004;
-        force.y += (centerY - node.y) * 0.004;
         node.vx = (node.vx + force.x) * 0.84;
         node.vy = (node.vy + force.y) * 0.84;
         node.x += node.vx;
