@@ -11,6 +11,7 @@ from nonebot.adapters import Event
 
 from pupu.config import load_owner_id_set
 from pupu.memory import get_last_user_message_time
+from pupu.storage.people import OWNER_PERSON_KEY, qq_person_key, qqofficial_person_key
 from pupu.tts import synthesize_reply_to_file
 
 from . import state
@@ -36,6 +37,14 @@ def is_admin(user_id) -> bool:
 
 def identity_session_for_user(user_id) -> str:
     return state.OWNER_SESSION if is_owner(user_id) else f"private_{user_id}"
+
+
+def person_key_for_onebot_user(user_id) -> str:
+    return OWNER_PERSON_KEY if is_owner(user_id) else qq_person_key(user_id)
+
+
+def person_key_for_qq_official_user(user_id) -> str:
+    return OWNER_PERSON_KEY if is_owner(user_id) else qqofficial_person_key(user_id)
 
 
 def compute_reply_speed_hint(session_id: str) -> str | None:

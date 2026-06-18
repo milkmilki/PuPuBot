@@ -19,8 +19,9 @@ class AppConfigTests(unittest.TestCase):
                 "PUPU_CONSOLE_PORT",
                 "PUPU_ARBITER_DEBOUNCE_IDLE_SEC",
                 "PUPU_MEMU_ENABLED",
-                "PUPU_WEB_SEARCH_FALLBACKS",
                 "PUPU_TTS_ENABLED",
+                "PUPU_CODEX_MCP_SERVERS_JSON",
+                "PUPU_MCP_SERVERS_JSON",
             )
         }
 
@@ -53,10 +54,21 @@ arbiter:
   debounce_idle_seconds: 12
 memu:
   enabled: false
-web_search:
-  fallbacks: tavily,ddg_html
 tts:
   enabled: true
+mcp:
+  servers:
+    brave-search:
+      enabled: true
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-brave-search"]
+      exposures: ["chat", "proactive"]
+      timeout: 30
+      env:
+        BRAVE_API_KEY: test-brave-key
+    disabled-demo:
+      enabled: false
+      command: npx
 """
         )
         from pupu import app_config
@@ -70,8 +82,16 @@ tts:
         self.assertEqual(os.environ["PUPU_CONSOLE_PORT"], "8999")
         self.assertEqual(os.environ["PUPU_ARBITER_DEBOUNCE_IDLE_SEC"], "12")
         self.assertEqual(os.environ["PUPU_MEMU_ENABLED"], "false")
-        self.assertEqual(os.environ["PUPU_WEB_SEARCH_FALLBACKS"], "tavily,ddg_html")
         self.assertEqual(os.environ["PUPU_TTS_ENABLED"], "true")
+        self.assertIn("brave-search", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])
+        self.assertIn("test-brave-key", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])
+        self.assertNotIn("disabled-demo", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])
+        self.assertEqual(
+            os.environ["PUPU_MCP_SERVERS_JSON"],
+            os.environ["PUPU_CODEX_MCP_SERVERS_JSON"],
+        )
+        self.assertIn('"exposures": ["chat", "proactive"]', os.environ["PUPU_MCP_SERVERS_JSON"])
+        self.assertIn('"timeout": "30"', os.environ["PUPU_MCP_SERVERS_JSON"])
 
     def test_ensure_app_config_file_creates_from_template_without_overwriting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

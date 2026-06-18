@@ -82,6 +82,7 @@ def _format_event_meta(event: dict) -> str:
     time_text = _compact(event.get("time_text"))
     source_event_key = _compact(event.get("source_event_key"))
     status = _compact(event.get("status"))
+    people_label = _compact(event.get("people_label"))
     linked_task_id = event.get("linked_task_id")
     try:
         confidence = float(event.get("confidence") or 0.0)
@@ -99,6 +100,8 @@ def _format_event_meta(event: dict) -> str:
         meta_parts.append(f"task={linked_task_id}")
     if source_event_key:
         meta_parts.append(f"key={source_event_key}")
+    if people_label:
+        meta_parts.append(f"people={people_label}")
     return " | ".join(meta_parts)
 
 
@@ -189,9 +192,13 @@ def format_event_thread_search_report(session_id: str, query: str, limit: int = 
                 f"status_bonus={float(detail.get('status_bonus') or 0.0):.3f} "
                 f"recent_bonus={float(detail.get('recent_bonus') or 0.0):.3f} "
                 f"confidence_bonus={float(detail.get('confidence_bonus') or 0.0):.3f} "
+                f"people_bonus={float(detail.get('people_bonus') or 0.0):.3f} "
                 f"fts_attempted={bool(detail.get('fts_attempted'))} "
                 f"used_fts={bool(detail.get('used_fts_candidate'))}"
             )
+            matched_people = detail.get("matched_people") or []
+            if matched_people:
+                lines.append(f"   debug_people: {', '.join(str(item) for item in matched_people)}")
             if tokens:
                 lines.append(f"   debug_tokens: {', '.join(str(token) for token in tokens[:12])}")
     return "\n".join(lines)

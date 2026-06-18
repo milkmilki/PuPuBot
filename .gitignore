@@ -1,5 +1,6 @@
 ForFun/
 .venv/
+local/
 .cursor/
 .claude/
 __pycache__/

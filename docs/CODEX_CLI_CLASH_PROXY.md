@@ -82,6 +82,79 @@ ok
 .\.venv\Scripts\python.exe -m unittest tests.test_llm_providers
 ```
 
+## 接入社区 MCP Server
+
+PuPu 会自动把内置工具作为 `pupu` MCP server 挂载给 Codex CLI。额外的社区 MCP server 可以写在 `pupu.yaml` 的 `mcp.servers` 下，重启 PuPu 后生效。
+
+这些外部 MCP server 会同时用于两条路径：
+
+- `codex_cli` provider：作为真正的 Codex MCP server 挂载。
+- DeepSeek/Anthropic 等 provider：PuPu 会用内置 stdio MCP client 把外部工具注册进自己的工具列表。
+
+### Tavily 搜索
+
+[Tavily MCP](https://github.com/tavily-ai/tavily-mcp) 提供 `tavily_search`、`tavily_extract`、`tavily_crawl`、`tavily_map`、`tavily_research` 等工具。它需要 `TAVILY_API_KEY`，但仍然是外部 MCP server，不是 PuPu 内置功能。
+
+Windows 推荐配置：
+
+```yaml
+mcp:
+  servers:
+    tavily:
+      enabled: true
+      command: cmd
+      args: ["/c", "npx", "-y", "tavily-mcp@latest"]
+      exposures: ["chat", "proactive"]
+      timeout: 30
+      env:
+        TAVILY_API_KEY: "你的 Tavily API key"
+        DEFAULT_PARAMETERS: '{"search_depth":"basic","max_results":5}'
+```
+
+macOS/Linux 可改成：
+
+```yaml
+mcp:
+  servers:
+    tavily:
+      enabled: true
+      command: npx
+      args: ["-y", "tavily-mcp@latest"]
+      exposures: ["chat", "proactive"]
+      timeout: 30
+      env:
+        TAVILY_API_KEY: "你的 Tavily API key"
+        DEFAULT_PARAMETERS: '{"search_depth":"basic","max_results":5}'
+```
+
+接入成功后，PuPu 工具列表里会出现类似：
+
+```text
+mcp__tavily__tavily_search
+mcp__tavily__tavily_extract
+mcp__tavily__tavily_research
+```
+
+### 其他社区 MCP
+
+```yaml
+mcp:
+  servers:
+    brave-search:
+      enabled: true
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-brave-search"]
+      env:
+        BRAVE_API_KEY: "你的 key"
+```
+
+规则：
+
+- 外部 server 名不要叫 `pupu`，这个名字保留给 PuPu 内置 MCP。
+- 支持 `command`、`args`、`env`、`cwd`、`enabled`、`timeout`、`exposures`。
+- `enabled: false` 的 server 不会挂载。
+- `exposures` 可以填 `["chat"]` 或 `["chat", "proactive"]`，控制聊天和主动消息是否可见。
+
 ## 查看实际走哪个节点
 
 PuPu 不选择 Clash 节点。实际节点由 Clash 决定。

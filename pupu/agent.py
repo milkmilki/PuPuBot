@@ -29,8 +29,10 @@ from .memory import (
     get_user_facts,
     list_scheduled_tasks,
     list_pending_review_sessions,
+    list_people_for_message_range,
     record_memu_sync,
     save_message,
+    save_message_with_speaker,
     save_summary,
     update_familiarity,
     upsert_self_facts,
@@ -49,7 +51,7 @@ from .review_followups import (
     save_review_event_updates,
     save_review_important_events,
 )
-from .tools import TOOL_DEFINITIONS, execute_tool, is_admin_tool
+from .tools import execute_tool, get_chat_tool_definitions, is_admin_tool
 
 REVIEW_INTERVAL = 10
 REVIEW_SOURCE = CHAT
@@ -243,8 +245,18 @@ def _format_active_scheduled_tasks_for_review(
     return "\n".join(lines)
 
 
-def _format_event_thread_candidates_for_review(identity_session: str, text: str) -> str:
-    candidates = find_related_event_threads(identity_session, text, limit=6)
+def _format_event_thread_candidates_for_review(
+    identity_session: str,
+    text: str,
+    *,
+    person_keys: set[str] | None = None,
+) -> str:
+    candidates = find_related_event_threads(
+        identity_session,
+        text,
+        limit=6,
+        person_keys=person_keys,
+    )
     if not candidates:
         return "候选事件线：无"
     lines = ["候选事件线（优先把新进展归并到这些 thread_key；确实无关才 create_thread）："]
@@ -254,8 +266,11 @@ def _format_event_thread_candidates_for_review(identity_session: str, text: str)
         status = str(item.get("status") or "active")
         current = str(item.get("current_summary") or item.get("details") or "")
         hint = str(item.get("followup_hint") or item.get("merge_hint") or "")
+        people_label = str(item.get("people_label") or "")
         score = float(item.get("score") or 0.0)
         line = f"- thread_key={key} | score={score:.2f} | status={status} | title={title}"
+        if people_label:
+            line += f" | people={_compact_review_field(people_label, 80)}"
         if current:
             line += f" | current={_compact_review_field(current, 120)}"
         if hint:
@@ -273,6 +288,170 @@ def _format_event_thread_candidates_for_review(identity_session: str, text: str)
             if reflection:
                 step_line += f" | reflection={reflection}"
             lines.append(step_line)
+    return "\n".join(lines)
+
+
+def _sanitize_review_speaker_name(value: object, fallback: str) -> str:
+    text = str(value or "").replace("<end>", "").strip()
+    text = re.sub(r"\s+", " ", text).strip("：:")
+    if not text:
+        return fallback
+    lowered = text.lower()
+    if lowered.startswith("qq:") or lowered.startswith("qqofficial:"):
+        return fallback
+    return text[:32]
+
+
+def _known_review_people_map(people: list[dict]) -> dict[str, str]:
+    known: dict[str, str] = {}
+    for person in people or []:
+        if not isinstance(person, dict):
+            continue
+        key = str(person.get("person_key") or "").strip()
+        name = _sanitize_review_speaker_name(person.get("display_name"), "")
+        if key and name:
+            known[key] = name
+    return known
+
+
+def _speaker_payload_from_message(item: dict) -> list[dict]:
+    raw = str(item.get("speaker_key") or "").strip()
+    if not raw.startswith("["):
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    return [entry for entry in parsed if isinstance(entry, dict)] if isinstance(parsed, list) else []
+
+
+def _review_name_for_person(
+    person: dict,
+    known_names: dict[str, str],
+    *,
+    fallback: str = "用户",
+) -> str:
+    key = str(person.get("person_key") or "").strip()
+    if key and known_names.get(key):
+        return known_names[key]
+    return _sanitize_review_speaker_name(person.get("display_name"), fallback)
+
+
+def _review_name_for_prefixed_qq(
+    qq_id: str,
+    raw_name: str,
+    payload: list[dict],
+    known_names: dict[str, str],
+) -> str:
+    qq = str(qq_id or "").strip()
+    if not qq:
+        return ""
+    for speaker in payload:
+        if str(speaker.get("qq_id") or "").strip() != qq:
+            continue
+        key = str(speaker.get("person_key") or "").strip()
+        if key and known_names.get(key):
+            return known_names[key]
+        qq_key = f"qq:{qq}"
+        if known_names.get(qq_key):
+            return known_names[qq_key]
+        return _sanitize_review_speaker_name(
+            speaker.get("display_name") or raw_name,
+            "用户",
+        )
+    return ""
+
+
+def _review_speaker_name_for_message(
+    item: dict,
+    known_names: dict[str, str],
+    character_name: str,
+) -> str:
+    role = str(item.get("role") or "")
+    if role == "assistant":
+        row_name = _sanitize_review_speaker_name(item.get("speaker_name"), "")
+        if row_name:
+            return row_name
+        known_instance = known_names.get("instance") or ""
+        if known_instance and known_instance != "实例":
+            return known_instance
+        return character_name
+
+    payload = _speaker_payload_from_message(item)
+    if payload:
+        names: list[str] = []
+        for speaker in payload:
+            name = _review_name_for_person(speaker, known_names)
+            if name and name not in names:
+                names.append(name)
+        if names:
+            label = " / ".join(names[:3])
+            if len(names) > 3:
+                label += " 等"
+            return label
+
+    key = str(item.get("speaker_key") or "").strip()
+    if key and known_names.get(key):
+        return known_names[key]
+    if not key and known_names.get("owner"):
+        return known_names["owner"]
+    return _sanitize_review_speaker_name(item.get("speaker_name"), "用户")
+
+
+def _format_prefixed_group_review_lines(
+    content: str,
+    payload: list[dict],
+    known_names: dict[str, str],
+) -> list[str]:
+    if not payload or "QQ:" not in content:
+        return []
+
+    lines: list[str] = []
+    current_speaker = ""
+    prefix_re = re.compile(r"^\s*\[(?:bot\s+)?(?P<name>.+?)\(QQ:(?P<qq>\d+)\)\]\s*(?P<text>.*)$")
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = prefix_re.match(line)
+        if match:
+            speaker = _review_name_for_prefixed_qq(
+                match.group("qq"),
+                match.group("name"),
+                payload,
+                known_names,
+            )
+            if speaker:
+                current_speaker = speaker
+                text = match.group("text").replace("<end>", "[end]").strip()
+                if text:
+                    lines.append(f"{speaker}：{text} <end>")
+                continue
+        if current_speaker:
+            lines.append(f"{current_speaker}：{line.replace('<end>', '[end]')} <end>")
+
+    return lines
+
+
+def _format_review_conversation_transcript(
+    batch: list[dict],
+    *,
+    character_name: str,
+    people: list[dict],
+) -> str:
+    known_names = _known_review_people_map(people)
+    lines: list[str] = []
+    for item in batch:
+        content = str(item.get("content") or "").replace("<end>", "[end]").strip()
+        if not content:
+            continue
+        payload = _speaker_payload_from_message(item)
+        prefixed_lines = _format_prefixed_group_review_lines(content, payload, known_names)
+        if prefixed_lines:
+            lines.extend(prefixed_lines)
+            continue
+        speaker = _review_speaker_name_for_message(item, known_names, character_name)
+        lines.append(f"{speaker}：{content} <end>")
     return "\n".join(lines)
 
 
@@ -351,6 +530,9 @@ def chat(
     context_session: str | None = None,
     identity_session: str | None = None,
     persist_user: bool = True,
+    speaker_key: str = "",
+    speaker_name: str = "",
+    speaker_qq: str = "",
 ) -> str:
     """Process one turn of conversation. Returns the assistant's text reply."""
     from .dialogue_loop import cancel_wait_timer, schedule_wait_timer
@@ -369,7 +551,15 @@ def chat(
     display_text = f"[t:{_format_turn_timestamp()}] {display_text}"
 
     if persist_user:
-        save_message("user", display_text, context_session, source=message_source)
+        save_message_with_speaker(
+            "user",
+            display_text,
+            context_session,
+            source=message_source,
+            speaker_key=speaker_key,
+            speaker_name=speaker_name,
+            speaker_qq=speaker_qq,
+        )
 
     history = get_recent_messages(CHAT_HISTORY_LIMIT, context_session)
     score = get_familiarity(identity_session)
@@ -420,7 +610,7 @@ def chat(
         system=system_prompt + DIALOGUE_OUTPUT_PROTOCOL,
         messages=messages,
         max_tokens=10000,
-        tools=TOOL_DEFINITIONS,
+        tools=get_chat_tool_definitions(),
         tool_handler=_tool_handler,
         session_id=context_session,
         image_urls=image_urls,
@@ -434,7 +624,14 @@ def chat(
         f"source={message_source} should_wait={should_wait}"
     )
 
-    save_message("assistant", final_text, context_session, source=message_source)
+    save_message_with_speaker(
+        "assistant",
+        final_text,
+        context_session,
+        source=message_source,
+        speaker_key="instance",
+        speaker_name=get_pupu_name(),
+    )
 
     if should_wait:
         schedule_wait_timer(context_session)
@@ -529,13 +726,25 @@ def _maybe_batch_review_unlocked(
 
         active_tasks_text = _format_active_scheduled_tasks_for_review(context_session)
         character_name = get_pupu_name()
-        conversation_text = "\n".join(
-            f"{'用户' if item['role'] == 'user' else character_name}: {item['content']}"
-            for item in batch
+        batch_people = list_people_for_message_range(
+            context_session,
+            batch[0]["id"],
+            batch[-1]["id"],
+        )
+        batch_person_keys = {
+            str(person.get("person_key") or "")
+            for person in batch_people
+            if str(person.get("person_key") or "").strip()
+        }
+        conversation_text = _format_review_conversation_transcript(
+            batch,
+            character_name=character_name,
+            people=batch_people,
         )
         event_candidates_text = _format_event_thread_candidates_for_review(
             identity_session,
             conversation_text,
+            person_keys=batch_person_keys,
         )
         conversation_text = (
             f"Current local time: {datetime.now().isoformat(timespec='seconds')}\n\n"
@@ -645,13 +854,25 @@ def _maybe_batch_review_unlocked(
         legacy_important_events = result.get("important_events", [])
         saved_event_rows = {}
         if event_updates:
-            saved_event_rows = save_review_event_updates(identity_session, event_updates)
+            saved_event_rows = save_review_event_updates(
+                identity_session,
+                event_updates,
+                context_session=context_session,
+                source_msg_start_id=batch[0]["id"],
+                source_msg_end_id=batch[-1]["id"],
+            )
             print(
                 "[pupu] batch review event_updates saved: "
                 f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"
             )
         elif legacy_important_events:
-            saved_event_rows = save_review_important_events(identity_session, legacy_important_events)
+            saved_event_rows = save_review_important_events(
+                identity_session,
+                legacy_important_events,
+                context_session=context_session,
+                source_msg_start_id=batch[0]["id"],
+                source_msg_end_id=batch[-1]["id"],
+            )
             print(
                 "[pupu] batch review important_events saved: "
                 f"count={len(saved_event_rows)}, keys={list(saved_event_rows.keys())[:6]}"

@@ -396,7 +396,8 @@ class CodexCliProvider:
         tool_handler: ToolHandler | None = None,
         **_: object,
     ) -> str:
-        if tools and tool_handler and os.environ.get("PUPU_CODEX_TOOL_MODE", "bridge") == "bridge":
+        tool_mode = os.environ.get("PUPU_CODEX_TOOL_MODE", "mcp").strip().lower()
+        if tools and tool_handler and tool_mode == "bridge":
             return self._chat_with_tool_bridge(
                 system=system,
                 messages=messages,
@@ -618,7 +619,8 @@ class CodexCliProvider:
         if tool_lines:
             tool_section = (
                 "\n\n## PuPu MCP tools\n"
-                "这些工具由本地 PuPu MCP server 提供。需要工具时，先通过 Codex 的工具发现/搜索能力找到 PuPu MCP 工具，再调用对应工具；不要假装已经调用。\n"
+                "这些工具由本地 PuPu MCP server 提供。需要工具时，必须通过 Codex MCP 工具调用完成；不要用文字、JSON 或代码块模拟工具调用。\n"
+                "工具调用过程和工具结果只供你内部使用；最终回复里不要出现工具名、工具参数、工具 JSON、调用日志或“我调用了工具”这类过程说明。\n"
                 + "\n".join(tool_lines)
             )
 
@@ -629,7 +631,7 @@ class CodexCliProvider:
             + tool_section
             + "\n\n## 回复要求\n"
             "- 直接输出仆仆接下来要发给用户的话。\n"
-            "- 不要解释你的推理，不要输出工具调用过程，不要加前缀。\n"
+            "- 不要解释你的推理，不要输出工具调用过程，不要输出 JSON，不要加前缀。\n"
             "- 如果需要搜索、定时任务、文件或系统能力，优先使用已接入的 PuPu MCP 工具。\n"
             f"- 回复长度上限约 {max_tokens} tokens。"
         )
@@ -744,22 +746,98 @@ class CodexCliProvider:
         is_admin: bool,
         tool_exposure: str,
     ) -> list[str]:
-        env = {
-            "PUPU_MCP_SESSION_ID": session_id,
-            "PUPU_MCP_IS_ADMIN": "1" if is_admin else "0",
-            "PUPU_MCP_IMAGE_URLS": json.dumps(image_urls, ensure_ascii=False),
-            "PUPU_MCP_EXPOSURE": tool_exposure,
-            "PYTHONPATH": str(self.workspace_root),
-        }
+        args: list[str] = []
+        args.extend(
+            self._mcp_server_config_args(
+                "pupu",
+                command=self.python_executable,
+                server_args=["-m", "pupu.codex_mcp_server"],
+                env={
+                    "PUPU_MCP_SESSION_ID": session_id,
+                    "PUPU_MCP_IS_ADMIN": "1" if is_admin else "0",
+                    "PUPU_MCP_IMAGE_URLS": json.dumps(image_urls, ensure_ascii=False),
+                    "PUPU_MCP_EXPOSURE": tool_exposure,
+                    "PYTHONPATH": str(self.workspace_root),
+                },
+            )
+        )
+        for server in _external_mcp_servers_from_env():
+            name = str(server.get("name") or "").strip()
+            if not name or name == "pupu":
+                continue
+            args.extend(
+                self._mcp_server_config_args(
+                    name,
+                    command=str(server.get("command") or ""),
+                    server_args=[
+                        str(item)
+                        for item in server.get("args", [])
+                        if str(item).strip()
+                    ],
+                    env={
+                        str(key): str(value)
+                        for key, value in (server.get("env") or {}).items()
+                        if str(key).strip() and str(value).strip()
+                    },
+                    cwd=str(server.get("cwd") or "").strip() or None,
+                )
+            )
+        return args
+
+    def _mcp_server_config_args(
+        self,
+        name: str,
+        *,
+        command: str,
+        server_args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | None = None,
+    ) -> list[str]:
+        safe_name = _mcp_server_name(name)
         args = [
             "-c",
-            f"mcp_servers.pupu.command={_toml_string(self.python_executable)}",
-            "-c",
-            'mcp_servers.pupu.args=["-m","pupu.codex_mcp_server"]',
+            f"mcp_servers.{safe_name}.command={_toml_string(command)}",
         ]
-        for key, value in env.items():
-            args.extend(["-c", f"mcp_servers.pupu.env.{key}={_toml_string(value)}"])
+        if server_args:
+            args.extend(
+                [
+                    "-c",
+                    f"mcp_servers.{safe_name}.args={_toml_array(server_args)}",
+                ]
+            )
+        if cwd:
+            args.extend(["-c", f"mcp_servers.{safe_name}.cwd={_toml_string(cwd)}"])
+        for key, value in (env or {}).items():
+            args.extend(
+                [
+                    "-c",
+                    f"mcp_servers.{safe_name}.env.{key}={_toml_string(value)}",
+                ]
+            )
         return args
+
+
+def _external_mcp_servers_from_env() -> list[dict]:
+    raw = os.environ.get("PUPU_CODEX_MCP_SERVERS_JSON", "").strip()
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except Exception:
+        return []
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _mcp_server_name(name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", str(name or "").strip())
+    safe = safe.strip("_-")
+    return safe or "server"
+
+
+def _toml_array(values: list[str]) -> str:
+    return "[" + ",".join(_toml_string(str(value)) for value in values) + "]"
 
 
 def _env_int(name: str, default: int) -> int:

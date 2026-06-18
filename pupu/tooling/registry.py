@@ -7,6 +7,7 @@ from typing import Iterable
 
 from .base import BaseToolServer, ToolContext, ToolSpec, ToolResult
 from .config import load_builtin_server_state
+from .external_mcp import build_external_mcp_servers, shutdown_external_mcp_sessions
 from .servers import get_builtin_servers
 
 
@@ -87,6 +88,7 @@ def build_registry() -> ToolRegistry:
         for server in get_builtin_servers()
         if state.get(server.name, True)
     ]
+    servers.extend(build_external_mcp_servers())
     return ToolRegistry(servers)
 
 
@@ -102,5 +104,6 @@ def get_registry() -> ToolRegistry:
 
 def refresh_registry() -> ToolRegistry:
     global _registry
+    shutdown_external_mcp_sessions()
     _registry = build_registry()
     return _registry

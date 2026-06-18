@@ -124,6 +124,19 @@ def _as_command_list(value: Any, default: list[str]) -> list[str]:
     return items or list(default)
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _as_int(value: Any, default: int) -> int:
     if value is None or value == "":
         return default
@@ -135,6 +148,54 @@ def _as_int(value: Any, default: int) -> int:
 
 def _default_provider(cfg: dict[str, Any]) -> str:
     return str(_lookup(cfg, "llm.provider") or "").strip()
+
+
+def _normalize_mcp_servers(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, dict):
+        raw_items = []
+        for name, item in value.items():
+            if isinstance(item, dict):
+                raw_items.append({"name": name, **item})
+    elif isinstance(value, list):
+        raw_items = [item for item in value if isinstance(item, dict)]
+    else:
+        raw_items = []
+
+    out: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not _as_bool(item.get("enabled"), True):
+            continue
+        name = str(item.get("name") or "").strip()
+        command = str(item.get("command") or "").strip()
+        if not name or not command:
+            continue
+        server: dict[str, Any] = {
+            "name": name,
+            "command": command,
+        }
+        args = _as_string_list(item.get("args"))
+        if args:
+            server["args"] = args
+        cwd = str(item.get("cwd") or "").strip()
+        if cwd:
+            server["cwd"] = cwd
+        timeout = str(item.get("timeout") or "").strip()
+        if timeout:
+            server["timeout"] = timeout
+        exposures = _as_string_list(item.get("exposures"))
+        if exposures:
+            server["exposures"] = exposures
+        env = item.get("env")
+        if isinstance(env, dict):
+            clean_env = {
+                str(key).strip(): str(value).strip()
+                for key, value in env.items()
+                if str(key).strip() and str(value).strip()
+            }
+            if clean_env:
+                server["env"] = clean_env
+        out.append(server)
+    return out
 
 
 def apply_app_config_env(
@@ -187,6 +248,7 @@ def apply_app_config_env(
         "llm.codex_cli.bin": "PUPU_CODEX_BIN",
         "llm.codex_cli.profile": "PUPU_CODEX_PROFILE",
         "llm.codex_cli.reasoning_effort": "PUPU_CODEX_REASONING_EFFORT",
+        "llm.codex_cli.tool_mode": "PUPU_CODEX_TOOL_MODE",
         "llm.codex_cli.proxy": "PUPU_CODEX_PROXY",
         "llm.codex_cli.no_proxy": "PUPU_CODEX_NO_PROXY",
         "console.host": "PUPU_CONSOLE_HOST",
@@ -213,9 +275,6 @@ def apply_app_config_env(
         "memu.embed_api_key": "PUPU_MEMU_EMBED_API_KEY",
         "memu.embed_base_url": "PUPU_MEMU_EMBED_BASE_URL",
         "memu.embed_model": "PUPU_MEMU_EMBED_MODEL",
-        "web_search.provider": "PUPU_WEB_SEARCH_PROVIDER",
-        "web_search.fallbacks": "PUPU_WEB_SEARCH_FALLBACKS",
-        "web_search.tavily_api_key": "PUPU_TAVILY_API_KEY",
         "tts.enabled": "PUPU_TTS_ENABLED",
         "tts.reply_default": "PUPU_TTS_REPLY_DEFAULT",
         "tts.provider": "PUPU_TTS_PROVIDER",
@@ -237,12 +296,45 @@ def apply_app_config_env(
     }
     for dotted_key, env_name in mapping.items():
         _set_env(env_name, _lookup(cfg, dotted_key), override=override)
+
+    mcp_servers = _normalize_mcp_servers(_lookup(cfg, "mcp.servers"))
+    if mcp_servers:
+        _set_env(
+            "PUPU_CODEX_MCP_SERVERS_JSON",
+            json.dumps(mcp_servers, ensure_ascii=False),
+            override=override,
+        )
+        _set_env(
+            "PUPU_MCP_SERVERS_JSON",
+            json.dumps(mcp_servers, ensure_ascii=False),
+            override=override,
+        )
+    elif override:
+        os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
+        os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
+    try:
+        from .tools import refresh_tool_definitions
+
+        refresh_tool_definitions()
+    except Exception as exc:
+        print(f"[pupu][mcp] refresh tools skipped: {exc}")
     return cfg
 
 
 def default_owner_ids(config: dict[str, Any] | None = None) -> list[str]:
     cfg = config if config is not None else load_app_config()
     return _as_string_list(_lookup(cfg, "user.owner_ids"))
+
+
+def default_private_allowed_ids(config: dict[str, Any] | None = None) -> list[str]:
+    cfg = config if config is not None else load_app_config()
+    return _as_string_list(_lookup(cfg, "user.private_allowed_ids"))
+
+
+def default_private_reply_mode(config: dict[str, Any] | None = None) -> str:
+    cfg = config if config is not None else load_app_config()
+    mode = str(_lookup(cfg, "user.private_reply_mode") or "owner_only").strip().lower()
+    return mode if mode in {"owner_only", "allowlist", "all"} else "owner_only"
 
 
 def default_napcat_settings(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -267,6 +359,8 @@ def default_instance_settings(config: dict[str, Any] | None = None) -> dict[str,
         "qq_app_id": str(_lookup(cfg, "instance.qq_app_id") or "").strip(),
         "qq_app_secret": str(_lookup(cfg, "instance.qq_app_secret") or "").strip(),
         "owner_ids": default_owner_ids(cfg),
+        "private_reply_mode": default_private_reply_mode(cfg),
+        "private_allowed_ids": default_private_allowed_ids(cfg),
         "port": napcat["port"],
         "arbiter_url": f"http://{arbiter_host}:{arbiter_port}/api/group_arbitrate",
         "arbiter_base_url": f"http://{arbiter_host}:{arbiter_port}",

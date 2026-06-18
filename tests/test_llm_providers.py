@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -500,7 +501,7 @@ class LLMProviderTests(unittest.TestCase):
         ):
             admin_names = {tool["name"] for tool in _tool_definitions()}
 
-        self.assertIn("mcp__web__search", non_admin_names)
+        self.assertIn("mcp__scheduler__manage_scheduled_task", non_admin_names)
         self.assertNotIn("mcp__system__run_command", non_admin_names)
         self.assertIn("mcp__system__run_command", admin_names)
 
@@ -509,7 +510,7 @@ class LLMProviderTests(unittest.TestCase):
         calls = []
         replies = iter(
             [
-                '{"type":"tool_call","name":"mcp__web__search","input":{"query":"pupu"},"reason":"need search"}',
+                '{"type":"tool_call","name":"mcp__scheduler__manage_scheduled_task","input":{"action":"list"},"reason":"need list"}',
                 '{"type":"final","text":"done"}',
             ]
         )
@@ -519,17 +520,20 @@ class LLMProviderTests(unittest.TestCase):
 
         def fake_tool(name, tool_input, reason):
             calls.append((name, tool_input, reason))
-            return "search result"
+            return "task list"
 
-        with patch.object(CodexCliProvider, "_run_codex_exec", fake_run):
+        with (
+            patch.dict(os.environ, {"PUPU_CODEX_TOOL_MODE": "bridge"}, clear=False),
+            patch.object(CodexCliProvider, "_run_codex_exec", fake_run),
+        ):
             text = provider.chat_complete(
                 system="system",
                 messages=[{"role": "user", "content": "hello"}],
                 max_tokens=100,
                 tools=[
                     {
-                        "name": "mcp__web__search",
-                        "description": "search",
+                        "name": "mcp__scheduler__manage_scheduled_task",
+                        "description": "manage tasks",
                         "input_schema": {"type": "object"},
                     }
                 ],
@@ -537,8 +541,96 @@ class LLMProviderTests(unittest.TestCase):
             )
 
         self.assertEqual(text, "done")
-        self.assertEqual(calls[0][0], "mcp__web__search")
-        self.assertEqual(calls[0][1], {"query": "pupu"})
+        self.assertEqual(calls[0][0], "mcp__scheduler__manage_scheduled_task")
+        self.assertEqual(calls[0][1], {"action": "list"})
+
+    def test_codex_cli_uses_real_mcp_by_default_for_tools(self):
+        provider = CodexCliProvider(workspace_root=Path("D:/repo"))
+        captured = {}
+        tool_calls = []
+
+        def fake_run(self, prompt, **kwargs):
+            captured["prompt"] = prompt
+            captured.update(kwargs)
+            return "final reply"
+
+        def fake_tool(name, tool_input, reason):
+            tool_calls.append((name, tool_input, reason))
+            return "should not run locally"
+
+        with (
+            patch.dict(os.environ, {}, clear=False),
+            patch.object(CodexCliProvider, "_run_codex_exec", fake_run),
+        ):
+            os.environ.pop("PUPU_CODEX_TOOL_MODE", None)
+            text = provider.chat_complete(
+                system="system",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=100,
+                tools=[
+                    {
+                        "name": "mcp__scheduler__manage_scheduled_task",
+                        "description": "manage tasks",
+                        "input_schema": {"type": "object"},
+                    }
+                ],
+                tool_handler=fake_tool,
+                session_id=OWNER_SESSION,
+                is_admin=True,
+            )
+
+        self.assertEqual(text, "final reply")
+        self.assertEqual(tool_calls, [])
+        self.assertTrue(captured["use_mcp"])
+        self.assertEqual(captured["session_id"], OWNER_SESSION)
+        self.assertTrue(captured["is_admin"])
+        self.assertIn("不要用文字、JSON 或代码块模拟工具调用", captured["prompt"])
+        self.assertIn("不要输出 JSON", captured["prompt"])
+
+    def test_codex_command_includes_external_mcp_servers_from_env(self):
+        provider = CodexCliProvider(
+            workspace_root=Path("D:/repo"),
+            python_executable="D:/venv/Scripts/python.exe",
+            codex_command="codex",
+        )
+        external = [
+            {
+                "name": "brave-search",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+                "env": {"BRAVE_API_KEY": "test-key"},
+                "cwd": "D:/repo",
+            },
+            {
+                "name": "pupu",
+                "command": "ignored",
+            },
+        ]
+
+        with patch.dict(
+            os.environ,
+            {"PUPU_CODEX_MCP_SERVERS_JSON": json.dumps(external)},
+            clear=False,
+        ):
+            command = provider.build_exec_command(
+                output_path=Path("D:/tmp/last.txt"),
+                run_dir=Path("D:/tmp/run"),
+                use_mcp=True,
+                session_id=OWNER_SESSION,
+                image_urls=[],
+                is_admin=False,
+                tool_exposure="chat",
+            )
+        joined = " ".join(command)
+
+        self.assertIn("mcp_servers.pupu.command='D:/venv/Scripts/python.exe'", joined)
+        self.assertIn("mcp_servers.brave-search.command='npx'", joined)
+        self.assertIn(
+            "mcp_servers.brave-search.args=['-y','@modelcontextprotocol/server-brave-search']",
+            joined,
+        )
+        self.assertIn("mcp_servers.brave-search.env.BRAVE_API_KEY='test-key'", joined)
+        self.assertIn("mcp_servers.brave-search.cwd='D:/repo'", joined)
 
 
 if __name__ == "__main__":

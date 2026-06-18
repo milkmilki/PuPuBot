@@ -4,12 +4,10 @@ from .filesystem import FILESYSTEM_SERVER
 from .media import MEDIA_SERVER
 from .scheduler import SCHEDULER_SERVER
 from .system import SYSTEM_SERVER
-from .web import WEB_SERVER
 
 
 def get_builtin_servers():
     return (
-        WEB_SERVER,
         FILESYSTEM_SERVER,
         SYSTEM_SERVER,
         MEDIA_SERVER,

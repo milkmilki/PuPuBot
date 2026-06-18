@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 
 from .tooling import (
     execute_registered_tool,
@@ -15,10 +17,24 @@ from .tooling.servers.filesystem import list_dir, read_file, write_file
 from .tooling.servers.media import look_at_image
 from .tooling.servers.scheduler import manage_scheduled_task
 from .tooling.servers.system import run_command
-from .tooling.servers.web import fetch_url, web_search
 
 TOOL_DEFINITIONS = get_tool_definitions("chat")
 PROACTIVE_TOOL_DEFINITIONS = get_tool_definitions("proactive")
+
+
+def refresh_tool_definitions() -> None:
+    global TOOL_DEFINITIONS, PROACTIVE_TOOL_DEFINITIONS
+    refresh_registry()
+    TOOL_DEFINITIONS = get_tool_definitions("chat")
+    PROACTIVE_TOOL_DEFINITIONS = get_tool_definitions("proactive")
+
+
+def get_chat_tool_definitions() -> list[dict]:
+    return get_tool_definitions("chat")
+
+
+def get_proactive_tool_definitions() -> list[dict]:
+    return get_tool_definitions("proactive")
 
 
 def _truncate_text(text: str, limit: int = 240) -> str:
@@ -26,6 +42,11 @@ def _truncate_text(text: str, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "...(truncated)"
+
+
+def _safe_log_text(text: str) -> str:
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return str(text).encode(encoding, errors="replace").decode(encoding, errors="replace")
 
 
 def _preview_tool_input(tool_input: dict) -> str:
@@ -50,6 +71,14 @@ def _preview_tool_result(result) -> str:
     return _truncate_text(str(result), 300)
 
 
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _should_log_tool_reason() -> bool:
+    return _truthy(os.environ.get("PUPU_DEBUG_TOOL_REASON"))
+
+
 def execute_tool(
     tool_name: str,
     tool_input: dict,
@@ -60,15 +89,16 @@ def execute_tool(
     try:
         spec = get_registry().resolve(tool_name)
         input_preview = _preview_tool_input(tool_input)
-        if reason_hint:
+        if reason_hint and _should_log_tool_reason():
             print(
                 f"[pupu][tool] session={session_id} call={spec.qualified_name} "
-                f"reason={_truncate_text(reason_hint, 160)} input={input_preview}"
+                f"reason={_safe_log_text(_truncate_text(reason_hint, 160))} "
+                f"input={_safe_log_text(input_preview)}"
             )
         else:
             print(
                 f"[pupu][tool] session={session_id} call={spec.qualified_name} "
-                f"input={input_preview}"
+                f"input={_safe_log_text(input_preview)}"
             )
 
         result = execute_registered_tool(
@@ -79,7 +109,7 @@ def execute_tool(
         )
         print(
             f"[pupu][tool] session={session_id} done={spec.qualified_name} "
-            f"result={_preview_tool_result(result)}"
+            f"result={_safe_log_text(_preview_tool_result(result))}"
         )
         return result
     except KeyError:
@@ -103,7 +133,8 @@ __all__ = [
     "TOOL_DEFINITIONS",
     "describe_tool_servers",
     "execute_tool",
-    "fetch_url",
+    "get_chat_tool_definitions",
+    "get_proactive_tool_definitions",
     "get_registry",
     "is_admin_tool",
     "list_dir",
@@ -112,6 +143,5 @@ __all__ = [
     "read_file",
     "refresh_registry",
     "run_command",
-    "web_search",
     "write_file",
 ]

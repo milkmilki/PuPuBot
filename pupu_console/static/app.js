@@ -206,6 +206,20 @@ async function selectInstance(id) {
       <label>qq_app_id <input id="f-appid" value="${escapeHtml(data.qq_app_id || "")}" /></label>
       <label>qq_app_secret <input id="f-secret" type="password" value="${escapeHtml(data.qq_app_secret || "")}" /></label>
       <label>owner_ids（逗号分隔）<input id="f-owners" value="${escapeHtml((data.owner_ids || []).join(","))}" /></label>
+      <section class="settings-block">
+        <h3>私聊白名单</h3>
+        <label>私聊回复策略
+          <select id="f-private-mode">
+            <option value="owner_only">只回复 owner_ids</option>
+            <option value="allowlist">回复 owner_ids 和白名单</option>
+            <option value="all">回复所有私聊</option>
+          </select>
+        </label>
+        <label>白名单 QQ（逗号、空格或换行分隔）
+          <textarea id="f-private-allowed" class="small-textarea" placeholder="123456&#10;987654">${escapeHtml((data.private_allowed_ids || []).join("\n"))}</textarea>
+        </label>
+        <p class="hint">命令权限仍只看 owner_ids；这里仅控制普通私聊是否进入聊天回复。</p>
+      </section>
       <label>名字 <input id="f-name" value="${escapeHtml(p.name || "")}" /></label>
       <label>core_persona<textarea id="f-core">${escapeHtml(p.core_persona || "")}</textarea></label>
       <label>seed_self_facts（每行 key=value）<textarea id="f-facts">${escapeHtml(formatFacts(p.seed_self_facts))}</textarea></label>
@@ -234,6 +248,7 @@ async function selectInstance(id) {
     </div>
   `;
   $("#f-qqmode").value = data.qq_mode || "napcat";
+  $("#f-private-mode").value = data.private_reply_mode || "owner_only";
 
   const mex = $("#memory-exists");
   if (mex) {
@@ -390,9 +405,10 @@ function renderEventGraph(data) {
     .map((thread) => {
       const active = String(thread.id) === String(selectedEventThreadId) ? " active" : "";
       const count = (stepsByThread.get(String(thread.id)) || []).length;
+      const people = thread.people_label ? ` · ${escapeHtml(thread.people_label)}` : "";
       return `<button type="button" class="event-thread${active}" data-thread-id="${thread.id}">
         <strong>${escapeHtml(thread.title || "未命名事件")}</strong>
-        <span>${escapeHtml(thread.status || "active")} · ${count} 步</span>
+        <span>${escapeHtml(thread.status || "active")} · ${count} 步${people}</span>
         <code>${escapeHtml(thread.source_event_key || thread.key || "")}</code>
       </button>`;
     })
@@ -797,6 +813,10 @@ async function saveSoulForm(id) {
   const owner_ids = ownersRaw
     ? ownersRaw.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)
     : [];
+  const allowedRaw = $("#f-private-allowed").value.trim();
+  const private_allowed_ids = allowedRaw
+    ? allowedRaw.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean)
+    : [];
   const cfg = {
     display_name: $("#f-display").value.trim(),
     port: Number($("#f-port").value),
@@ -804,6 +824,8 @@ async function saveSoulForm(id) {
     qq_app_id: $("#f-appid").value.trim(),
     qq_app_secret: $("#f-secret").value,
     owner_ids,
+    private_reply_mode: $("#f-private-mode").value,
+    private_allowed_ids,
   };
   const persona = {
     name: $("#f-name").value.trim(),

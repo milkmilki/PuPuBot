@@ -324,19 +324,65 @@ def normalize_review_task_updates(value) -> list[dict]:
     return cleaned
 
 
+def _with_review_source_range(
+    items: list[dict],
+    *,
+    context_session: str | None,
+    source_msg_start_id: int | None,
+    source_msg_end_id: int | None,
+) -> list[dict]:
+    out: list[dict] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if context_session and not row.get("source_context_session"):
+            row["source_context_session"] = context_session
+        if source_msg_start_id is not None and row.get("source_msg_start_id") is None:
+            row["source_msg_start_id"] = source_msg_start_id
+        if source_msg_end_id is not None and row.get("source_msg_end_id") is None:
+            row["source_msg_end_id"] = source_msg_end_id
+        out.append(row)
+    return out
+
+
 def save_review_important_events(
     identity_session: str,
     important_events: list[dict],
+    *,
+    context_session: str | None = None,
+    source_msg_start_id: int | None = None,
+    source_msg_end_id: int | None = None,
 ) -> dict[str, dict]:
-    rows = upsert_important_events(identity_session, important_events)
+    rows = upsert_important_events(
+        identity_session,
+        _with_review_source_range(
+            important_events,
+            context_session=context_session,
+            source_msg_start_id=source_msg_start_id,
+            source_msg_end_id=source_msg_end_id,
+        ),
+    )
     return {str(row["source_event_key"]): row for row in rows}
 
 
 def save_review_event_updates(
     identity_session: str,
     event_updates: list[dict],
+    *,
+    context_session: str | None = None,
+    source_msg_start_id: int | None = None,
+    source_msg_end_id: int | None = None,
 ) -> dict[str, dict]:
-    rows = upsert_important_events(identity_session, event_updates)
+    rows = upsert_important_events(
+        identity_session,
+        _with_review_source_range(
+            event_updates,
+            context_session=context_session,
+            source_msg_start_id=source_msg_start_id,
+            source_msg_end_id=source_msg_end_id,
+        ),
+    )
     return {str(row["source_event_key"]): row for row in rows}
 
 

@@ -84,6 +84,15 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 label { display: block; margin-bottom: 0.65rem; }
 label.inline { display: inline-flex; align-items: center; gap: 0.35rem; }
 textarea { width: 100%; min-height: 140px; }
+textarea.small-textarea { min-height: 74px; }
+.settings-block {
+  margin: 0.85rem 0;
+  padding: 0.75rem;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+}
+.settings-block h3 { margin: 0 0 0.65rem; }
 .row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
 .logbox {
   font-family: ui-monospace, monospace;

@@ -20,9 +20,12 @@ from pupu.memory import (
     init_db,
     link_important_event_task,
     reset_session,
+    save_message_with_speaker,
     upsert_important_events,
 )
+from pupu.storage.people import qq_person_key, upsert_person
 import pupu.storage.important_events as important_event_store
+from pupu.storage.db import get_conn
 from pupu.storage.scheduled_tasks import cancel_scheduled_task
 
 
@@ -34,6 +37,12 @@ class EventGraphMemoryTests(unittest.TestCase):
     def setUp(self):
         self.session_id = f"test_event_graph_{self._testMethodName}"
         reset_session(self.session_id)
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM people")
+            conn.commit()
+        finally:
+            conn.close()
 
     def test_legacy_upsert_creates_thread_and_step(self):
         rows = upsert_important_events(
@@ -311,7 +320,250 @@ class EventGraphMemoryTests(unittest.TestCase):
         self.assertEqual(len(payload["threads"]), 1)
         self.assertEqual(len(payload["steps"]), 2)
         self.assertGreaterEqual(len(payload["nodes"]), 3)
-        self.assertEqual(len(payload["edges"]), 2)
+        step_edges = [edge for edge in payload["edges"] if edge.get("type") != "person_thread"]
+        person_edges = [edge for edge in payload["edges"] if edge.get("type") == "person_thread"]
+        self.assertEqual(len(step_edges), 2)
+        self.assertTrue(person_edges)
+        self.assertEqual(len({edge["id"] for edge in payload["edges"]}), len(payload["edges"]))
+        self.assertEqual(
+            len({(edge["source"], edge["target"]) for edge in person_edges}),
+            len(person_edges),
+        )
+
+    def test_event_threads_have_default_people(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "people-default",
+                    "title": "People Default",
+                    "kind": "milestone",
+                    "details": "User and instance share this event.",
+                    "confidence": 1.0,
+                }
+            ],
+        )
+
+        event, steps = get_event_thread_steps(self.session_id, "people-default")
+        payload = event_graph_payload(self.session_id)
+        person_keys = {person["person_key"] for person in event["people"]}
+
+        self.assertIn("owner", person_keys)
+        self.assertIn("instance", person_keys)
+        self.assertIn("用户", event["people_label"])
+        self.assertTrue(steps[0]["people"])
+        self.assertTrue(any(node["type"] == "person" for node in payload["nodes"]))
+
+    def test_event_people_are_inferred_from_message_range(self):
+        speaker_key = qq_person_key("123456")
+        start_id = save_message_with_speaker(
+            "user",
+            "Alice wants to check the cake.",
+            self.session_id,
+            speaker_key=speaker_key,
+            speaker_name="Alice",
+            speaker_qq="123456",
+        )
+        end_id = save_message_with_speaker(
+            "assistant",
+            "Instance agrees to remember it.",
+            self.session_id,
+            speaker_key="instance",
+            speaker_name="Lulu",
+        )
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "alice-cake",
+                    "title": "Alice cake check",
+                    "kind": "promise",
+                    "details": "Alice and Lulu agreed to check the cake.",
+                    "source_context_session": self.session_id,
+                    "source_msg_start_id": start_id,
+                    "source_msg_end_id": end_id,
+                    "confidence": 0.9,
+                }
+            ],
+        )
+
+        event, steps = get_event_thread_steps(self.session_id, "alice-cake")
+        person_keys = {person["person_key"] for person in event["people"]}
+
+        self.assertIn(speaker_key, person_keys)
+        self.assertIn("instance", person_keys)
+        self.assertIn("Alice", event["people_label"])
+        self.assertIn(speaker_key, {person["person_key"] for person in steps[0]["people"]})
+
+    def test_qq_person_display_name_is_fixed_and_later_names_become_aliases(self):
+        speaker_key = qq_person_key("123456")
+        first_id = save_message_with_speaker(
+            "user",
+            "Alice starts a cake thread.",
+            self.session_id,
+            speaker_key=speaker_key,
+            speaker_name="Alice",
+            speaker_qq="123456",
+        )
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "fixed-alice",
+                    "title": "Alice fixed name",
+                    "kind": "promise",
+                    "details": "Alice starts a cake thread.",
+                    "source_context_session": self.session_id,
+                    "source_msg_start_id": first_id,
+                    "source_msg_end_id": first_id,
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        second_id = save_message_with_speaker(
+            "user",
+            "A changed group card continues the same cake thread.",
+            self.session_id,
+            speaker_key=speaker_key,
+            speaker_name="Cake Captain",
+            speaker_qq="123456",
+        )
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "action": "append_step",
+                    "source_event_key": "fixed-alice",
+                    "summary": "The same QQ account continues the cake thread.",
+                    "source_context_session": self.session_id,
+                    "source_msg_start_id": second_id,
+                    "source_msg_end_id": second_id,
+                }
+            ],
+        )
+
+        event, _steps = get_event_thread_steps(self.session_id, "fixed-alice")
+        conn = get_conn()
+        try:
+            person = conn.execute(
+                "SELECT display_name, aliases FROM people WHERE person_key = ?",
+                (speaker_key,),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(person)
+        self.assertEqual(person["display_name"], "Alice")
+        self.assertIn("Alice", event["people_label"])
+        self.assertNotIn("Cake Captain /", event["people_label"])
+        self.assertIn("Cake Captain", person["aliases"])
+
+    def test_owner_display_name_is_fixed_and_later_qq_names_become_aliases(self):
+        conn = get_conn()
+        try:
+            upsert_person(
+                conn,
+                "owner",
+                kind="owner",
+                display_name="小夫",
+                qq_id="424225912",
+                aliases=["用户"],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        first_id = save_message_with_speaker(
+            "user",
+            "Owner starts a cake thread.",
+            self.session_id,
+            speaker_key="owner",
+            speaker_name="群昵称会变",
+            speaker_qq="424225912",
+        )
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "fixed-owner",
+                    "title": "Owner fixed name",
+                    "kind": "promise",
+                    "details": "Owner starts a cake thread.",
+                    "source_context_session": self.session_id,
+                    "source_msg_start_id": first_id,
+                    "source_msg_end_id": first_id,
+                    "confidence": 0.9,
+                }
+            ],
+        )
+
+        event, _steps = get_event_thread_steps(self.session_id, "fixed-owner")
+        conn = get_conn()
+        try:
+            person = conn.execute(
+                "SELECT kind, display_name, qq_id, aliases FROM people WHERE person_key = 'owner'",
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertIsNotNone(person)
+        self.assertEqual(person["kind"], "owner")
+        self.assertEqual(person["display_name"], "小夫")
+        self.assertEqual(person["qq_id"], "424225912")
+        self.assertIn("小夫", event["people_label"])
+        self.assertNotIn("群昵称会变 /", event["people_label"])
+        self.assertIn("群昵称会变", person["aliases"])
+
+    def test_related_search_boosts_matching_people(self):
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "owner-cake",
+                    "title": "Cake check",
+                    "kind": "promise",
+                    "details": "Owner agreed to check the strawberry cake.",
+                    "merge_hint": "cake strawberry check",
+                    "confidence": 0.9,
+                }
+            ],
+        )
+        speaker_key = qq_person_key("9988")
+        msg_id = save_message_with_speaker(
+            "user",
+            "Friend also agreed to check the strawberry cake.",
+            self.session_id,
+            speaker_key=speaker_key,
+            speaker_name="Friend",
+            speaker_qq="9988",
+        )
+        upsert_important_events(
+            self.session_id,
+            [
+                {
+                    "source_event_key": "friend-cake",
+                    "title": "Cake check",
+                    "kind": "promise",
+                    "details": "Friend agreed to check the strawberry cake.",
+                    "merge_hint": "cake strawberry check",
+                    "source_context_session": self.session_id,
+                    "source_msg_start_id": msg_id,
+                    "source_msg_end_id": msg_id,
+                    "confidence": 0.9,
+                }
+            ],
+        )
+
+        matches = find_related_event_threads(
+            self.session_id,
+            "check strawberry cake",
+            limit=2,
+            person_keys={speaker_key},
+            debug=True,
+        )
+
+        self.assertEqual(matches[0]["source_event_key"], "friend-cake")
+        self.assertGreater(matches[0]["match_debug"]["people_bonus"], 0)
 
 
 if __name__ == "__main__":

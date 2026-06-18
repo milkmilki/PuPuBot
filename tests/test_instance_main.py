@@ -16,8 +16,6 @@ class InstanceMainTests(unittest.TestCase):
                 "PUPU_DB_PATH",
                 "PUPU_MEMU_DB_PATH",
                 "PUPU_PERSONA_PATH",
-                "PUPU_WEB_SEARCH_FALLBACKS",
-                "PUPU_TAVILY_API_KEY",
             )
         }
         self.addCleanup(self._restore_env, old_values)
@@ -33,12 +31,12 @@ class InstanceMainTests(unittest.TestCase):
             self.assertEqual(os.environ["PUPU_MEMU_DB_PATH"], str(inst / "data" / "memu.db"))
             self.assertTrue((inst / "data").is_dir())
 
-    def test_load_instance_dotenv_exposes_web_search_config(self) -> None:
+    def test_load_instance_dotenv_exposes_instance_specific_values(self) -> None:
         old_values = {
             key: os.environ.get(key)
             for key in (
-                "PUPU_WEB_SEARCH_FALLBACKS",
-                "PUPU_TAVILY_API_KEY",
+                "PUPU_TTS_REPLY_DEFAULT",
+                "PUPU_PROACTIVE_ENABLED",
             )
         }
         self.addCleanup(self._restore_env, old_values)
@@ -47,15 +45,15 @@ class InstanceMainTests(unittest.TestCase):
             inst = Path(tmp) / "instances" / "abc123"
             inst.mkdir(parents=True)
             (inst / ".env.qq").write_text(
-                "PUPU_WEB_SEARCH_FALLBACKS=tavily,ddg_html\n"
-                "PUPU_TAVILY_API_KEY=test-instance-key\n",
+                "PUPU_TTS_REPLY_DEFAULT=true\n"
+                "PUPU_PROACTIVE_ENABLED=false\n",
                 encoding="utf-8",
             )
 
             _load_instance_dotenv(inst)
 
-            self.assertEqual(os.environ["PUPU_WEB_SEARCH_FALLBACKS"], "tavily,ddg_html")
-            self.assertEqual(os.environ["PUPU_TAVILY_API_KEY"], "test-instance-key")
+            self.assertEqual(os.environ["PUPU_TTS_REPLY_DEFAULT"], "true")
+            self.assertEqual(os.environ["PUPU_PROACTIVE_ENABLED"], "false")
 
     @staticmethod
     def _restore_env(old_values: dict[str, str | None]) -> None:

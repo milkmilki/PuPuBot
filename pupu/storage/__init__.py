@@ -22,6 +22,7 @@ from .messages import (
     get_summary_trigger_progress,
     list_pending_review_sessions,
     save_message,
+    save_message_with_speaker,
 )
 from .memu_sync import has_successful_memu_sync, record_memu_sync
 from .important_events import (
@@ -43,6 +44,24 @@ from .important_events import (
     migrate_legacy_important_events_from_plan,
     update_event_threads_for_task,
     upsert_important_events,
+)
+from .people import (
+    INSTANCE_PERSON_KEY,
+    OWNER_PERSON_KEY,
+    attach_event_people,
+    backfill_default_event_people,
+    default_instance_person,
+    default_owner_person,
+    format_people_label,
+    get_people_for_message_range,
+    get_thread_people,
+    list_people_for_message_range,
+    normalize_person_key,
+    person_from_message_sender,
+    person_from_session,
+    qq_person_key,
+    qqofficial_person_key,
+    upsert_person,
 )
 from .scheduled_tasks import (
     MAX_SCHEDULED_TASKS_PER_SESSION,
@@ -112,6 +131,7 @@ __all__ = [
     "reset_session",
     "record_memu_sync",
     "save_message",
+    "save_message_with_speaker",
     "save_summary",
     "set_familiarity",
     "table_columns",
@@ -120,4 +140,20 @@ __all__ = [
     "upsert_important_events",
     "upsert_self_facts",
     "upsert_user_facts",
+    "INSTANCE_PERSON_KEY",
+    "OWNER_PERSON_KEY",
+    "attach_event_people",
+    "backfill_default_event_people",
+    "default_instance_person",
+    "default_owner_person",
+    "format_people_label",
+    "get_people_for_message_range",
+    "get_thread_people",
+    "list_people_for_message_range",
+    "normalize_person_key",
+    "person_from_message_sender",
+    "person_from_session",
+    "qq_person_key",
+    "qqofficial_person_key",
+    "upsert_person",
 ]

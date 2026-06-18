@@ -68,6 +68,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       --muted: #687386;
       --line: #d7dde8;
       --thread: #2563eb;
+      --person: #7c3aed;
       --user: #059669;
       --instance: #db2777;
       --time: #b45309;
@@ -402,6 +403,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
     }};
     const colors = {{
       thread: "#2563eb",
+      person: "#7c3aed",
       user: "#059669",
       instance: "#db2777",
       time: "#b45309",
@@ -451,6 +453,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
         thread.source_event_key,
         thread.kind,
         thread.status,
+        thread.people_label,
         thread.current_summary,
         thread.current_cause,
         thread.followup_hint,
@@ -473,11 +476,13 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       const shown = visibleThreads();
       listEl.innerHTML = shown.map((thread) => {{
         const active = String(thread.id) === String(state.selectedThreadId) ? " active" : "";
+        const peopleBadge = thread.people_label ? `<span class="badge">${{escapeHtml(thread.people_label)}}</span>` : "";
         return `<div class="thread-item${{active}}" data-thread="${{escapeHtml(thread.id)}}">`
           + `<div class="thread-title">${{escapeHtml(thread.title || "未命名事件线")}}</div>`
           + `<div class="thread-summary">${{escapeHtml(shortText(thread.current_summary || thread.details || "", 88))}}</div>`
           + `<div class="badges">`
           + `<span class="badge">${{escapeHtml(thread.status || "active")}}</span>`
+          + peopleBadge
           + `<span class="badge">key=${{escapeHtml(thread.source_event_key || "")}}</span>`
           + `<span class="badge">steps=${{(stepsByThread.get(String(thread.id)) || []).length}}</span>`
           + `</div></div>`;
@@ -494,7 +499,14 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
     }}
     function filteredGraph() {{
       const visibleIds = visibleThreadIdSet();
+      const linkedPeople = new Set();
+      for (const edge of allEdges) {{
+        if (edge.type !== "person_thread") continue;
+        const target = byNodeId.get(edge.target);
+        if (target && visibleIds.has(String(target.thread_id))) linkedPeople.add(edge.source);
+      }}
       const nodes = allNodes.filter((node) => {{
+        if (node.type === "person") return linkedPeople.has(node.id);
         if (node.type === "thread") return visibleIds.has(String(node.thread_id));
         return visibleIds.has(String(node.thread_id));
       }});
@@ -504,10 +516,12 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
     }}
     function nodeRadius(node) {{
       if (node.type === "thread") return 24;
+      if (node.type === "person") return 20;
       return node.step_type === "time" ? 14 : 16;
     }}
     function nodeColor(node) {{
       if (node.type === "thread") return colors.thread;
+      if (node.type === "person") return colors.person;
       return colors[node.step_type] || colors.system;
     }}
     function orderedVisibleThreads() {{
@@ -537,6 +551,10 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
           placeNode(`step-${{step.id}}`, firstStepX + idx * stepGap, y);
         }});
       }});
+      allNodes.filter((node) => node.type === "person").forEach((node, index) => {{
+        node.x = 54;
+        node.y = startY + index * 74;
+      }});
     }}
     function applyRadialLayout() {{
       const shown = orderedVisibleThreads();
@@ -559,6 +577,12 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
           placeNode(`step-${{step.id}}`, threadX + ux * distance, threadY + uy * distance);
         }});
       }});
+      const people = allNodes.filter((node) => node.type === "person");
+      people.forEach((node, index) => {{
+        const angle = people.length <= 1 ? Math.PI : -Math.PI / 2 + (Math.PI * 2 * index) / people.length;
+        node.x = centerX + Math.cos(angle) * 90;
+        node.y = centerY + Math.sin(angle) * 90;
+      }});
     }}
     function applyLayout() {{
       if (state.layout === "radial") {{
@@ -575,14 +599,17 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
     }}
     function updateEdgePositions() {{
       for (const edge of state.visibleEdges) {{
-        const line = state.edgeEls.get(edge.id || `${{edge.source}}->${{edge.target}}`);
+        const edgeId = edge.id || `${{edge.source}}->${{edge.target}}`;
+        const lines = state.edgeEls.get(edgeId) || [];
         const source = byNodeId.get(edge.source);
         const target = byNodeId.get(edge.target);
-        if (!line || !source || !target) continue;
-        line.setAttribute("x1", source.x);
-        line.setAttribute("y1", source.y);
-        line.setAttribute("x2", target.x);
-        line.setAttribute("y2", target.y);
+        if (!lines.length || !source || !target) continue;
+        for (const line of lines) {{
+          line.setAttribute("x1", source.x);
+          line.setAttribute("y1", source.y);
+          line.setAttribute("x2", target.x);
+          line.setAttribute("y2", target.y);
+        }}
       }}
     }}
     function updateNodePosition(node) {{
@@ -645,7 +672,9 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
         line.setAttribute("x2", target.x);
         line.setAttribute("y2", target.y);
         line.setAttribute("class", "link" + (String(source.thread_id) === String(state.selectedThreadId) ? " selected" : ""));
-        state.edgeEls.set(edgeId, line);
+        const edgeLines = state.edgeEls.get(edgeId) || [];
+        edgeLines.push(line);
+        state.edgeEls.set(edgeId, edgeLines);
         g.appendChild(line);
       }}
       for (const node of nodes) {{
@@ -731,6 +760,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
         <div class="badges">
           <span class="badge">${{escapeHtml(thread.status || "active")}}</span>
           <span class="badge">${{escapeHtml(thread.kind || "event")}}</span>
+          ${{thread.people_label ? `<span class="badge">${{escapeHtml(thread.people_label)}}</span>` : ""}}
           <span class="badge">confidence=${{Number(thread.confidence || 0).toFixed(2)}}</span>
         </div>
         <div class="detail-block">

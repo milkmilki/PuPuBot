@@ -278,7 +278,7 @@ def _event_graph_from_path(path: Path) -> dict[str, Any]:
         table_names = {
             str(row["name"])
             for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('event_threads', 'event_steps')"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('event_threads', 'event_steps', 'event_people', 'people')"
             ).fetchall()
         }
         if "event_threads" not in table_names:
@@ -303,6 +303,38 @@ def _event_graph_from_path(path: Path) -> dict[str, Any]:
             ).fetchall()
         ]
         thread_ids = [int(row["id"]) for row in threads]
+        people_by_thread: dict[int, list[dict[str, Any]]] = {}
+        people_by_key: dict[str, dict[str, Any]] = {}
+        if {"event_people", "people"}.issubset(table_names) and thread_ids:
+            placeholders = ",".join("?" for _ in thread_ids)
+            people_rows = [
+                dict(row)
+                for row in conn.execute(
+                    f"""
+                    SELECT ep.thread_id, ep.step_id, ep.person_key, ep.role, ep.source,
+                           p.kind, p.display_name, p.qq_id
+                    FROM event_people ep
+                    LEFT JOIN people p ON p.person_key = ep.person_key
+                    WHERE ep.thread_id IN ({placeholders})
+                    ORDER BY ep.thread_id ASC, ep.step_id ASC, ep.role ASC
+                    """,
+                    thread_ids,
+                ).fetchall()
+            ]
+            for person in people_rows:
+                thread_id = int(person["thread_id"])
+                people_by_thread.setdefault(thread_id, []).append(person)
+                key = str(person.get("person_key") or "")
+                if key and key not in people_by_key:
+                    people_by_key[key] = person
+            for thread in threads:
+                people = people_by_thread.get(int(thread["id"]), [])
+                thread["people"] = people
+                thread["people_label"] = " / ".join(
+                    str(person.get("display_name") or person.get("person_key") or "")
+                    for person in people
+                    if person.get("step_id") is None
+                )
         steps: list[dict[str, Any]] = []
         if "event_steps" in table_names and thread_ids:
             placeholders = ",".join("?" for _ in thread_ids)
@@ -319,11 +351,35 @@ def _event_graph_from_path(path: Path) -> dict[str, Any]:
                     thread_ids,
                 ).fetchall()
             ]
+            for step in steps:
+                people = [
+                    person
+                    for person in people_by_thread.get(int(step["thread_id"]), [])
+                    if person.get("step_id") == step["id"]
+                ]
+                step["people"] = people
+                step["people_label"] = " / ".join(
+                    str(person.get("display_name") or person.get("person_key") or "")
+                    for person in people
+                )
     finally:
         conn.close()
 
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
+    for person in people_by_key.values():
+        person_key = str(person.get("person_key") or "")
+        if not person_key:
+            continue
+        nodes.append(
+            {
+                "id": f"person-{person_key}",
+                "type": "person",
+                "person_key": person_key,
+                "label": person.get("display_name") or person_key,
+                "kind": person.get("kind") or "",
+            }
+        )
     for thread in threads:
         nodes.append(
             {
@@ -334,8 +390,31 @@ def _event_graph_from_path(path: Path) -> dict[str, Any]:
                 "label": thread.get("title"),
                 "status": thread.get("status"),
                 "summary": thread.get("current_summary") or "",
+                "people": thread.get("people") or [],
+                "people_label": thread.get("people_label") or "",
             }
         )
+        people_edge_roles: dict[str, list[str]] = {}
+        for person in thread.get("people") or []:
+            if person.get("step_id") is not None:
+                continue
+            person_key = str(person.get("person_key") or "")
+            if not person_key:
+                continue
+            role = str(person.get("role") or "participant")
+            roles = people_edge_roles.setdefault(person_key, [])
+            if role not in roles:
+                roles.append(role)
+        for person_key, roles in people_edge_roles.items():
+            edges.append(
+                {
+                    "id": f"edge-person-{person_key}-thread-{thread['id']}",
+                    "source": f"person-{person_key}",
+                    "target": f"thread-{thread['id']}",
+                    "label": "/".join(roles),
+                    "type": "person_thread",
+                }
+            )
     previous_by_thread: dict[int, str] = {}
     for step in steps:
         thread_id = int(step["thread_id"])
@@ -351,6 +430,8 @@ def _event_graph_from_path(path: Path) -> dict[str, Any]:
                 "reflection": step.get("reflection"),
                 "created_at": step.get("created_at"),
                 "occurred_at": step.get("occurred_at"),
+                "people": step.get("people") or [],
+                "people_label": step.get("people_label") or "",
             }
         )
         source = previous_by_thread.get(thread_id) or f"thread-{thread_id}"

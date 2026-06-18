@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
 from .llm import JUDGE_MODEL, MODEL, chat_complete
-from .tools import PROACTIVE_TOOL_DEFINITIONS, execute_tool
+from .tools import execute_tool, get_proactive_tool_definitions
 from .familiarity import get_proactive_freq, score_to_level, PROACTIVE_THRESHOLD
 from .important_event_context import format_important_events_section
 from .memory import (
@@ -368,33 +368,6 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
         )
     return prompt
 
-
-PROACTIVE_TOOLS = [
-    {
-        "name": "web_search",
-        "description": "搜索网上的内容。想聊具体的书、新闻、技术、热搜、歌曲等时用这个先搜一下，拿到真实内容再聊。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "搜索关键词"},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "fetch_url",
-        "description": "抓取网页内容。搜到感兴趣的链接后可以用这个看具体内容。",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "要抓取的URL"},
-            },
-            "required": ["url"],
-        },
-    },
-]
-
-
 def generate_proactive_message(score: int, period: dict) -> str | None:
     """Generate a proactive message using Claude API with web search capability."""
     from .dialogue_loop import cancel_wait_timer, schedule_wait_timer
@@ -425,7 +398,7 @@ def generate_proactive_message(score: int, period: dict) -> str | None:
             system=prompt + DIALOGUE_OUTPUT_PROTOCOL,
             messages=messages,
             max_tokens=5000,
-            tools=PROACTIVE_TOOL_DEFINITIONS,
+            tools=get_proactive_tool_definitions(),
             tool_handler=_tool_handler,
             session_id=OWNER_SESSION,
             is_admin=False,

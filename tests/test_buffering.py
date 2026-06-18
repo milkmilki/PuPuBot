@@ -123,6 +123,40 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         created_coro = mock_create.call_args.args[0]
         created_coro.close()
 
+    async def test_slash_prefixed_text_is_not_buffered_for_chat(self):
+        sid = state.OWNER_SESSION
+        with patch("plugins.pupu_support.buffering.cancel_wait_timer") as mock_cancel:
+            with patch("plugins.pupu_support.buffering.asyncio.create_task") as mock_create:
+                await buffer_message(
+                    sid=sid,
+                    text="/not_a_registered_command",
+                    image_urls=[],
+                    bot=object(),
+                    event=object(),
+                    is_admin=True,
+                    nickname="owner",
+                    session_label="私聊",
+                )
+
+        mock_cancel.assert_not_called()
+        mock_create.assert_not_called()
+        self.assertNotIn(sid, state.msg_buffers)
+
+    async def test_whitespace_slash_prefixed_text_is_not_buffered_for_chat(self):
+        sid = state.OWNER_SESSION
+        await buffer_message(
+            sid=sid,
+            text="   /events",
+            image_urls=["file:///tmp/image.png"],
+            bot=object(),
+            event=object(),
+            is_admin=True,
+            nickname="owner",
+            session_label="私聊",
+        )
+
+        self.assertNotIn(sid, state.msg_buffers)
+
     async def test_open_group_debounce_drops_without_local_reply(self):
         sid = "group_100"
         state.msg_buffers[sid] = {

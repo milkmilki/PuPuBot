@@ -6,7 +6,11 @@ import json
 import os
 from pathlib import Path
 
-from .app_config import default_owner_ids
+from .app_config import (
+    default_owner_ids,
+    default_private_allowed_ids,
+    default_private_reply_mode,
+)
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "instances" / "_no_instance" / "instance.json"
 
@@ -49,6 +53,40 @@ def load_owner_ids() -> list[str]:
 
 def load_owner_id_set() -> set[str]:
     return set(load_owner_ids())
+
+
+def load_private_allowed_ids() -> list[str]:
+    try:
+        config = load_config()
+    except Exception:
+        return default_private_allowed_ids()
+    raw = config.get("private_allowed_ids", default_private_allowed_ids())
+    if not isinstance(raw, list):
+        return []
+    return [str(value).strip() for value in raw if str(value).strip()]
+
+
+def load_private_reply_mode() -> str:
+    try:
+        config = load_config()
+    except Exception:
+        return default_private_reply_mode()
+    mode = str(config.get("private_reply_mode", default_private_reply_mode()) or "").strip().lower()
+    return mode if mode in {"owner_only", "allowlist", "all"} else "owner_only"
+
+
+def is_private_reply_allowed(user_id) -> bool:
+    uid = str(user_id).strip()
+    if not uid:
+        return False
+    mode = load_private_reply_mode()
+    if mode == "all":
+        return True
+    if uid in load_owner_id_set():
+        return True
+    if mode == "allowlist":
+        return uid in set(load_private_allowed_ids())
+    return False
 
 
 def load_first_numeric_owner_id() -> int | None:

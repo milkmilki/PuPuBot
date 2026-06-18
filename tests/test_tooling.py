@@ -1,6 +1,9 @@
 import os
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+import sys
+import json
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
@@ -14,13 +17,15 @@ from pupu.memory import (
     list_scheduled_tasks,
     reset_session,
 )
+import pupu.tools as tools
 from pupu.tools import (
-    PROACTIVE_TOOL_DEFINITIONS,
-    TOOL_DEFINITIONS,
     describe_tool_servers,
     execute_tool,
+    get_chat_tool_definitions,
     is_admin_tool,
+    refresh_tool_definitions,
 )
+from pupu.tooling import refresh_registry
 
 
 class ToolingRegistryTests(unittest.TestCase):
@@ -30,10 +35,18 @@ class ToolingRegistryTests(unittest.TestCase):
 
     def setUp(self):
         reset_session("test_tooling_registry")
+        os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
+        os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
+        refresh_tool_definitions()
+
+    def tearDown(self):
+        os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
+        os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
+        refresh_tool_definitions()
 
     def test_chat_tools_are_namespaced(self):
-        names = {tool["name"] for tool in TOOL_DEFINITIONS}
-        self.assertIn("mcp__web__search", names)
+        names = {tool["name"] for tool in tools.TOOL_DEFINITIONS}
+        self.assertNotIn("mcp__web__search", names)
         self.assertIn("mcp__scheduler__manage_scheduled_task", names)
         self.assertNotIn("web_search", names)
 
@@ -41,17 +54,11 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertTrue(is_admin_tool("read_file"))
         self.assertTrue(is_admin_tool("mcp__filesystem__read_file"))
         self.assertTrue(is_admin_tool("mcp__system__run_command"))
-        self.assertFalse(is_admin_tool("mcp__web__search"))
+        self.assertFalse(is_admin_tool("mcp__scheduler__manage_scheduled_task"))
 
     def test_proactive_tools_are_filtered(self):
-        names = {tool["name"] for tool in PROACTIVE_TOOL_DEFINITIONS}
-        self.assertEqual(
-            names,
-            {
-                "mcp__web__search",
-                "mcp__web__fetch_url",
-            },
-        )
+        names = {tool["name"] for tool in tools.PROACTIVE_TOOL_DEFINITIONS}
+        self.assertEqual(names, set())
 
     def test_legacy_dispatch_still_works(self):
         result = execute_tool(
@@ -61,6 +68,35 @@ class ToolingRegistryTests(unittest.TestCase):
         )
         self.assertIn("当前没有待执行的定时任务", result)
         self.assertIn("总结进度：0/10，还差 10 条消息触发自动总结", result)
+
+    def test_tool_reason_hint_is_hidden_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PUPU_DEBUG_TOOL_REASON", None)
+            with patch("builtins.print") as mock_print:
+                execute_tool(
+                    "mcp__scheduler__manage_scheduled_task",
+                    {"action": "list"},
+                    session_id="test_tooling_registry",
+                    reason_hint="我先搜搜看",
+                )
+
+        first_line = str(mock_print.call_args_list[0].args[0])
+        self.assertIn("input=", first_line)
+        self.assertNotIn("reason=", first_line)
+        self.assertNotIn("我先搜搜看", "\n".join(str(call.args[0]) for call in mock_print.call_args_list))
+
+    def test_tool_reason_hint_can_be_enabled_for_deep_debug(self):
+        with patch.dict(os.environ, {"PUPU_DEBUG_TOOL_REASON": "1"}, clear=False):
+            with patch("builtins.print") as mock_print:
+                execute_tool(
+                    "mcp__scheduler__manage_scheduled_task",
+                    {"action": "list"},
+                    session_id="test_tooling_registry",
+                    reason_hint="我先搜搜看",
+                )
+
+        first_line = str(mock_print.call_args_list[0].args[0])
+        self.assertIn("reason=我先搜搜看", first_line)
 
     def test_scheduled_task_list_uses_display_indices(self):
         first_id = create_scheduled_task(
@@ -229,8 +265,97 @@ class ToolingRegistryTests(unittest.TestCase):
         names = {server["name"] for server in describe_tool_servers()}
         self.assertEqual(
             names,
-            {"web", "filesystem", "system", "media", "scheduler"},
+            {"filesystem", "system", "media", "scheduler"},
         )
+
+    def test_external_stdio_mcp_server_is_registered_and_callable(self):
+        fixture = Path(__file__).resolve().parent / "fixtures" / "fake_mcp_server.py"
+        config = [
+            {
+                "name": "tavily",
+                "command": sys.executable,
+                "args": [str(fixture)],
+                "exposures": ["chat"],
+                "timeout": 10,
+            }
+        ]
+        os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(config)
+        refresh_registry()
+
+        names = {tool["name"] for tool in tools.TOOL_DEFINITIONS}
+        self.assertNotIn("mcp__tavily__tavily_search", names)
+        refresh_registry()
+        fresh_names = {tool["name"] for tool in get_chat_tool_definitions()}
+        self.assertIn("mcp__tavily__tavily_search", fresh_names)
+
+        result = execute_tool(
+            "mcp__tavily__tavily_search",
+            {"query": "火遮眼 电影"},
+            session_id="test_tooling_registry",
+        )
+
+        self.assertIn("fake result for 火遮眼 电影", result)
+
+    def test_external_stdio_mcp_server_reuses_persistent_process(self):
+        fixture = Path(__file__).resolve().parent / "fixtures" / "fake_mcp_server.py"
+        counter = Path(__file__).resolve().parent / "_tmp" / "fake_mcp_count.txt"
+        counter.unlink(missing_ok=True)
+        config = [
+            {
+                "name": "tavily",
+                "command": sys.executable,
+                "args": [str(fixture)],
+                "env": {"FAKE_MCP_COUNTER_PATH": str(counter)},
+                "exposures": ["chat"],
+                "timeout": 10,
+            }
+        ]
+        os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(config)
+        refresh_tool_definitions()
+
+        execute_tool(
+            "mcp__tavily__tavily_search",
+            {"query": "first"},
+            session_id="test_tooling_registry",
+        )
+        execute_tool(
+            "mcp__tavily__tavily_search",
+            {"query": "second"},
+            session_id="test_tooling_registry",
+        )
+
+        self.assertEqual(counter.read_text(encoding="utf-8"), "1")
+
+    def test_external_stdio_mcp_server_restarts_after_process_exit(self):
+        fixture = Path(__file__).resolve().parent / "fixtures" / "fake_mcp_server.py"
+        counter = Path(__file__).resolve().parent / "_tmp" / "fake_mcp_restart_count.txt"
+        counter.unlink(missing_ok=True)
+        config = [
+            {
+                "name": "tavily",
+                "command": sys.executable,
+                "args": [str(fixture)],
+                "env": {"FAKE_MCP_COUNTER_PATH": str(counter)},
+                "exposures": ["chat"],
+                "timeout": 10,
+            }
+        ]
+        os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(config)
+        refresh_tool_definitions()
+
+        execute_tool(
+            "mcp__tavily__tavily_search",
+            {"query": "__exit__"},
+            session_id="test_tooling_registry",
+        )
+        result = execute_tool(
+            "mcp__tavily__tavily_search",
+            {"query": "after restart"},
+            session_id="test_tooling_registry",
+        )
+
+        self.assertIn("fake result for after restart", result)
+        self.assertEqual(counter.read_text(encoding="utf-8"), "2")
 
 
 if __name__ == "__main__":

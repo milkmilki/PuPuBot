@@ -7,7 +7,12 @@ import asyncio
 from nonebot import get_driver, on_message
 from nonebot.rule import Rule, to_me
 
-from pupu.config import load_open_group_ids, load_owner_ids, load_peer_config
+from pupu.config import (
+    is_private_reply_allowed,
+    load_open_group_ids,
+    load_owner_ids,
+    load_peer_config,
+)
 from pupu.familiarity import PROACTIVE_THRESHOLD
 from pupu.memory import get_familiarity
 from pupu.proactive import proactive_loop
@@ -22,6 +27,7 @@ from .common import (
     is_admin,
     is_owner,
     log,
+    person_key_for_onebot_user,
     send_private_segments,
     split_message,
 )
@@ -62,6 +68,9 @@ if HAS_ONEBOT:
 
     @ob_private.handle()
     async def handle_ob_private(bot: OBBot, event: OBPrivateEvent):
+        if not is_private_reply_allowed(event.user_id):
+            print(f"[pupu] private message ignored by whitelist: user_id={event.user_id}")
+            return
         text, image_urls = parse_onebot_message(event.get_message())
         if not text and not image_urls:
             return
@@ -77,6 +86,9 @@ if HAS_ONEBOT:
             nickname,
             "私聊",
             identity_session=sid,
+            speaker_key=person_key_for_onebot_user(event.user_id),
+            speaker_user_id=str(event.user_id),
+            speaker_name=nickname,
         )
 
     @ob_open_group.handle()
@@ -105,6 +117,7 @@ if HAS_ONEBOT:
             message_id=str(getattr(event, "message_id", "")),
             speaker_user_id=str(event.user_id),
             speaker_name=nickname,
+            speaker_key=person_key_for_onebot_user(event.user_id),
             speaker_is_bot=speaker_is_bot,
         )
 
@@ -129,6 +142,9 @@ if HAS_ONEBOT:
             f"群{event.group_id}",
             reply_prefix=OBMsgSeg.at(event.user_id) + " ",
             identity_session=identity_sid,
+            speaker_key=person_key_for_onebot_user(event.user_id),
+            speaker_user_id=str(event.user_id),
+            speaker_name=nickname,
         )
 
     @driver.on_bot_connect

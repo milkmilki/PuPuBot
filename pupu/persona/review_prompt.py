@@ -39,11 +39,11 @@ _CONCRETE_MEMORY_RULES = """
 _SUBJECT_RULES_TEMPLATE = """
 
 主语消歧规则（非常重要）：
-- 输入里的“用户:”行表示用户说的话；“{character_name}:”行表示{character_name}说的话。
-- “用户:”行里的“我/我的/自己”指用户；“你/你的”通常指{character_name}。
-- “{character_name}:”行里的“我/我的/自己”指{character_name}；“你/你的”通常指用户。
+- 待整理对话已经由程序改写为“人物名：发言 <end>”格式；冒号前的人物名就是这句话的说话者。
+- “我/我的/自己”指当前这一行冒号前的人物；“你/你的”通常指这句话指向的对方，请结合上下文改写成具体人物名。
 - summary、facts、important_events、task_updates 的 title/details/followup_hint/instruction 里不要直接使用“我、你、我们、对方、她、他”等模糊主语。
-- 所有输出主语都必须强制改写为“用户”或“{character_name}”。例如“我想买二手屏”如果来自“{character_name}:”行，要写成“{character_name}想买二手屏”；如果来自“用户:”行，要写成“用户想买二手屏”。
+- 所有输出主语都必须改写为输入里出现的具体人物名，不要泛化成“用户”“实例”“双方”。例如“小夫：我想买二手屏”要写成“小夫想买二手屏”；“{character_name}：我想买二手屏”要写成“{character_name}想买二手屏”。
+- 不要输出 QQ 号、person_key、qq:xxx、qqofficial:xxx 这类底层身份标识。
 - 不要把{character_name}写成“仆仆”，除非当前实例名本来就是仆仆。"""
 
 _ABSOLUTE_TIME_RULES = """
