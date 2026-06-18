@@ -6,9 +6,9 @@ NEW (preferred, server-driven debounce):
     1. Bot instances POST every group message to ``/api/observe`` immediately.
        The arbitrator deduplicates by ``(group_id, message_id)`` and stores the
        message in ``group_messages`` plus an upsert into ``group_bots``.
-    2. ``arbiter_server.py`` runs a per-group debounce watchdog. When the idle
-       window elapses (or the hard cap fires), it invokes ``run_judge`` to ask
-       the LLM exactly once who should speak; the result lands in
+    2. ``arbiter_server.py`` runs a per-group debounce watchdog. When the group
+       has been quiet for the idle window, it invokes ``run_judge`` to ask
+       the LLM who should speak; the result lands in
        ``group_decisions`` with a monotonically increasing ``decision_id``.
     3. Bots long-poll ``/api/await_decision`` (``await_decision_async``) for the
        next ``decision_id``. All bots in the same group receive byte-identical
@@ -189,6 +189,7 @@ def _connect() -> sqlite3.Connection:
             group_id TEXT NOT NULL,
             message_id TEXT NOT NULL,
             speaker_qq TEXT NOT NULL DEFAULT '',
+            speaker_person_key TEXT NOT NULL DEFAULT '',
             speaker_name TEXT NOT NULL DEFAULT '',
             speaker_is_bot INTEGER NOT NULL DEFAULT 0,
             text TEXT NOT NULL DEFAULT '',
@@ -201,6 +202,11 @@ def _connect() -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_gm_group_obs ON group_messages(group_id, observed_at)"
     )
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(group_messages)").fetchall()}
+    if "speaker_person_key" not in cols:
+        conn.execute(
+            "ALTER TABLE group_messages ADD COLUMN speaker_person_key TEXT NOT NULL DEFAULT ''"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS group_bots (
@@ -971,6 +977,7 @@ def observe(payload: dict[str, Any]) -> dict[str, Any]:
 
     text = str(payload.get("text") or "")
     speaker_qq = str(payload.get("speaker_qq") or "").strip()
+    speaker_person_key = str(payload.get("speaker_person_key") or "").strip()
     speaker_name = str(payload.get("speaker_name") or "").strip()
     speaker_is_bot = 1 if bool(payload.get("speaker_is_bot")) else 0
     ts = str(payload.get("ts") or "").strip() or _iso(_now())
@@ -986,10 +993,20 @@ def observe(payload: dict[str, Any]) -> dict[str, Any]:
         conn.execute(
             """
             INSERT OR IGNORE INTO group_messages
-                (group_id, message_id, speaker_qq, speaker_name, speaker_is_bot, text, ts, observed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (group_id, message_id, speaker_qq, speaker_person_key, speaker_name, speaker_is_bot, text, ts, observed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (group_id, message_id, speaker_qq, speaker_name, speaker_is_bot, text, ts, now_iso),
+            (
+                group_id,
+                message_id,
+                speaker_qq,
+                speaker_person_key,
+                speaker_name,
+                speaker_is_bot,
+                text,
+                ts,
+                now_iso,
+            ),
         )
         if reporter_bot_id:
             min_gap = reporter.get("min_bot_gap_seconds")
@@ -1067,7 +1084,7 @@ def observe(payload: dict[str, Any]) -> dict[str, Any]:
 def _load_recent_messages(conn: sqlite3.Connection, group_id: str, limit: int = 80) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT message_id, speaker_qq, speaker_name, speaker_is_bot, text, ts
+        SELECT message_id, speaker_qq, speaker_person_key, speaker_name, speaker_is_bot, text, ts
         FROM group_messages
         WHERE group_id = ?
         ORDER BY observed_at DESC
@@ -1113,10 +1130,11 @@ def _build_recent_context(messages: list[dict[str, Any]]) -> tuple[str, set[str]
         speaker_name = str(msg.get("speaker_name") or "").strip()
         speaker_qq = str(msg.get("speaker_qq") or "").strip()
         speaker_is_bot = bool(msg.get("speaker_is_bot"))
+        display = speaker_name or speaker_qq or "user"
         if speaker_is_bot:
-            label = f"[bot {speaker_name}(QQ:{speaker_qq})]" if speaker_qq else f"[bot {speaker_name or 'bot'}]"
+            label = f"[bot {display}]"
         else:
-            label = f"[{speaker_name or speaker_qq or 'user'}({'QQ:' + speaker_qq if speaker_qq else ''})]"
+            label = f"[{display}]"
         line = f"{label} {text}".strip()
         if line:
             lines.append(line)

@@ -36,12 +36,16 @@ def _list_all_session_ids(conn) -> list[str]:
         "messages",
         "familiarity",
         "events",
-        "user_facts",
-        "self_facts",
         "summaries",
         "scheduled_tasks",
         "event_threads",
     ):
         rows = conn.execute(f"SELECT DISTINCT session_id FROM {table}").fetchall()
         session_ids.update(row["session_id"] for row in rows if row["session_id"])
+    rows = conn.execute(
+        """SELECT DISTINCT legacy_session_id
+           FROM person_facts
+           WHERE legacy_session_id != ''"""
+    ).fetchall()
+    session_ids.update(row["legacy_session_id"] for row in rows if row["legacy_session_id"])
     return sorted(session_ids)

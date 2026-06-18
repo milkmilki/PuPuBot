@@ -324,6 +324,65 @@ def person_from_message_sender(
     }
 
 
+def resolve_person_for_prompt(
+    *,
+    person_key: str = "",
+    qq_id: str = "",
+    display_name: str = "",
+    kind: str = "user",
+) -> dict[str, Any]:
+    """Resolve a prompt-facing person label, preferring stable DB identity.
+
+    Runtime group nicknames are allowed to change. Prompt text should therefore
+    resolve by ``person_key`` / QQ id first and use the stored display name when
+    one exists.
+    """
+    key = normalize_person_key(person_key)
+    qq = _text(qq_id)
+    raw_display = _text(display_name)
+    conn = get_conn()
+    try:
+        row = None
+        if key:
+            row = conn.execute(
+                "SELECT person_key, kind, display_name, qq_id FROM people WHERE person_key = ?",
+                (key,),
+            ).fetchone()
+        if row is None and qq:
+            row = conn.execute(
+                "SELECT person_key, kind, display_name, qq_id FROM people WHERE qq_id = ?",
+                (qq,),
+            ).fetchone()
+        qq_key = qq_person_key(qq) if qq else ""
+        if row is None and qq_key:
+            row = conn.execute(
+                "SELECT person_key, kind, display_name, qq_id FROM people WHERE person_key = ?",
+                (qq_key,),
+            ).fetchone()
+    finally:
+        conn.close()
+
+    if row:
+        resolved_key = _text(row["person_key"]) or key or qq_key
+        resolved_kind = _text(row["kind"]) or _canonical_kind_for_key(resolved_key, kind)
+        resolved_qq = _text(row["qq_id"]) or qq
+        resolved_display = _text(row["display_name"]) or raw_display or resolved_key
+        return {
+            "person_key": resolved_key,
+            "kind": resolved_kind,
+            "display_name": resolved_display,
+            "qq_id": resolved_qq,
+        }
+
+    resolved_key = key or qq_key
+    return {
+        "person_key": resolved_key,
+        "kind": _canonical_kind_for_key(resolved_key, kind),
+        "display_name": raw_display or resolved_key or DEFAULT_OWNER_DISPLAY,
+        "qq_id": qq,
+    }
+
+
 def get_people_for_message_range(
     conn,
     session_id: str,

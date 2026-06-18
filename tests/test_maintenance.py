@@ -20,18 +20,17 @@ from pupu.memory import (
     _get_conn,
     create_scheduled_task,
     get_event_thread_steps,
-    get_self_facts,
-    get_user_facts,
+    get_person_fact_map,
     init_db,
     reset_session,
     save_message,
     save_summary,
     upsert_event_threads,
-    upsert_self_facts,
-    upsert_user_facts,
+    upsert_person_facts,
 )
 from pupu.message_sources import CHAT, PROACTIVE
 from pupu.maintenance.model_compaction import _call_model_json
+from pupu.storage.people import INSTANCE_PERSON_KEY, person_from_session
 
 
 class MaintenanceTests(unittest.TestCase):
@@ -49,11 +48,10 @@ class MaintenanceTests(unittest.TestCase):
                 "familiarity",
                 "events",
                 "event_threads",
-                "user_facts",
                 "summaries",
-                "self_facts",
                 "scheduled_tasks",
                 "maintenance_runs",
+                "person_facts",
             ):
                 conn.execute(f"DELETE FROM {table}")
             conn.commit()
@@ -417,33 +415,49 @@ class MaintenanceTests(unittest.TestCase):
 
         self.assertIn("记忆整理完成（manual）", report)
 
-    def test_model_maintenance_compacts_user_and_self_facts(self):
-        upsert_user_facts(
+    def test_model_maintenance_compacts_owner_and_instance_facts(self):
+        owner_key = person_from_session(self.session_id)
+        upsert_person_facts(
             {
                 "称呼偏好": "用户称仆仆为姐姐",
                 "nickname_for_pupu": "曾称呼仆仆为“姐姐”",
                 "身份": "读研学生",
             },
-            self.session_id,
+            default_subject_person_key=owner_key,
+            legacy_session_id=self.session_id,
         )
-        upsert_self_facts(
+        upsert_person_facts(
             {
                 "自称": "姐姐",
                 "仆仆自称": "姐姐",
                 "喜欢的游戏": "喜欢独立游戏",
             },
-            self.session_id,
+            default_subject_person_key=INSTANCE_PERSON_KEY,
+            legacy_session_id=self.session_id,
         )
 
+        conn = _get_conn()
+        try:
+            table_names = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                ).fetchall()
+            }
+            self.assertNotIn("user_facts", table_names)
+            self.assertNotIn("self_facts", table_names)
+        finally:
+            conn.close()
+
         raw = """{
-          "user_updates": {
+          "owner_updates": {
             "称呼偏好": "用户习惯称仆仆为姐姐"
           },
-          "user_delete_keys": ["nickname_for_pupu"],
-          "self_updates": {
+          "owner_delete_keys": ["nickname_for_pupu"],
+          "instance_updates": {
             "自称": "姐姐"
           },
-          "self_delete_keys": ["仆仆自称"],
+          "instance_delete_keys": ["仆仆自称"],
           "notes": "合并重复称呼事实"
         }"""
 
@@ -454,16 +468,16 @@ class MaintenanceTests(unittest.TestCase):
                 now=datetime(2026, 4, 26, 3, 0, 0),
             )
 
-        user_facts = get_user_facts(self.session_id)
-        self_facts = get_self_facts(self.session_id)
+        owner_facts = get_person_fact_map(owner_key)
+        instance_facts = get_person_fact_map(INSTANCE_PERSON_KEY)
 
         self.assertEqual(mock_json.call_args.kwargs["task_name"], "facts_maintenance")
-        self.assertEqual(user_facts["称呼偏好"], "用户习惯称仆仆为姐姐")
-        self.assertNotIn("nickname_for_pupu", user_facts)
-        self.assertEqual(user_facts["身份"], "读研学生")
-        self.assertEqual(self_facts["自称"], "姐姐")
-        self.assertNotIn("仆仆自称", self_facts)
-        self.assertEqual(self_facts["喜欢的游戏"], "喜欢独立游戏")
+        self.assertEqual(owner_facts["称呼偏好"], "用户习惯称仆仆为姐姐")
+        self.assertNotIn("nickname_for_pupu", owner_facts)
+        self.assertEqual(owner_facts["身份"], "读研学生")
+        self.assertEqual(instance_facts["自称"], "姐姐")
+        self.assertNotIn("仆仆自称", instance_facts)
+        self.assertEqual(instance_facts["喜欢的游戏"], "喜欢独立游戏")
         self.assertIn("- 模型删除事实：2", report)
         self.assertIn("- 模型更新事实：1", report)
 

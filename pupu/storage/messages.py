@@ -74,11 +74,15 @@ def get_recent_messages(
     session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     rows = conn.execute(
-        "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+        """SELECT id, role, content, speaker_key, speaker_name, speaker_qq
+           FROM messages
+           WHERE session_id = ?
+           ORDER BY id DESC
+           LIMIT ?""",
         (session_id, n),
     ).fetchall()
     conn.close()
-    return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+    return [dict(row) for row in reversed(rows)]
 
 
 def get_messages_in_range(

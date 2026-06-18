@@ -2,6 +2,7 @@
 
 from ..familiarity import score_to_level
 from ..event_thread_context import format_event_threads_section
+from ..storage.facts import group_person_facts_for_display
 from .core import get_core_persona, get_pupu_name
 from .familiarity_prompts import FAMILIARITY_PROMPTS
 
@@ -13,28 +14,31 @@ def _replace_default_character_name(text: object, character_name: str) -> str:
     return value
 
 
-def _format_facts(facts: dict[str, str], subject: str, character_name: str) -> str:
-    return "\n".join(
-        f"- {subject} | {_replace_default_character_name(key, character_name)}: "
-        f"{_replace_default_character_name(value, character_name)}"
-        for key, value in facts.items()
-    )
+def _format_person_facts(facts: list[dict], character_name: str) -> str:
+    lines: list[str] = []
+    for label, rows in group_person_facts_for_display(facts or []):
+        label = _replace_default_character_name(label, character_name)
+        lines.append(f"{label}:")
+        for row in rows:
+            key = _replace_default_character_name(row.get("fact_key"), character_name)
+            value = _replace_default_character_name(row.get("fact_value"), character_name)
+            if key and value:
+                lines.append(f"- {key}: {value}")
+    return "\n".join(lines)
 
 
 def _memory_subject(kind: str, character_name: str) -> str:
-    if kind == "user_fact":
-        return "用户"
-    if kind == "self_fact":
-        return character_name
     if kind in {"summary", "event_thread"}:
         return f"用户 / {character_name}"
+    if kind == "person_fact":
+        return "相关人物"
     return "相关记忆"
 
 
 def _format_recalled_memories(memories: list[dict], character_name: str) -> str:
     lines = []
     for item in memories:
-        text = _replace_default_character_name(item.get("text") or "", character_name).strip()
+        text = str(item.get("text") or "").strip()
         if not text:
             continue
         kind = str(item.get("kind") or "memory").strip()
@@ -45,9 +49,8 @@ def _format_recalled_memories(memories: list[dict], character_name: str) -> str:
 
 def build_system_prompt(
     familiarity_score: int,
-    user_facts: dict[str, str] = None,
     summaries: list[dict] = None,
-    self_facts: dict[str, str] = None,
+    person_facts: list[dict] = None,
     event_threads: list[dict] = None,
     reply_speed_hint: str = None,
     recalled_memories: list[dict] = None,
@@ -64,31 +67,18 @@ def build_system_prompt(
         + FAMILIARITY_PROMPTS[level]
     )
 
-    if self_facts:
-        prompt += f"\n\n## {character_name}自己的设定\n" + _format_facts(
-            self_facts,
-            character_name,
-            character_name,
-        )
-        prompt += "\n保持一致，不要自相矛盾。"
-
-    if user_facts:
-        prompt += "\n\n## 关于用户的长期记忆\n" + _format_facts(
-            user_facts,
-            "用户",
-            character_name,
-        )
-        if level in ("认识", "熟悉"):
-            prompt += "\n除非对方先提，不主动拿这些信息起话头。"
-        else:
-            prompt += "\n可自然引用，但不要每次都提。"
+    person_facts_section = _format_person_facts(person_facts or [], character_name)
+    if person_facts_section:
+        prompt += "\n\n## Long-term Facts By Person\n" + person_facts_section
+        prompt += "\nThese facts are scoped to people or relationships. Use them naturally, but do not repeat them mechanically."
 
     if summaries:
         prompt += "\n\n## 之前聊过\n"
         prompt += "\n".join(
             f"- [用户 / {character_name}] "
-            f"{_replace_default_character_name(item['summary'], character_name)}"
+            f"{str(item.get('summary') or '').strip()}"
             for item in summaries
+            if str(item.get("summary") or "").strip()
         )
 
     event_threads_section = format_event_threads_section(

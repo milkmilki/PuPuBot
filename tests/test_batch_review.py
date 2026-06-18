@@ -9,7 +9,13 @@ os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
-from pupu.agent import _format_event_thread_candidates_for_review, _parse_batch_review_result
+from pupu.agent import (
+    _format_chat_history_for_prompt,
+    _format_event_thread_candidates_for_review,
+    _format_message_content_for_prompt,
+    _format_turn_timestamp,
+    _parse_batch_review_result,
+)
 from pupu.memory import (
     append_event_step,
     _get_conn,
@@ -74,6 +80,17 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn("不要输出 QQ 号、person_key、qq:xxx", prompt)
         self.assertIn("不要把璐璐写成“仆仆”", prompt)
         self.assertNotIn("不要把璐璐写成“璐璐”", prompt)
+
+    def test_turn_timestamp_includes_weekday(self):
+        class FixedDateTime:
+            @classmethod
+            def now(cls):
+                from datetime import datetime
+
+                return datetime(2026, 6, 18, 19, 42)
+
+        with patch("pupu.agent.datetime", FixedDateTime):
+            self.assertEqual(_format_turn_timestamp(), "2026-06-18 周四 19:42")
 
     def test_summary_progress_counts_chat_messages(self):
         for i in range(3):
@@ -171,8 +188,7 @@ class BatchReviewTests(unittest.TestCase):
 {
   "summary": "talked about movies",
   "familiarity_delta": 2,
-  "user_facts": {"favorite_genre": "fantasy",},
-  "self_facts": {},
+  "person_facts": [{"subject": "小夫", "scope": "person", "key": "favorite_genre", "value": "fantasy",},],
   "event_updates": [{
     "action": "create_thread",
     "thread_key": "birthday-2026-04-27",
@@ -200,7 +216,7 @@ class BatchReviewTests(unittest.TestCase):
 
         self.assertEqual(parsed["summary"], "talked about movies")
         self.assertEqual(parsed["familiarity_delta"], 2)
-        self.assertEqual(parsed["user_facts"]["favorite_genre"], "fantasy")
+        self.assertEqual(parsed["person_facts"][0]["key"], "favorite_genre")
         self.assertEqual(
             parsed["event_updates"][0]["thread_key"],
             "birthday-2026-04-27",
@@ -212,10 +228,9 @@ class BatchReviewTests(unittest.TestCase):
 {
   "summary": "用户用"永远在一起"表达想做一辈子朋友。",
   "familiarity_delta": 8,
-  "user_facts": {
-    "commitment": "用户承诺要做仆仆一辈子的朋友，永远在一起"
-  },
-  "self_facts": {},
+  "person_facts": [
+    {"subject": "小夫", "scope": "person", "key": "commitment", "value": "用户承诺要做仆仆一辈子的朋友，永远在一起"}
+  ],
   "event_updates": [
     {
       "action": "create_thread",
@@ -240,6 +255,35 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(
             parsed["event_updates"][0]["thread_key"],
             "eternal_friendship_promise",
+        )
+
+    def test_parse_batch_review_result_filters_structured_fact_values(self):
+        raw = """{
+          "summary": "整理事实。",
+          "familiarity_delta": 0,
+          "person_facts": [
+            {"subject": "小夫", "scope": "person", "key": "爱好", "value": ["画画"]},
+            {"subject": "小夫", "scope": "person", "key": "昵称", "value": "小夫"},
+            {"subject": "璐璐", "scope": "person", "key": "会做饭", "value": true}
+          ],
+          "event_updates": [],
+          "task_updates": []
+        }"""
+
+        parsed = _parse_batch_review_result(raw)
+
+        self.assertEqual(
+            parsed["person_facts"],
+            [
+                {
+                    "subject": "小夫",
+                    "object": "",
+                    "scope": "person",
+                    "key": "昵称",
+                    "value": "小夫",
+                    "confidence": 1.0,
+                }
+            ],
         )
 
     def test_familiarity_updates_accumulate_in_order(self):
@@ -280,8 +324,6 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "用户和仆仆聊了一个重要约定。",
           "familiarity_delta": 1,
-          "user_facts": {},
-          "self_facts": {},
           "event_updates": [{
             "action": "create_thread",
             "thread_key": "promise-test",
@@ -362,8 +404,6 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "2026年5月21日，璐璐说自己想买二手屏。",
           "familiarity_delta": 0,
-          "user_facts": {},
-          "self_facts": {},
           "event_updates": [],
           "task_updates": []
         }"""
@@ -423,8 +463,6 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "小夫和璐璐完成一轮测试对话。",
           "familiarity_delta": 0,
-          "user_facts": {},
-          "self_facts": {},
           "event_updates": [],
           "task_updates": []
         }"""
@@ -473,8 +511,6 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "Alice、Bob 和璐璐完成群聊测试。",
           "familiarity_delta": 0,
-          "user_facts": {},
-          "self_facts": {},
           "event_updates": [],
           "task_updates": []
         }"""
@@ -494,6 +530,111 @@ class BatchReviewTests(unittest.TestCase):
         self.assertNotIn("QQ:123", review_input)
         self.assertNotIn("qq:123", review_input)
 
+    def test_live_prompt_uses_fixed_person_names_for_group_prefixes(self):
+        conn = get_conn()
+        try:
+            upsert_person(
+                conn,
+                "owner",
+                kind="owner",
+                display_name="小夫",
+                qq_id="424225912",
+                aliases=["钮钴禄·大家大宁"],
+            )
+            upsert_person(
+                conn,
+                "qq:3853876778",
+                kind="qq",
+                display_name="仆仆",
+                qq_id="3853876778",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        payload = (
+            '[{"person_key":"owner","display_name":"钮钴禄·大家大宁","qq_id":"424225912","kind":"owner"},'
+            '{"person_key":"qq:3853876778","display_name":"仆仆","qq_id":"3853876778","kind":"qq"}]'
+        )
+        message = {
+            "role": "user",
+            "content": "[钮钴禄·大家大宁(QQ:424225912)] 大家都是我老婆\n"
+            "[仆仆(QQ:3853876778)] 你想得挺美",
+            "speaker_key": payload,
+            "speaker_name": "钮钴禄·大家大宁",
+            "speaker_qq": "424225912",
+        }
+        people = [
+            {
+                "person_key": "owner",
+                "display_name": "小夫",
+                "qq_id": "424225912",
+                "kind": "owner",
+            },
+            {
+                "person_key": "qq:3853876778",
+                "display_name": "仆仆",
+                "qq_id": "3853876778",
+                "kind": "qq",
+            },
+        ]
+
+        content = _format_message_content_for_prompt(
+            message,
+            character_name="璐璐",
+            people=people,
+        )
+
+        self.assertIn("小夫：大家都是我老婆", content)
+        self.assertIn("仆仆：你想得挺美", content)
+        self.assertNotIn("大宁", content)
+        self.assertNotIn("QQ:424225912", content)
+
+    def test_live_chat_history_uses_fixed_person_names(self):
+        payload = (
+            '[{"person_key":"owner","display_name":"钮钴禄·大家大宁","qq_id":"424225912","kind":"owner"}]'
+        )
+        history = [
+            {
+                "role": "user",
+                "content": "[钮钴禄·大家大宁(QQ:424225912)] 干嘛啦",
+                "speaker_key": payload,
+                "speaker_name": "钮钴禄·大家大宁",
+                "speaker_qq": "424225912",
+            },
+            {
+                "role": "assistant",
+                "content": "别在群里闹",
+                "speaker_key": "instance",
+                "speaker_name": "璐璐",
+                "speaker_qq": "",
+            },
+        ]
+        people = [
+            {
+                "person_key": "owner",
+                "display_name": "小夫",
+                "qq_id": "424225912",
+                "kind": "owner",
+            },
+            {
+                "person_key": "instance",
+                "display_name": "璐璐",
+                "qq_id": "",
+                "kind": "instance",
+            },
+        ]
+
+        messages = _format_chat_history_for_prompt(
+            history,
+            character_name="璐璐",
+            people=people,
+        )
+
+        self.assertEqual(messages[0]["content"], "小夫：干嘛啦")
+        self.assertEqual(messages[1]["content"], "璐璐：别在群里闹")
+        self.assertNotIn("钮钴禄", "\n".join(item["content"] for item in messages))
+
     def test_batch_review_splits_context_summary_and_identity_memory(self):
         context_id = self.session_id + "_context"
         identity_id = self.session_id + "_identity"
@@ -507,22 +648,84 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "群上下文摘要。",
           "familiarity_delta": 2,
-          "user_facts": {"喜欢": "草莓"},
-          "self_facts": {},
+          "person_facts": [{"subject": "__IDENTITY__", "scope": "person", "key": "喜欢", "value": "草莓"}],
           "event_updates": [],
           "task_updates": []
         }"""
 
         from pupu.agent import _maybe_batch_review
-        from pupu.memory import get_user_facts
+        from pupu.memory import get_person_facts
 
-        with patch("pupu.agent.json_task", return_value=raw):
+        with patch("pupu.agent.json_task", return_value=raw.replace("__IDENTITY__", identity_id)):
             _maybe_batch_review(context_id, identity_session=identity_id)
 
         self.assertEqual(get_summaries(context_id, limit=1)[-1]["summary"], "群上下文摘要。")
         self.assertEqual(get_familiarity(identity_id), 2)
-        self.assertEqual(get_user_facts(identity_id), {"喜欢": "草莓"})
+        facts = get_person_facts(subject_person_keys=[identity_id], include_relationships=False)
+        self.assertEqual(
+            {(row["subject_person_key"], row["fact_key"]): row["fact_value"] for row in facts},
+            {(identity_id, "喜欢"): "草莓"},
+        )
         self.assertEqual(get_summaries(identity_id, limit=1), [])
+
+    def test_batch_review_saves_person_scoped_facts(self):
+        conn = get_conn()
+        try:
+            upsert_person(
+                conn,
+                "qq:123",
+                kind="qq",
+                display_name="Alice",
+                qq_id="123",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        for i in range(5):
+            save_message_with_speaker(
+                "user",
+                f"alice-{i}",
+                self.session_id,
+                source=CHAT,
+                speaker_key="qq:123",
+                speaker_name="Alice",
+                speaker_qq="123",
+            )
+            save_message_with_speaker(
+                "assistant",
+                f"assistant-{i}",
+                self.session_id,
+                source=CHAT,
+                speaker_key="instance",
+                speaker_name="璐璐",
+            )
+
+        raw = """{
+          "summary": "Alice和璐璐聊了事实记录。",
+          "familiarity_delta": 0,
+          "person_facts": [
+            {"subject": "Alice", "scope": "person", "key": "喜欢", "value": "草莓", "confidence": 0.9},
+            {"subject": "Alice", "object": "璐璐", "scope": "relationship", "key": "称呼", "value": "Alice会叫璐璐姐姐", "confidence": 0.8}
+          ],
+          "event_updates": [],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+        from pupu.memory import get_person_facts
+
+        with patch("pupu.agent.get_pupu_name", return_value="璐璐"):
+            with patch("pupu.agent.json_task", return_value=raw):
+                _maybe_batch_review(self.session_id, identity_session="private_123")
+
+        facts = get_person_facts(subject_person_keys=["qq:123"], include_relationships=True)
+        values = {
+            (row["subject_person_key"], row["object_person_key"], row["scope"], row["fact_key"]): row["fact_value"]
+            for row in facts
+        }
+        self.assertEqual(values[("qq:123", "", "person", "喜欢")], "草莓")
+        self.assertEqual(values[("qq:123", "instance", "relationship", "称呼")], "Alice会叫璐璐姐姐")
 
     def test_batch_review_omits_familiarity_delta_after_score_reaches_100(self):
         set_familiarity(100, session_id=self.session_id)
@@ -532,8 +735,6 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "满好感后只整理记忆。",
           "familiarity_delta": 7,
-          "user_facts": {},
-          "self_facts": {},
           "event_updates": [],
           "task_updates": []
         }"""

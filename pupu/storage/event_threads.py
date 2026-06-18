@@ -1271,6 +1271,31 @@ def event_graph_payload(session_id: str) -> dict[str, Any]:
                 key = normalize_person_key(person.get("person_key"))
                 if key and key not in people_by_key:
                     people_by_key[key] = dict(person)
+        fact_rows = [
+            dict(row)
+            for row in conn.execute(
+                """SELECT pf.id, pf.subject_person_key, pf.object_person_key, pf.scope,
+                          pf.fact_key, pf.fact_value, pf.confidence, pf.updated_at,
+                          sp.kind AS subject_kind,
+                          sp.display_name AS subject_display_name,
+                          op.kind AS object_kind,
+                          op.display_name AS object_display_name
+                   FROM person_facts pf
+                   LEFT JOIN people sp ON sp.person_key = pf.subject_person_key
+                   LEFT JOIN people op ON op.person_key = pf.object_person_key
+                   ORDER BY pf.updated_at DESC, pf.id DESC"""
+            ).fetchall()
+        ]
+        for fact in fact_rows:
+            for prefix in ("subject", "object"):
+                person_key = normalize_person_key(fact.get(f"{prefix}_person_key"))
+                if not person_key or person_key in people_by_key:
+                    continue
+                people_by_key[person_key] = {
+                    "person_key": person_key,
+                    "kind": fact.get(f"{prefix}_kind") or "",
+                    "display_name": fact.get(f"{prefix}_display_name") or person_key,
+                }
         steps: list[dict[str, Any]] = []
         if thread_ids:
             placeholders = ",".join("?" for _ in thread_ids)
@@ -1371,4 +1396,79 @@ def event_graph_payload(session_id: str) -> dict[str, Any]:
             }
         )
         previous_by_thread[thread_id] = node_id
-    return {"threads": thread_rows, "steps": steps, "nodes": nodes, "edges": edges}
+    for fact in fact_rows:
+        fact_id = int(fact["id"])
+        subject_key = normalize_person_key(fact.get("subject_person_key"))
+        object_key = normalize_person_key(fact.get("object_person_key"))
+        scope = _text(fact.get("scope") or "person")
+        fact_key = _text(fact.get("fact_key"))
+        fact_value = _text(fact.get("fact_value"))
+        if not subject_key or not fact_key or not fact_value:
+            continue
+        label = f"{fact_key}: {fact_value}"
+        node_id = f"fact-{fact_id}"
+        nodes.append(
+            {
+                "id": node_id,
+                "type": "fact",
+                "fact_id": fact_id,
+                "scope": scope,
+                "subject_person_key": subject_key,
+                "object_person_key": object_key,
+                "label": label,
+                "key": fact_key,
+                "value": fact_value,
+                "confidence": fact.get("confidence"),
+                "updated_at": fact.get("updated_at"),
+            }
+        )
+        if scope == "relationship" and object_key:
+            edges.append(
+                {
+                    "id": f"edge-relationship-fact-{fact_id}",
+                    "source": f"person-{subject_key}",
+                    "target": f"person-{object_key}",
+                    "label": fact_key,
+                    "type": "relationship_fact",
+                    "fact_id": fact_id,
+                    "fact_node": node_id,
+                }
+            )
+            edges.append(
+                {
+                    "id": f"edge-fact-{fact_id}-subject",
+                    "source": f"person-{subject_key}",
+                    "target": node_id,
+                    "label": "subject",
+                    "type": "fact_subject",
+                    "fact_id": fact_id,
+                }
+            )
+            edges.append(
+                {
+                    "id": f"edge-fact-{fact_id}-object",
+                    "source": node_id,
+                    "target": f"person-{object_key}",
+                    "label": "object",
+                    "type": "fact_object",
+                    "fact_id": fact_id,
+                }
+            )
+        else:
+            edges.append(
+                {
+                    "id": f"edge-person-{subject_key}-fact-{fact_id}",
+                    "source": f"person-{subject_key}",
+                    "target": node_id,
+                    "label": "fact",
+                    "type": "person_fact",
+                    "fact_id": fact_id,
+                }
+            )
+    return {
+        "threads": thread_rows,
+        "steps": steps,
+        "facts": fact_rows,
+        "nodes": nodes,
+        "edges": edges,
+    }

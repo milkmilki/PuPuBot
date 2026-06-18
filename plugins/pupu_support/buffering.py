@@ -39,6 +39,7 @@ from pupu.config import (
 from pupu.dialogue_loop import cancel_wait_timer, is_followup_eligible, register_sender
 from pupu.familiarity import compute_reply_delay
 from pupu.memory import get_familiarity, save_message, save_message_with_speaker
+from pupu.storage.people import resolve_person_for_prompt
 
 from . import state
 from .common import (
@@ -100,6 +101,35 @@ def _is_command_text(text: str) -> bool:
     return bool(str(text or "").lstrip().startswith("/"))
 
 
+_SPEAKER_PREFIX_RE = re.compile(r"^\s*\[(?:bot\s+)?(?P<name>.+?)\(QQ:(?P<qq>\d+)\)\]\s*(?P<text>.*)$")
+
+
+def _canonical_speaker(
+    *,
+    speaker_key: str = "",
+    speaker_user_id: str = "",
+    speaker_name: str = "",
+    speaker_is_bot: bool = False,
+) -> dict:
+    person = resolve_person_for_prompt(
+        person_key=speaker_key,
+        qq_id=speaker_user_id,
+        display_name=speaker_name,
+        kind="qq" if speaker_user_id else "user",
+    )
+    if speaker_is_bot:
+        person["kind"] = "bot"
+    return person
+
+
+def _strip_speaker_prefix(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        match = _SPEAKER_PREFIX_RE.match(raw_line)
+        lines.append(match.group("text") if match else raw_line)
+    return "\n".join(lines).strip()
+
+
 # ---------------------------------------------------------------------------
 # Centralized arbiter integration (open groups)
 # ---------------------------------------------------------------------------
@@ -116,13 +146,20 @@ def _arbiter_await_url() -> str:
 def _build_observe_payload(buf: dict, *, bot, text: str, message_id: str) -> dict:
     bot_id = load_bot_id() or str(getattr(bot, "self_id", "") or "bot")
     group_id = str(buf.get("group_id") or "")
+    person = _canonical_speaker(
+        speaker_key=str(buf.get("speaker_key") or ""),
+        speaker_user_id=str(buf.get("speaker_user_id") or ""),
+        speaker_name=str(buf.get("speaker_name") or ""),
+        speaker_is_bot=bool(buf.get("speaker_is_bot")),
+    )
     return {
         "group_id": group_id,
         "message_id": message_id,
         "speaker_qq": str(buf.get("speaker_user_id") or ""),
-        "speaker_name": str(buf.get("speaker_name") or ""),
+        "speaker_name": str(person.get("display_name") or buf.get("speaker_name") or ""),
+        "speaker_person_key": str(person.get("person_key") or ""),
         "speaker_is_bot": bool(buf.get("speaker_is_bot")),
-        "text": text,
+        "text": _strip_speaker_prefix(text),
         "ts": "",
         "reporter": {
             "bot_id": bot_id,
@@ -243,11 +280,13 @@ async def _post_self_reply_observe(buf: dict, bot, text: str) -> None:
     if not group_id:
         return
     bot_id = load_bot_id() or str(getattr(bot, "self_id", "") or "bot")
+    self_name = _configured_persona_brief() or bot_id
     payload = {
         "group_id": group_id,
         "message_id": f"self:{bot_id}:{time.time_ns()}",
         "speaker_qq": str(getattr(bot, "self_id", "") or ""),
-        "speaker_name": bot_id,
+        "speaker_name": self_name,
+        "speaker_person_key": "instance",
         "speaker_is_bot": True,
         "text": text,
         "ts": "",
@@ -447,11 +486,17 @@ async def buffer_message(
     if speaker_key is not None:
         buf["speaker_key"] = speaker_key
     if speaker_key or speaker_user_id or speaker_name:
+        canonical = _canonical_speaker(
+            speaker_key=str(speaker_key or ""),
+            speaker_user_id=str(speaker_user_id or ""),
+            speaker_name=str(speaker_name or ""),
+            speaker_is_bot=speaker_is_bot,
+        )
         speaker = {
-            "person_key": str(speaker_key or "").strip(),
-            "display_name": str(speaker_name or speaker_user_id or "").strip(),
+            "person_key": str(canonical.get("person_key") or speaker_key or "").strip(),
+            "display_name": str(canonical.get("display_name") or speaker_name or speaker_user_id or "").strip(),
             "qq_id": str(speaker_user_id or "").strip(),
-            "kind": "qq" if speaker_user_id else "user",
+            "kind": str(canonical.get("kind") or ("qq" if speaker_user_id else "user")),
         }
         speakers = buf.setdefault("speakers", [])
         signature = (speaker["person_key"], speaker["qq_id"], speaker["display_name"])

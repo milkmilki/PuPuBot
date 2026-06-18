@@ -256,7 +256,6 @@ def apply_app_config_env(
         "arbiter.host": "PUPU_ARBITER_HOST",
         "arbiter.port": "PUPU_ARBITER_PORT",
         "arbiter.debounce_idle_seconds": "PUPU_ARBITER_DEBOUNCE_IDLE_SEC",
-        "arbiter.debounce_max_seconds": "PUPU_ARBITER_DEBOUNCE_MAX_SEC",
         "arbiter.await_max_timeout_seconds": "PUPU_ARBITER_AWAIT_MAX_TIMEOUT_SEC",
         "arbiter.subscribe_timeout_seconds": "PUPU_ARBITER_SUBSCRIBE_TIMEOUT_SEC",
         "arbiter.timeout_seconds": "PUPU_ARBITER_TIMEOUT",

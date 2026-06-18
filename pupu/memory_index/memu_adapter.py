@@ -36,11 +36,9 @@ def _current_character_name() -> str:
 
 
 def _replace_default_character_name(text: str, character_name: str | None = None) -> str:
-    value = str(text or "")
-    name = str(character_name or _current_character_name()).strip()
-    if name and name != "仆仆":
-        value = value.replace("仆仆", name)
-    return value
+    # Persisted memories are factual text. Do not rewrite "仆仆" here: in group
+    # chats it may refer to another real instance/person, not the current bot.
+    return str(text or "")
 
 
 def _speaker_label(role: object, character_name: str | None = None) -> str:
@@ -77,7 +75,7 @@ class MemuWriteResult:
     error: str = ""
 
 
-TARGET_MAINTENANCE_KINDS = {"user_fact", "self_fact", "event_thread"}
+TARGET_MAINTENANCE_KINDS = {"person_fact", "event_thread"}
 RELATIVE_TIME_TERMS = (
     "今天",
     "今晚",
@@ -846,6 +844,14 @@ def _scope(identity_session: str, context_session: str | None = None) -> dict[st
     }
 
 
+def _global_cache_where() -> dict[str, Any]:
+    # memU runs against one SQLite cache DB per PuPu instance. Keep
+    # identity/context in item payloads for provenance, but do not use them as
+    # recall/list filters; group and private memories should be mutually
+    # available to the same instance.
+    return {}
+
+
 def _memory_payload(kind: str, text: str, **extra: Any) -> str:
     payload = {
         "kind": kind,
@@ -951,34 +957,11 @@ def _is_low_info_fact(payload: dict[str, Any]) -> bool:
 
 
 def _source_action(candidate: dict[str, Any]) -> str:
-    if not candidate.get("delete_source"):
-        return "none"
-    table = candidate.get("source_table") or ""
-    key = candidate.get("source_key") or ""
-    return f"delete {table}:{key}" if table and key else "none"
+    return "none"
 
 
 def _delete_source(identity_session: str, candidate: dict[str, Any]) -> int:
-    if not candidate.get("delete_source"):
-        return 0
-    table = str(candidate.get("source_table") or "")
-    key = str(candidate.get("source_key") or "")
-    if table not in {"user_facts", "self_facts"} or not key:
-        return 0
-    conn = get_conn()
-    try:
-        if table in {"user_facts", "self_facts"}:
-            cur = conn.execute(
-                f"DELETE FROM {table} WHERE session_id = ? AND fact_key = ?",
-                (identity_session, key),
-            )
-        conn.commit()
-        return int(cur.rowcount or 0)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    return 0
 
 
 def _load_event_thread_map(identity_session: str) -> dict[str, dict[str, Any]]:
@@ -1043,10 +1026,8 @@ def _absolutize_event_text(text: str, event_date: date | None) -> str:
 
 
 def _categories_for(kind: str) -> list[str]:
-    if kind == "user_fact":
-        return ["personal_info", "preferences"]
-    if kind == "self_fact":
-        return ["relationships", "knowledge"]
+    if kind == "person_fact":
+        return ["personal_info", "preferences", "relationships"]
     if kind == "event_thread":
         return ["experiences", "goals", "relationships"]
     if kind == "summary":
@@ -1057,7 +1038,7 @@ def _categories_for(kind: str) -> list[str]:
 def _memory_type_for(kind: str) -> str:
     if kind == "event_thread":
         return "event"
-    if kind in {"user_fact", "self_fact"}:
+    if kind == "person_fact":
         return "profile"
     return "knowledge"
 
@@ -1082,8 +1063,7 @@ def _extract_item_id(result: object) -> str:
 def _build_review_entries(
     *,
     summary: str,
-    user_facts: dict[str, str] | None = None,
-    self_facts: dict[str, str] | None = None,
+    person_facts: list[dict] | None = None,
     event_threads: list[dict] | None = None,
 ) -> list[tuple[str, str, dict[str, Any]]]:
     entries: list[tuple[str, str, dict[str, Any]]] = []
@@ -1091,12 +1071,42 @@ def _build_review_entries(
     summary_text = " ".join(_replace_default_character_name(summary, character_name).split())
     if summary_text:
         entries.append(("summary", f"对话摘要（用户 / {character_name}）: {summary_text}", {}))
-    for key, value in (user_facts or {}).items():
-        text = _replace_default_character_name(f"{key}: {value}", character_name)
-        entries.append(("user_fact", f"用户 | {text}", {"key": key}))
-    for key, value in (self_facts or {}).items():
-        text = _replace_default_character_name(f"{key}: {value}", character_name)
-        entries.append(("self_fact", f"{character_name} | {text}", {"key": key}))
+    for fact in person_facts or []:
+        if not isinstance(fact, dict):
+            continue
+        subject = str(
+            fact.get("subject_display_name")
+            or fact.get("subject")
+            or fact.get("subject_person_key")
+            or ""
+        ).strip()
+        obj = str(
+            fact.get("object_display_name")
+            or fact.get("object")
+            or fact.get("object_person_key")
+            or ""
+        ).strip()
+        key = str(fact.get("fact_key") or fact.get("key") or "").strip()
+        value = str(fact.get("fact_value") or fact.get("value") or "").strip()
+        scope = str(fact.get("scope") or "person").strip()
+        if not key or not value:
+            continue
+        label = subject or "相关人物"
+        if scope == "relationship" and obj:
+            label = f"{label} ↔ {obj}"
+        text = _replace_default_character_name(f"{label} | {key}: {value}", character_name)
+        entries.append(
+            (
+                "person_fact",
+                text,
+                {
+                    "key": key,
+                    "subject_person_key": fact.get("subject_person_key"),
+                    "object_person_key": fact.get("object_person_key"),
+                    "scope": scope,
+                },
+            )
+        )
     for event in event_threads or []:
         event_date = _parse_event_date(event.get("event_time"))
         event_label = _event_date_label(event_date) if event_date else ""
@@ -1142,15 +1152,14 @@ def sync_review_memory(
     start_msg_id: int,
     end_msg_id: int,
     summary: str,
-    user_facts: dict[str, str] | None = None,
-    self_facts: dict[str, str] | None = None,
+    person_facts: list[dict] | None = None,
     event_threads: list[dict] | None = None,
 ) -> MemuWriteResult:
     _log(
         "sync start "
         f"context={context_session} identity={identity_session} range={start_msg_id}..{end_msg_id} "
-        f"summary_chars={len(summary or '')} user_facts={len(user_facts or {})} "
-        f"self_facts={len(self_facts or {})} event_threads={len(event_threads or [])}"
+        f"summary_chars={len(summary or '')} person_facts={len(person_facts or [])} "
+        f"event_threads={len(event_threads or [])}"
     )
     if not is_memu_long_term_enabled():
         _log(
@@ -1171,8 +1180,7 @@ def sync_review_memory(
 
     entries = _build_review_entries(
         summary=summary,
-        user_facts=user_facts,
-        self_facts=self_facts,
+        person_facts=person_facts,
         event_threads=event_threads,
     )
     kind_counts = Counter(kind for kind, _, _ in entries)
@@ -1291,7 +1299,7 @@ def recall_memories(
     current_query = f"用户: {_replace_default_character_name(query, character_name)}".strip()
     full_query = (recent + "\n" + current_query).strip()
     messages = [{"role": "user", "content": {"text": full_query}}]
-    where = {"identity_session": identity_session}
+    where = _global_cache_where()
     _log(
         "recall request "
         f"context={context_session} identity={identity_session} where={_json_compact(where)} "
@@ -1375,7 +1383,7 @@ def _list_items(identity_session: str, limit: int = 200) -> list[dict[str, Any]]
         _log(f"list skipped status=disabled identity={identity_session}")
         return []
     service = _get_service()
-    where = {"identity_session": identity_session}
+    where = _global_cache_where()
 
     async def _list():
         return await service.list_memory_items(where=where)
@@ -1481,8 +1489,6 @@ def sync_missing_memu_event_threads(
         start_msg_id=0,
         end_msg_id=0,
         summary="",
-        user_facts={},
-        self_facts={},
         event_threads=missing_events,
     )
     status = "synced" if result.status in {"success", "empty"} else result.status
@@ -1534,7 +1540,7 @@ def _format_items(identity_session: str, kinds: set[str], empty_text: str) -> st
 def format_memu_facts_report(identity_session: str) -> str | None:
     if not is_memu_long_term_enabled():
         return None
-    return _format_items(identity_session, {"user_fact", "self_fact"}, "当前 memU 里没有 facts 记忆。")
+    return _format_items(identity_session, {"person_fact"}, "当前 memU 里没有 facts 记忆。")
 
 
 def format_memu_event_threads_report(identity_session: str) -> str | None:
@@ -1572,7 +1578,8 @@ def clear_memu_session(identity_session: str) -> int:
         _log(f"clear skipped status=unavailable identity={identity_session} error={type(exc).__name__}: {exc}")
         return 0
 
-    where = {"identity_session": identity_session}
+    where = _global_cache_where()
+    user_scope = _scope(identity_session, identity_session)
 
     async def _clear_all():
         result = await service.clear_memory(where=where)
@@ -1594,7 +1601,7 @@ def clear_memu_session(identity_session: str) -> int:
             item_id = str(item.get("id") or "")
             if not item_id:
                 continue
-            await service.delete_memory_item(memory_id=item_id, user=where)
+            await service.delete_memory_item(memory_id=item_id, user=user_scope)
             deleted += 1
         return {"listed": len(items), "deleted": deleted}
 

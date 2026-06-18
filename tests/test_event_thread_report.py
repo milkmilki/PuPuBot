@@ -174,6 +174,10 @@ class EventThreadReportTests(unittest.TestCase):
             html_text = html_path.read_text(encoding="utf-8")
             self.assertIn("PuPu 事件图谱", html_text)
             self.assertIn("Graph Plan", html_text)
+            self.assertIn("events 视图", html_text)
+            self.assertIn("facts 视图", html_text)
+            self.assertNotIn("横向事件链", html_text)
+            self.assertNotIn("layout-mode", html_text)
         finally:
             html_path.unlink(missing_ok=True)
 

@@ -22,6 +22,7 @@ from pupu.memory import (
     reset_session,
     save_message_with_speaker,
     upsert_event_threads,
+    upsert_person_facts,
 )
 from pupu.storage.people import qq_person_key, upsert_person
 import pupu.storage.event_threads as event_thread_store
@@ -341,7 +342,7 @@ class EventGraphMemoryTests(unittest.TestCase):
         self.assertEqual(len(payload["threads"]), 1)
         self.assertEqual(len(payload["steps"]), 2)
         self.assertGreaterEqual(len(payload["nodes"]), 3)
-        step_edges = [edge for edge in payload["edges"] if edge.get("type") != "person_thread"]
+        step_edges = [edge for edge in payload["edges"] if not edge.get("type")]
         person_edges = [edge for edge in payload["edges"] if edge.get("type") == "person_thread"]
         self.assertEqual(len(step_edges), 2)
         self.assertTrue(person_edges)
@@ -374,6 +375,54 @@ class EventGraphMemoryTests(unittest.TestCase):
         self.assertIn("用户", event["people_label"])
         self.assertTrue(steps[0]["people"])
         self.assertTrue(any(node["type"] == "person" for node in payload["nodes"]))
+
+    def test_event_graph_payload_contains_person_and_relationship_facts(self):
+        conn = get_conn()
+        try:
+            upsert_person(
+                conn,
+                "qq:123",
+                kind="qq",
+                display_name="Alice",
+                qq_id="123",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        upsert_person_facts(
+            [
+                {
+                    "subject": "owner",
+                    "scope": "person",
+                    "key": "喜欢",
+                    "value": "草莓",
+                },
+                {
+                    "subject": "owner",
+                    "object": "Alice",
+                    "scope": "relationship",
+                    "key": "称呼",
+                    "value": "小夫会叫 Alice 老师",
+                },
+            ],
+            legacy_session_id=self.session_id,
+            known_people=[
+                {
+                    "person_key": "qq:123",
+                    "kind": "qq",
+                    "display_name": "Alice",
+                    "qq_id": "123",
+                }
+            ],
+        )
+
+        payload = event_graph_payload(self.session_id)
+        node_types = {node["type"] for node in payload["nodes"]}
+        edge_types = {edge.get("type") for edge in payload["edges"]}
+
+        self.assertIn("fact", node_types)
+        self.assertIn("person_fact", edge_types)
+        self.assertIn("relationship_fact", edge_types)
 
     def test_event_people_are_inferred_from_message_range(self):
         speaker_key = qq_person_key("123456")

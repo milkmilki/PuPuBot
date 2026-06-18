@@ -2,34 +2,35 @@
 
 from __future__ import annotations
 
-from .memory_index import format_memu_facts_report
-from .memory import get_self_facts, get_user_facts
+from .memory import (
+    get_person_facts,
+    group_person_facts_for_display,
+    person_from_session,
+)
 
 
-def _format_fact_section(title: str, facts: dict[str, str]) -> list[str]:
-    lines = [f"{title} {len(facts)} 条"]
-    if not facts:
+def _format_fact_section(title: str, rows: list[dict]) -> list[str]:
+    lines = [f"{title} facts {len(rows)} 条"]
+    if not rows:
         lines.append("（空）")
         return lines
-
-    for index, (key, value) in enumerate(facts.items(), start=1):
-        lines.append(f"{index}. {key}: {value}")
+    for index, row in enumerate(rows, start=1):
+        lines.append(f"{index}. {row['fact_key']}: {row['fact_value']}")
     return lines
 
 
 def format_facts_report(session_id: str) -> str:
-    memu_report = format_memu_facts_report(session_id)
-    if memu_report is not None:
-        return memu_report
-
-    user_facts = get_user_facts(session_id)
-    self_facts = get_self_facts(session_id)
-
-    if not user_facts and not self_facts:
+    subject_key = person_from_session(session_id)
+    facts = get_person_facts(
+        subject_person_keys=[subject_key, "instance"],
+        include_relationships=True,
+    )
+    if not facts:
         return "当前没有长期 facts 记忆。"
 
-    lines = []
-    lines.extend(_format_fact_section("用户 facts", user_facts))
-    lines.append("")
-    lines.extend(_format_fact_section("仆仆 self_facts", self_facts))
+    lines: list[str] = []
+    for title, rows in group_person_facts_for_display(facts):
+        if lines:
+            lines.append("")
+        lines.extend(_format_fact_section(title, rows))
     return "\n".join(lines)

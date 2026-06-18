@@ -7,6 +7,7 @@ from datetime import datetime
 
 from ..llm import MODEL, json_task
 from ..storage.event_threads import apply_event_thread_maintenance
+from ..storage.people import INSTANCE_PERSON_KEY, person_from_session
 from .parsing import _parse_json_object
 from .prompt import (
     FACTS_MAINTENANCE_PROMPT,
@@ -112,8 +113,8 @@ def _run_summary_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict
     payload = {
         "session_id": snapshot["session_id"],
         "summaries": summaries,
-        "user_facts": snapshot["user_facts"],
-        "self_facts": snapshot["self_facts"],
+        "owner_facts": snapshot["owner_facts"],
+        "instance_facts": snapshot["instance_facts"],
     }
     result = _call_model_json(
         SUMMARY_MAINTENANCE_PROMPT,
@@ -221,15 +222,16 @@ def _run_event_thread_compaction(conn, snapshot: dict, *, apply: bool = True) ->
 
 
 def _run_fact_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
-    user_facts = snapshot["user_facts"]
-    self_facts = snapshot["self_facts"]
-    if not user_facts and not self_facts:
+    owner_facts = snapshot["owner_facts"]
+    instance_facts = snapshot["instance_facts"]
+    if not owner_facts and not instance_facts:
         return {"deleted_facts": 0, "updated_facts": 0, "note": ""}
 
+    session_id = snapshot["session_id"]
     payload = {
-        "session_id": snapshot["session_id"],
-        "user_facts": user_facts,
-        "self_facts": self_facts,
+        "session_id": session_id,
+        "owner_facts": owner_facts,
+        "instance_facts": instance_facts,
     }
     result = _call_model_json(
         FACTS_MAINTENANCE_PROMPT,
@@ -238,28 +240,28 @@ def _run_fact_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
         task_name="facts_maintenance",
     )
 
-    user_result = _apply_fact_updates(
+    owner_result = _apply_fact_updates(
         conn,
-        session_id=snapshot["session_id"],
-        table_name="user_facts",
-        existing_facts=user_facts,
-        updates=result.get("user_updates", {}),
-        delete_keys=result.get("user_delete_keys", []),
+        session_id=session_id,
+        subject_person_key=person_from_session(session_id),
+        existing_facts=owner_facts,
+        updates=result.get("owner_updates", {}),
+        delete_keys=result.get("owner_delete_keys", []),
         apply=apply,
     )
-    self_result = _apply_fact_updates(
+    instance_result = _apply_fact_updates(
         conn,
-        session_id=snapshot["session_id"],
-        table_name="self_facts",
-        existing_facts=self_facts,
-        updates=result.get("self_updates", {}),
-        delete_keys=result.get("self_delete_keys", []),
+        session_id=session_id,
+        subject_person_key=INSTANCE_PERSON_KEY,
+        existing_facts=instance_facts,
+        updates=result.get("instance_updates", {}),
+        delete_keys=result.get("instance_delete_keys", []),
         apply=apply,
     )
 
     return {
-        "deleted_facts": user_result["deleted"] + self_result["deleted"],
-        "updated_facts": user_result["updated"] + self_result["updated"],
+        "deleted_facts": owner_result["deleted"] + instance_result["deleted"],
+        "updated_facts": owner_result["updated"] + instance_result["updated"],
         "note": str(result.get("notes", "")).strip(),
     }
 
@@ -267,7 +269,7 @@ def _run_fact_compaction(conn, snapshot: dict, *, apply: bool = True) -> dict:
 def _apply_fact_updates(
     conn,
     session_id: str,
-    table_name: str,
+    subject_person_key: str,
     existing_facts: dict,
     updates,
     delete_keys,
@@ -289,27 +291,50 @@ def _apply_fact_updates(
         if value == str(existing_facts.get(key, "")).strip():
             continue
         if apply:
-            cur = conn.execute(
-                f"""UPDATE {table_name}
-                    SET fact_value = ?, updated_at = ?
-                    WHERE session_id = ? AND fact_key = ?""",
-                (value, now, session_id, key),
-            )
-            updated += max(0, int(cur.rowcount))
+            updated += _sync_person_fact(conn, session_id, subject_person_key, key, value)
         else:
             updated += 1
 
     deleted = len(normalized_delete_keys)
     if apply and normalized_delete_keys:
-        placeholders = ",".join("?" for _ in normalized_delete_keys)
-        cur = conn.execute(
-            f"""DELETE FROM {table_name}
-                WHERE session_id = ? AND fact_key IN ({placeholders})""",
-            [session_id, *normalized_delete_keys],
-        )
-        deleted = cur.rowcount
+        deleted = 0
+        for key in normalized_delete_keys:
+            deleted += _sync_person_fact(conn, session_id, subject_person_key, key, "")
 
     return {"deleted": deleted, "updated": updated}
+
+
+def _sync_person_fact(
+    conn,
+    session_id: str,
+    subject_person_key: str,
+    key: str,
+    value: str,
+) -> int:
+    if not value:
+        cur = conn.execute(
+            """DELETE FROM person_facts
+               WHERE subject_person_key = ? AND object_person_key = ''
+                 AND scope = 'person' AND fact_key = ?""",
+            (subject_person_key, key),
+        )
+        return max(0, int(cur.rowcount))
+    now = datetime.now().isoformat()
+    before = conn.total_changes
+    conn.execute(
+        """INSERT INTO person_facts (
+               subject_person_key, object_person_key, scope, legacy_session_id,
+               fact_key, fact_value, confidence, source_context_session,
+               source_msg_start_id, source_msg_end_id, created_at, updated_at
+           ) VALUES (?, '', 'person', ?, ?, ?, 1.0, '', NULL, NULL, ?, ?)
+           ON CONFLICT(subject_person_key, object_person_key, scope, fact_key)
+           DO UPDATE SET
+               fact_value = excluded.fact_value,
+               legacy_session_id = excluded.legacy_session_id,
+               updated_at = excluded.updated_at""",
+        (subject_person_key, session_id, key, value, now, now),
+    )
+    return max(0, conn.total_changes - before)
 
 
 def _normalize_fact_updates(values, allowed_keys: set[str]) -> dict[str, str]:

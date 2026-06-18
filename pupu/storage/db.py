@@ -81,17 +81,6 @@ def init_db():
     )
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS user_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL DEFAULT 'default',
-            fact_key TEXT NOT NULL,
-            fact_value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """
-    )
-    cursor.execute(
-        """
         CREATE TABLE IF NOT EXISTS summaries (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL DEFAULT 'default',
@@ -104,37 +93,45 @@ def init_db():
     )
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS self_facts (
+        CREATE TABLE IF NOT EXISTS person_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL DEFAULT 'default',
+            subject_person_key TEXT NOT NULL,
+            object_person_key TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT 'person',
+            legacy_session_id TEXT NOT NULL DEFAULT '',
             fact_key TEXT NOT NULL,
             fact_value TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            source_context_session TEXT NOT NULL DEFAULT '',
+            source_msg_start_id INTEGER,
+            source_msg_end_id INTEGER,
+            created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
     """
     )
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_user_facts_session
-        ON user_facts(session_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_person_facts_key
+        ON person_facts(subject_person_key, object_person_key, scope, fact_key)
     """
     )
     cursor.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_user_facts_key
-        ON user_facts(session_id, fact_key)
+        CREATE INDEX IF NOT EXISTS idx_person_facts_subject
+        ON person_facts(subject_person_key, updated_at)
     """
     )
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_self_facts_session
-        ON self_facts(session_id)
+        CREATE INDEX IF NOT EXISTS idx_person_facts_object
+        ON person_facts(object_person_key, updated_at)
     """
     )
     cursor.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_self_facts_key
-        ON self_facts(session_id, fact_key)
+        CREATE INDEX IF NOT EXISTS idx_person_facts_legacy_session
+        ON person_facts(legacy_session_id)
     """
     )
     cursor.execute(
@@ -332,6 +329,15 @@ def init_db():
             "ALTER TABLE event_threads ADD COLUMN origin_person_key TEXT NOT NULL DEFAULT ''"
         )
 
+    person_fact_columns = table_columns(conn, "person_facts")
+    if "legacy_session_id" not in person_fact_columns:
+        cursor.execute(
+            "ALTER TABLE person_facts ADD COLUMN legacy_session_id TEXT NOT NULL DEFAULT ''"
+        )
+
+    for old_table in ("important_events", "user_facts", "self_facts"):
+        cursor.execute(f"DROP TABLE IF EXISTS {old_table}")
+
     try:
         from .event_threads import ensure_event_thread_fts, rebuild_event_thread_fts
         from .people import backfill_default_event_people
@@ -349,8 +355,12 @@ def init_db():
         now = datetime.now().isoformat()
         for key, value in seed.items():
             cursor.execute(
-                "INSERT OR IGNORE INTO self_facts (session_id, fact_key, fact_value, updated_at) VALUES (?, ?, ?, ?)",
-                (OWNER_SESSION, key, value, now),
+                """INSERT OR IGNORE INTO person_facts (
+                       subject_person_key, object_person_key, scope, legacy_session_id,
+                       fact_key, fact_value, confidence, source_context_session,
+                       source_msg_start_id, source_msg_end_id, created_at, updated_at
+                   ) VALUES ('instance', '', 'person', ?, ?, ?, 1.0, '', NULL, NULL, ?, ?)""",
+                (OWNER_SESSION, key, value, now, now),
             )
 
     conn.commit()

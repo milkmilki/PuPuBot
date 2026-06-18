@@ -1,7 +1,12 @@
 """Structured storage submodules for database-backed state."""
 
 from .db import get_conn, get_data_dir, get_db_path, init_db, table_columns
-from .facts import get_self_facts, get_user_facts, upsert_self_facts, upsert_user_facts
+from .facts import (
+    get_person_fact_map,
+    get_person_facts,
+    group_person_facts_for_display,
+    upsert_person_facts,
+)
 from .familiarity_store import (
     ensure_familiarity,
     get_event_log,
@@ -57,6 +62,7 @@ from .people import (
     person_from_session,
     qq_person_key,
     qqofficial_person_key,
+    resolve_person_for_prompt,
     upsert_person,
 )
 from .scheduled_tasks import (
@@ -109,12 +115,12 @@ __all__ = [
     "get_messages_in_range",
     "get_oldest_unsummarized_msg_id",
     "get_pending_review_last_message_time",
+    "get_person_fact_map",
+    "get_person_facts",
     "get_recent_messages",
     "get_review_candidate_batch",
-    "get_self_facts",
     "get_summaries",
     "get_summary_trigger_progress",
-    "get_user_facts",
     "init_db",
     "link_event_thread_task",
     "list_pending_review_sessions",
@@ -130,8 +136,7 @@ __all__ = [
     "update_familiarity",
     "update_event_threads_for_task",
     "upsert_event_threads",
-    "upsert_self_facts",
-    "upsert_user_facts",
+    "upsert_person_facts",
     "INSTANCE_PERSON_KEY",
     "OWNER_PERSON_KEY",
     "attach_event_people",
@@ -147,5 +152,7 @@ __all__ = [
     "person_from_session",
     "qq_person_key",
     "qqofficial_person_key",
+    "resolve_person_for_prompt",
     "upsert_person",
+    "group_person_facts_for_display",
 ]

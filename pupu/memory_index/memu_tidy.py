@@ -16,6 +16,7 @@ from .memu_adapter import (
     _list_items,
     _load_event_thread_map,
     _log,
+    _scope,
     _get_service,
     _norm_text,
     _op_lock,
@@ -26,7 +27,7 @@ from .memu_adapter import (
 )
 from .memu_tidy_prompt import MEMU_TIDY_JUDGE_PROMPT
 
-TIDY_TARGET_KINDS = {"user_fact", "self_fact", "event_thread"}
+TIDY_TARGET_KINDS = {"person_fact", "event_thread"}
 DEFAULT_TIDY_CHUNK_ITEMS = 20
 DEFAULT_TIDY_CHUNK_CHARS = 6000
 DEFAULT_TIDY_MAX_TOKENS = 12000
@@ -536,6 +537,7 @@ def _run_memu_tidy_unlocked(
     async def _delete(items_to_delete: list[dict[str, Any]]) -> tuple[int, int]:
         deleted = 0
         failed = 0
+        user_scope = _scope(identity_session, identity_session)
         for candidate in items_to_delete:
             item_id = str(candidate.get("item_id") or "")
             if not item_id:
@@ -546,7 +548,7 @@ def _run_memu_tidy_unlocked(
                 f"reason={candidate.get('reason')} local_source=untouched"
             )
             try:
-                await service.delete_memory_item(memory_id=item_id, user={"identity_session": identity_session})
+                await service.delete_memory_item(memory_id=item_id, user=user_scope)
             except Exception as exc:
                 failed += 1
                 _log(

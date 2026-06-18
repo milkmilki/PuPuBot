@@ -105,7 +105,6 @@ arbiter:
   host: 127.0.0.1
   port: 18079
   debounce_idle_seconds: 30
-  debounce_max_seconds: 60
   await_max_timeout_seconds: 60
   subscribe_timeout_seconds: 30
   timeout_seconds: 300

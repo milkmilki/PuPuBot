@@ -13,10 +13,10 @@ from .memory import (
     get_familiarity,
     get_event_threads,
     get_last_message_time,
+    get_person_facts,
     get_recent_messages,
-    get_self_facts,
     get_summaries,
-    get_user_facts,
+    person_from_session,
     save_message,
 )
 from .memory_index import is_memu_long_term_enabled, recall_memories
@@ -24,6 +24,7 @@ from .message_sources import PROACTIVE
 from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT, get_pupu_name
 from .proactive_control import is_proactive_enabled
 from .sessions import OWNER_SESSION
+from .storage.facts import group_person_facts_for_display
 
 PROACTIVE_HISTORY_LIMIT = 30
 PROACTIVE_SUMMARY_LIMIT = 2
@@ -143,26 +144,35 @@ def _format_recent_context(recent: list[dict]) -> str:
     lines = []
     for message in recent:
         who = "用户" if message.get("role") == "user" else character_name
-        content = _replace_default_character_name(
-            message.get("content") or "",
-            character_name,
-        ).strip()
+        content = str(message.get("content") or "").strip()
         if content:
             lines.append(f"{who}: {content}")
     return "\n".join(lines) if lines else "（暂无历史对话）"
 
 
 def _format_summary_context(summaries: list[dict]) -> str:
-    character_name = get_pupu_name()
     lines = []
     for item in summaries:
-        summary = _replace_default_character_name(
-            item.get("summary") or "",
-            character_name,
-        ).strip()
+        summary = str(item.get("summary") or "").strip()
         if summary:
             lines.append(f"- {summary}")
     return "\n".join(lines) if lines else "（暂无摘要）"
+
+
+def _format_person_facts_section(facts: list[dict], character_name: str) -> str:
+    groups = group_person_facts_for_display(facts or [])
+    if not groups:
+        return ""
+    lines = ["## 长期 facts（按人物）"]
+    for label, rows in groups:
+        label = _replace_default_character_name(label, character_name)
+        lines.append(f"{label}:")
+        for row in rows:
+            key = _replace_default_character_name(row.get("fact_key"), character_name)
+            value = _replace_default_character_name(row.get("fact_value"), character_name)
+            if key and value:
+                lines.append(f"- {key}: {value}")
+    return "\n".join(lines)
 
 
 def _build_proactive_memu_query(score: int, period: dict, recent: list[dict]) -> str:
@@ -170,10 +180,7 @@ def _build_proactive_memu_query(score: int, period: dict, recent: list[dict]) ->
     recent_lines = []
     for item in recent[-4:]:
         role = "用户" if item.get("role") == "user" else character_name
-        content = _replace_default_character_name(
-            item.get("content") or "",
-            character_name,
-        ).replace("\n", " ").strip()
+        content = str(item.get("content") or "").replace("\n", " ").strip()
         if content:
             recent_lines.append(f"{role}: {content[:120]}")
     recent_text = " | ".join(recent_lines) or "无"
@@ -189,19 +196,14 @@ def _format_recalled_memories_section(memories: list[dict]) -> str:
     character_name = get_pupu_name()
     lines = []
     for item in memories:
-        text = _replace_default_character_name(
-            item.get("text") or "",
-            character_name,
-        ).strip()
+        text = str(item.get("text") or "").strip()
         if not text:
             continue
         kind = str(item.get("kind") or "memory").strip()
-        if kind == "user_fact":
-            subject = "用户"
-        elif kind == "self_fact":
-            subject = character_name
-        elif kind in {"summary", "event_thread"}:
+        if kind in {"summary", "event_thread"}:
             subject = f"用户 / {character_name}"
+        elif kind == "person_fact":
+            subject = "相关人物"
         else:
             subject = "相关记忆"
         score = item.get("score")
@@ -306,8 +308,7 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
         prompt = PROACTIVE_PROMPT.format(
             character_name=character_name,
             persona_level=level_desc,
-            self_facts_section="",
-            user_facts_section="",
+            facts_section="",
             summary_context=summary_ctx,
             time_period=period["name"],
             time_desc=f"{datetime.now().strftime('%H:%M')}",
@@ -323,31 +324,17 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
             )
         return prompt
 
-    self_facts = get_self_facts(OWNER_SESSION)
     event_threads = get_event_threads(OWNER_SESSION, limit=4)
-    user_facts = get_user_facts(OWNER_SESSION)
-
-    sf_section = ""
-    if self_facts:
-        sf_section = f"关于{character_name}自己（{character_name}之前说过的设定）：\n" + "\n".join(
-            f"- {character_name} | {_replace_default_character_name(k, character_name)}："
-            f"{_replace_default_character_name(v, character_name)}"
-            for k, v in self_facts.items()
-        )
-
-    uf_section = ""
-    if user_facts:
-        uf_section = "关于用户的长期记忆：\n" + "\n".join(
-            f"- 用户 | {_replace_default_character_name(k, character_name)}："
-            f"{_replace_default_character_name(v, character_name)}"
-            for k, v in user_facts.items()
-        )
+    person_facts = get_person_facts(
+        subject_person_keys=["instance", person_from_session(OWNER_SESSION)],
+        include_relationships=True,
+    )
+    facts_section = _format_person_facts_section(person_facts, character_name)
 
     prompt = PROACTIVE_PROMPT.format(
         character_name=character_name,
         persona_level=level_desc,
-        self_facts_section=sf_section,
-        user_facts_section=uf_section,
+        facts_section=facts_section,
         summary_context=summary_ctx,
         time_period=period["name"],
         time_desc=f"{datetime.now().strftime('%H:%M')}",

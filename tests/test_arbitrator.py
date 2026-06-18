@@ -71,6 +71,34 @@ class ArbitratorTests(unittest.TestCase):
 
         self.assertEqual(decision["speaker"], "none")
 
+    def test_recent_context_uses_canonical_speaker_names(self):
+        messages = [
+            {
+                "message_id": "1",
+                "speaker_qq": "424225912",
+                "speaker_person_key": "owner",
+                "speaker_name": "小夫",
+                "speaker_is_bot": False,
+                "text": "大家都是我老婆",
+            },
+            {
+                "message_id": "2",
+                "speaker_qq": "3853876778",
+                "speaker_person_key": "qq:3853876778",
+                "speaker_name": "仆仆",
+                "speaker_is_bot": True,
+                "text": "你想得挺美",
+            },
+        ]
+
+        context, _targets, since = arbitrator._build_recent_context(messages)
+
+        self.assertEqual(since, "2")
+        self.assertIn("[小夫] 大家都是我老婆", context)
+        self.assertIn("[bot 仆仆] 你想得挺美", context)
+        self.assertNotIn("424225912", context)
+        self.assertNotIn("钮钴禄", context)
+
 
 if __name__ == "__main__":
     unittest.main()

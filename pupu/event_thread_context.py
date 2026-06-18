@@ -17,10 +17,10 @@ def format_event_threads_section(
     lines = [heading]
     for event in items[:8]:
         def _text(value: object, fallback: str = "") -> str:
-            text = str(value or fallback).strip()
-            if character_name and character_name != "仆仆":
-                text = text.replace("仆仆", character_name)
-            return text
+            # Event threads are stored as factual text. A literal "仆仆" may be
+            # another participant in a group, so don't rewrite it to the
+            # current instance name here.
+            return str(value or fallback).strip()
 
         title = _text(event.get("title"), "未命名事件")
         event_time = str(event.get("event_time") or "").strip()
