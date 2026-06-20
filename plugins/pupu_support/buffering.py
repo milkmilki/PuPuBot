@@ -29,6 +29,7 @@ from pupu.config import (
     load_arbiter_base_url,
     load_arbiter_subscribe_timeout_seconds,
     load_arbiter_timeout_seconds,
+    load_arbiter_unavailable_probe_seconds,
     load_bot_id,
     load_config,
     load_first_numeric_owner_id,
@@ -124,6 +125,29 @@ def _is_command_text(text: str) -> bool:
     return bool(str(text or "").lstrip().startswith("/"))
 
 
+async def _is_group_silenced(group_id: str) -> bool:
+    group_id = str(group_id or "").strip()
+    if not group_id:
+        return False
+    base = load_arbiter_base_url().rstrip("/")
+    timeout = min(10.0, float(load_arbiter_timeout_seconds()))
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{base}/api/group_silence",
+                params={"group_id": group_id},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        print(
+            f"[pupu][arbiter] silence check failed group={group_id} "
+            f"err={type(exc).__name__}: {exc}"
+        )
+        return False
+    return bool((data or {}).get("ok") and (data or {}).get("enabled"))
+
+
 _SPEAKER_PREFIX_RE = re.compile(r"^\s*\[(?:bot\s+)?(?P<name>.+?)\(QQ:(?P<qq>\d+)\)\]\s*(?P<text>.*)$")
 
 
@@ -166,6 +190,75 @@ def _arbiter_await_url() -> str:
     return f"{load_arbiter_base_url().rstrip('/')}/api/await_decision"
 
 
+def is_local_group_silenced(group_id: str) -> bool:
+    return str(group_id or "").strip() in state.arbiter_local_silenced_groups
+
+
+def set_local_group_silence(group_id: str, enabled: bool) -> None:
+    group_id = str(group_id or "").strip()
+    if not group_id:
+        return
+    sid = f"group_{group_id}"
+    if enabled:
+        state.arbiter_local_silenced_groups.add(group_id)
+        task = state.arbiter_subscriber_tasks.pop(group_id, None)
+        if task and not task.done():
+            task.cancel()
+        state.msg_buffers.pop(sid, None)
+        state.session_phase.pop(sid, None)
+        state.arbiter_failure_count.pop(group_id, None)
+        state.arbiter_unavailable.pop(group_id, None)
+        state.arbiter_next_probe_at.pop(group_id, None)
+        print(f"[pupu][arbiter] local silence on group={group_id}; subscriber stopped")
+        return
+    state.arbiter_local_silenced_groups.discard(group_id)
+    state.arbiter_unavailable.pop(group_id, None)
+    state.arbiter_next_probe_at.pop(group_id, None)
+    state.arbiter_failure_count.pop(group_id, None)
+    print(f"[pupu][arbiter] local silence off group={group_id}; arbiter reconnect allowed")
+
+
+def _arbiter_can_probe(group_id: str) -> bool:
+    group_id = str(group_id or "")
+    if is_local_group_silenced(group_id):
+        return False
+    if not state.arbiter_unavailable.get(group_id):
+        return True
+    return time.monotonic() >= float(state.arbiter_next_probe_at.get(group_id, 0.0))
+
+
+def _mark_arbiter_success(group_id: str) -> None:
+    group_id = str(group_id or "")
+    was_unavailable = bool(state.arbiter_unavailable.get(group_id))
+    state.arbiter_failure_count[group_id] = 0
+    state.arbiter_next_probe_at.pop(group_id, None)
+    if was_unavailable:
+        state.arbiter_unavailable[group_id] = False
+        print(f"[pupu][arbiter] recovered group={group_id}")
+
+
+def _mark_arbiter_failure(group_id: str, *, where: str, exc: Exception) -> float:
+    group_id = str(group_id or "")
+    count = int(state.arbiter_failure_count.get(group_id, 0)) + 1
+    state.arbiter_failure_count[group_id] = count
+    probe_seconds = load_arbiter_unavailable_probe_seconds()
+    if count >= 3:
+        state.arbiter_next_probe_at[group_id] = time.monotonic() + probe_seconds
+        if not state.arbiter_unavailable.get(group_id):
+            state.arbiter_unavailable[group_id] = True
+            print(
+                f"[pupu][arbiter] unavailable group={group_id} "
+                f"after={count} where={where} err={type(exc).__name__}: {exc}; "
+                f"retry_every={probe_seconds:.0f}s"
+            )
+        return probe_seconds
+    print(
+        f"[pupu][arbiter] {where} error group={group_id} "
+        f"attempt={count}/3 err={type(exc).__name__}: {exc}"
+    )
+    return 0.0
+
+
 def _build_observe_payload(buf: dict, *, bot, text: str, message_id: str) -> dict:
     bot_id = load_bot_id() or str(getattr(bot, "self_id", "") or "bot")
     group_id = str(buf.get("group_id") or "")
@@ -198,18 +291,21 @@ def _build_observe_payload(buf: dict, *, bot, text: str, message_id: str) -> dic
 
 async def _post_observe_async(payload: dict) -> dict | None:
     """Best-effort POST to /api/observe; never raises."""
+    group_id = str(payload.get("group_id") or "")
+    if is_local_group_silenced(group_id):
+        return None
+    if group_id and not _arbiter_can_probe(group_id):
+        return None
     url = _arbiter_observe_url()
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
+            _mark_arbiter_success(group_id)
             return data if isinstance(data, dict) else None
     except Exception as exc:
-        print(
-            f"[pupu][arbiter] observe failed group={payload.get('group_id')} "
-            f"msg={payload.get('message_id')} err={type(exc).__name__}: {exc}"
-        )
+        _mark_arbiter_failure(group_id, where="observe", exc=exc)
         return None
 
 
@@ -218,6 +314,8 @@ def _ensure_arbiter_subscriber(
 ) -> None:
     """Start (idempotently) the per-group decision subscriber task."""
     if not group_id:
+        return
+    if is_local_group_silenced(group_id):
         return
     existing = state.arbiter_subscriber_tasks.get(group_id)
     if existing and not existing.done():
@@ -236,6 +334,8 @@ async def arbiter_decision_subscriber(group_id: str, sid: str, bot) -> None:
     timeout_sec = load_arbiter_subscribe_timeout_seconds()
     backoff = 1.0
     while True:
+        if is_local_group_silenced(group_id):
+            return
         try:
             since = int(state.arbiter_last_decision_id.get(group_id, 0))
             url = _arbiter_await_url()
@@ -248,6 +348,7 @@ async def arbiter_decision_subscriber(group_id: str, sid: str, bot) -> None:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 body = response.json()
+            _mark_arbiter_success(group_id)
             decision = (body or {}).get("decision")
             if not decision:
                 # Long-poll timed out without a new decision.
@@ -284,15 +385,12 @@ async def arbiter_decision_subscriber(group_id: str, sid: str, bot) -> None:
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            print(
-                f"[pupu][arbiter] subscriber error group={group_id} "
-                f"err={type(exc).__name__}: {exc}"
-            )
+            probe_sleep = _mark_arbiter_failure(group_id, where="subscriber", exc=exc)
             try:
-                await asyncio.sleep(min(backoff, 15.0))
+                await asyncio.sleep(probe_sleep if probe_sleep > 0 else min(backoff, 15.0))
             except asyncio.CancelledError:
                 return
-            backoff = min(backoff * 2.0, 15.0)
+            backoff = 1.0 if probe_sleep > 0 else min(backoff * 2.0, 15.0)
 
 
 async def _post_self_reply_observe(buf: dict, bot, text: str) -> None:
@@ -301,6 +399,8 @@ async def _post_self_reply_observe(buf: dict, bot, text: str) -> None:
         return
     group_id = str(buf.get("group_id") or "")
     if not group_id:
+        return
+    if is_local_group_silenced(group_id):
         return
     bot_id = load_bot_id() or str(getattr(bot, "self_id", "") or "bot")
     self_name = _configured_persona_brief() or bot_id
@@ -339,6 +439,9 @@ async def act_as_selected_speaker(sid: str) -> None:
     buf = state.msg_buffers.get(sid)
     if not buf:
         return
+    if is_local_group_silenced(str(buf.get("group_id") or "")):
+        state.msg_buffers.pop(sid, None)
+        return
     if state.session_phase.get(sid) == "processing":
         return
 
@@ -357,6 +460,19 @@ async def act_as_selected_speaker(sid: str) -> None:
         return
 
     try:
+        group_id = str(buf.get("group_id") or "")
+        if is_local_group_silenced(group_id):
+            print(
+                f"[pupu][arbiter] drop selected reply: session={sid} "
+                f"group={group_id} reason=local_silence"
+            )
+            return
+        if await _is_group_silenced(group_id):
+            print(
+                f"[pupu][arbiter] drop selected reply: session={sid} "
+                f"group={group_id} reason=silence_command"
+            )
+            return
         log("recv", buf.get("session_label") or "", buf.get("nickname") or "", combined_text or "[图片]")
         if combined_text:
             speaker_payload = json.dumps(buf.get("speakers") or [], ensure_ascii=False)
@@ -385,6 +501,12 @@ async def act_as_selected_speaker(sid: str) -> None:
             speaker_name=str(buf.get("speaker_name") or buf.get("nickname") or ""),
             speaker_qq=str(buf.get("speaker_user_id") or ""),
         )
+        if await _is_group_silenced(group_id):
+            print(
+                f"[pupu][arbiter] drop generated reply before send: session={sid} "
+                f"group={group_id} reason=silence_command"
+            )
+            return
         log("send", buf.get("session_label") or "", _bot_log_name(buf.get("bot")), reply)
         segments = split_message(reply)
         await send_segments(
@@ -432,6 +554,8 @@ async def buffer_message(
         return
 
     identity_session = _identity_session_for_context(sid, identity_session)
+    if is_open_group and is_local_group_silenced(str(group_id or sid.removeprefix("group_"))):
+        return
     if sid not in state.msg_buffers:
         state.msg_buffers[sid] = {
             "texts": [],

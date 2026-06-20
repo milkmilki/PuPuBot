@@ -34,6 +34,8 @@ class CommandRegistryTests(unittest.TestCase):
 
     def test_aliases_and_usage_helpers(self) -> None:
         self.assertIn("事件线", command_aliases("events"))
+        self.assertIn("slience", command_aliases("silence"))
+        self.assertEqual(resolve_command("/slient", surface="qq").command_id, "silence")
         self.assertEqual(command_usage("tidy"), "/tidy [check|apply|rebuild]")
 
 

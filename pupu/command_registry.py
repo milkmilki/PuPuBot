@@ -155,7 +155,10 @@ def get_command(command_id: str) -> CommandSpec:
 
 
 def command_aliases(command_id: str) -> set[str]:
-    return set(get_command(command_id).aliases)
+    aliases = set(get_command(command_id).aliases)
+    if command_id == "silence":
+        aliases.update({"slience", "slient"})
+    return aliases
 
 
 def command_usage(command_id: str) -> str:
@@ -175,7 +178,8 @@ def resolve_command(name: str, *, surface: str) -> CommandSpec | None:
     for spec in COMMANDS:
         if surface not in spec.surfaces:
             continue
-        if normalized in {_normalize_name(item) for item in spec.names}:
+        names = (spec.primary, *command_aliases(spec.command_id))
+        if normalized in {_normalize_name(item) for item in names}:
             return spec
     return None
 

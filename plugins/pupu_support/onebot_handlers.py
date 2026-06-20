@@ -96,6 +96,8 @@ if HAS_ONEBOT:
         text, image_urls = parse_onebot_message(event.get_message())
         if not text and not image_urls:
             return
+        if text.lstrip().startswith("/"):
+            return
         sid = f"group_{event.group_id}"
         identity_sid = identity_session_for_user(event.user_id)
         nickname = event.sender.nickname or str(event.user_id)

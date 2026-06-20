@@ -48,6 +48,7 @@ from pupu.proactive_control import is_proactive_enabled, set_proactive_enabled
 from pupu.tools import manage_scheduled_task
 from pupu.tts import get_tts_config, get_tts_status
 
+from .buffering import is_local_group_silenced, set_local_group_silence
 from .common import is_owner, log, resolve_sessions, send_private_segments, split_message
 from . import state
 
@@ -532,16 +533,22 @@ async def handle_silence(event: Event, args: Message = CommandArg()):
     action = args.extract_plain_text().strip().lower()
 
     if action in {"", "status", "状态", "?"}:
+        local_on = is_local_group_silenced(group_id)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.get(url, params={"group_id": group_id})
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:
-            await silence_cmd.finish(f"查询失败（请确认仲裁服务已启动）：{exc}")
+            await silence_cmd.finish(
+                "本群仲裁静默："
+                + ("已开启（本地强制不接话）" if local_on else "未知（仲裁服务不可用，本地未静默）")
+                + f"\n仲裁服务查询失败：{exc}"
+                + "\n用法：/silence on | /silence off"
+            )
         if not data.get("ok"):
             await silence_cmd.finish(f"查询失败：{data.get('error', data)}")
-        on = bool(data.get("enabled"))
+        on = local_on or bool(data.get("enabled"))
         await silence_cmd.finish(
             "本群仲裁静默：" + ("已开启（强制不接话）" if on else "已关闭（正常接话）")
             + "\n用法：/silence on | /silence off"
@@ -554,17 +561,23 @@ async def handle_silence(event: Event, args: Message = CommandArg()):
     else:
         await silence_cmd.finish("用法：/silence on 关闭接话，/silence off 恢复，/silence 查看状态")
 
+    set_local_group_silence(group_id, enabled)
+    sync_note = ""
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json={"group_id": group_id, "enabled": enabled})
             resp.raise_for_status()
             data = resp.json()
     except Exception as exc:
-        await silence_cmd.finish(f"同步失败（请确认仲裁服务已启动）：{exc}")
-    if not data.get("ok"):
-        await silence_cmd.finish(f"失败：{data.get('error', data)}")
+        sync_note = f"\n（仲裁服务暂不可用，仅本地状态已生效：{exc}）"
+    else:
+        if not data.get("ok"):
+            sync_note = f"\n（仲裁服务同步失败，仅本地状态已生效：{data.get('error', data)}）"
 
     if enabled:
-        await silence_cmd.finish("已开启：本群仲裁将固定为不接话（speaker 恒为 none），直到 /silence off。")
+        await silence_cmd.finish(
+            "已开启：本群本地静默，不再连接仲裁服务，也不会接话，直到 /silence off。"
+            + sync_note
+        )
     else:
-        await silence_cmd.finish("已关闭：本群仲裁恢复正常接话。")
+        await silence_cmd.finish("已关闭：本群恢复连接仲裁服务并正常接话。" + sync_note)

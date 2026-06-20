@@ -21,6 +21,7 @@ DEFAULT_ARBITER_BASE_URL = "http://127.0.0.1:18079"
 DEFAULT_ARBITER_TIMEOUT_SECONDS = 300.0
 DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 60.0
 DEFAULT_ARBITER_SUBSCRIBE_TIMEOUT_SECONDS = 30.0
+DEFAULT_ARBITER_UNAVAILABLE_PROBE_SECONDS = 60.0
 
 
 def get_config_path() -> Path:
@@ -177,6 +178,23 @@ def load_arbiter_timeout_seconds() -> float:
     except Exception:
         pass
     return DEFAULT_ARBITER_TIMEOUT_SECONDS
+
+
+def load_arbiter_unavailable_probe_seconds() -> float:
+    raw_env = os.environ.get("PUPU_ARBITER_UNAVAILABLE_PROBE_SEC", "").strip()
+    if raw_env:
+        try:
+            return max(10.0, min(600.0, float(raw_env)))
+        except ValueError:
+            pass
+    try:
+        config = load_config()
+        raw = config.get("arbiter_unavailable_probe_seconds")
+        if raw is not None:
+            return max(10.0, min(600.0, float(raw)))
+    except Exception:
+        pass
+    return DEFAULT_ARBITER_UNAVAILABLE_PROBE_SECONDS
 
 
 def load_peer_config() -> dict:

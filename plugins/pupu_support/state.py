@@ -34,3 +34,13 @@ arbiter_subscriber_tasks: dict[str, asyncio.Task] = {}
 # Last seen ``decision_id`` per group, so the subscriber resumes from the
 # correct cursor across reconnects.
 arbiter_last_decision_id: dict[str, int] = {}
+
+# Per-group connection health for the centralized arbiter. This keeps outage
+# logs quiet while still probing periodically for recovery.
+arbiter_failure_count: dict[str, int] = {}
+arbiter_unavailable: dict[str, bool] = {}
+arbiter_next_probe_at: dict[str, float] = {}
+
+# Local per-group silence switch. Unlike arbiter-side silence, this works even
+# when the arbiter service is stopped and prevents reconnect attempts.
+arbiter_local_silenced_groups: set[str] = set()
