@@ -188,7 +188,7 @@ def upsert_person(
         preserve_existing_display = (
             (_is_fixed_external_person(key) and existing_display)
             or (
-                key == OWNER_PERSON_KEY
+                key in {OWNER_PERSON_KEY, INSTANCE_PERSON_KEY}
                 and existing_display
                 and not _is_default_display_for_key(key, existing_display)
             )
@@ -441,8 +441,7 @@ def get_people_for_message_range(
         owner = default_owner_person()
         people[owner["person_key"]] = owner
     if include_instance:
-        instance = default_instance_person(instance_name)
-        people[instance["person_key"]] = instance
+        _add_range_person(people, default_instance_person(instance_name))
     _apply_known_people(conn, people)
     return list(people.values())
 

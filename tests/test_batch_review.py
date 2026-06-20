@@ -21,6 +21,7 @@ from pupu.memory import (
     _get_conn,
     create_scheduled_task,
     get_familiarity,
+    get_event_thread_steps,
     get_event_threads,
     get_pending_review_last_message_time,
     get_review_candidate_batch,
@@ -61,6 +62,84 @@ class BatchReviewTests(unittest.TestCase):
     def _save_chat_turn(self, index: int):
         save_message("user", f"user-{index}", self.session_id, source=CHAT)
         save_message("assistant", f"assistant-{index}", self.session_id, source=CHAT)
+
+    def _setup_group_replay_people(self):
+        conn = get_conn()
+        try:
+            upsert_person(
+                conn,
+                "owner",
+                kind="owner",
+                display_name="小夫",
+                qq_id="424225912",
+                aliases=["钮钴禄·大家大宁"],
+            )
+            upsert_person(
+                conn,
+                "qq:3853876778",
+                kind="qq",
+                display_name="仆仆",
+                qq_id="3853876778",
+            )
+            upsert_person(
+                conn,
+                "instance",
+                kind="instance",
+                display_name="璐璐",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _save_group_replay_batch(self, session_id: str) -> None:
+        payload_owner_pupu = (
+            '[{"person_key":"owner","display_name":"钮钴禄·大家大宁","qq_id":"424225912","kind":"owner"},'
+            '{"person_key":"qq:3853876778","display_name":"仆仆","qq_id":"3853876778","kind":"qq"},'
+            '{"person_key":"instance","display_name":"璐璐","qq_id":"","kind":"instance"}]'
+        )
+        save_message_with_speaker(
+            "user",
+            "[时间: 2026-06-18 周四 18:38] [钮钴禄·大家大宁(QQ:424225912)] 姐姐们晚上看我表现\n"
+            "[仆仆(QQ:3853876778)] 仆仆：先把活干完",
+            session_id,
+            source=CHAT,
+            speaker_key=payload_owner_pupu,
+            speaker_name="钮钴禄·大家大宁",
+            speaker_qq="424225912",
+        )
+        save_message_with_speaker(
+            "assistant",
+            "璐璐：别在群里嚎，晚上再说",
+            session_id,
+            source=CHAT,
+            speaker_key="instance",
+            speaker_name="璐璐",
+        )
+        replay_rows = [
+            ("owner", "钮钴禄·大家大宁", "424225912", "小夫下班了吗"),
+            ("qq:3853876778", "仆仆", "3853876778", "仆仆：看他表现"),
+            ("owner", "钮钴禄·大家大宁", "424225912", "代码写完了，已经下班"),
+            ("instance", "璐璐", "", "那就先闭嘴"),
+            ("qq:3853876778", "仆仆", "3853876778", "别又在群里嚎"),
+            ("owner", "钮钴禄·大家大宁", "424225912", "好好好我等晚上"),
+            ("instance", "璐璐", "", "晚上再看"),
+            ("owner", "钮钴禄·大家大宁", "424225912", "我会好好表现"),
+        ]
+        for speaker_key, speaker_name, speaker_qq, content in replay_rows:
+            save_message_with_speaker(
+                "assistant" if speaker_key == "instance" else "user",
+                content,
+                session_id,
+                source=CHAT,
+                speaker_key=speaker_key,
+                speaker_name=speaker_name,
+                speaker_qq=speaker_qq,
+            )
+
+    def _group_replay_identity(self) -> str:
+        identity = self.session_id + "_identity"
+        reset_session(identity)
+        return identity
 
     def test_batch_review_prompt_requires_concrete_event_memory(self):
         prompt = build_batch_review_prompt()
@@ -568,6 +647,134 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn("Bob：hello <end>", review_input)
         self.assertNotIn("QQ:123", review_input)
         self.assertNotIn("qq:123", review_input)
+
+    def test_group_log_replay_projects_stable_people_for_batch_review(self):
+        group_session = self.session_id + "_group"
+        reset_session(group_session)
+        identity_session = self._group_replay_identity()
+        self._setup_group_replay_people()
+        self._save_group_replay_batch(group_session)
+
+        raw = """{
+          "summary": "2026年6月18日傍晚，小夫在群聊中与仆仆、璐璐约定晚上看表现。",
+          "familiarity_delta": 0,
+          "fact_updates": [],
+          "event_updates": [],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+
+        with (
+            patch("pupu.agent.get_pupu_name", return_value="璐璐"),
+            patch("pupu.agent.json_task", return_value=raw) as mock_json_task,
+        ):
+            _maybe_batch_review(group_session, identity_session=identity_session)
+
+        review_input = mock_json_task.call_args.kwargs["user_content"]
+
+        self.assertIn("[时间: 2026-06-18 周四 18:38] 小夫：姐姐们晚上看我表现 <end>", review_input)
+        self.assertIn("[时间: 2026-06-18 周四 18:38] 仆仆：先把活干完 <end>", review_input)
+        self.assertIn("璐璐：别在群里嚎，晚上再说 <end>", review_input)
+        self.assertIn("仆仆：看他表现 <end>", review_input)
+        self.assertNotIn("钮钴禄", review_input)
+        self.assertNotIn("QQ:424225912", review_input)
+        self.assertNotIn("qq:424225912", review_input)
+        self.assertNotIn("仆仆：仆仆：", review_input)
+        self.assertNotIn("璐璐、璐璐", review_input)
+        self.assertNotIn("“恋人”", review_input)
+        self.assertNotIn("“朋友”", review_input)
+        self.assertNotIn("“自己”", review_input)
+
+    def test_group_log_replay_writes_facts_and_events_with_distinct_people(self):
+        group_session = self.session_id + "_group"
+        reset_session(group_session)
+        identity_session = self._group_replay_identity()
+        self._setup_group_replay_people()
+        self._save_group_replay_batch(group_session)
+
+        raw = """{
+          "summary": "2026年6月18日傍晚，小夫在群聊中与仆仆、璐璐约定晚上看表现。",
+          "familiarity_delta": 0,
+          "fact_updates": [
+            {
+              "action": "create",
+              "subject": "小夫",
+              "scope": "person",
+              "key": "群聊习惯",
+              "value": "小夫会在群聊里向仆仆和璐璐撒娇。",
+              "confidence": 0.9
+            },
+            {
+              "action": "create",
+              "subject": "小夫",
+              "object": "仆仆",
+              "scope": "relationship",
+              "key": "互动方式",
+              "value": "仆仆会催小夫先把活干完。",
+              "confidence": 0.85
+            }
+          ],
+          "event_updates": [
+            {
+              "action": "create_thread",
+              "thread_key": "xiaofu-pupu-lulu-evening-plan-20260618",
+              "title": "2026年6月18日晚上小夫与仆仆、璐璐的约定",
+              "kind": "promise",
+              "details": "2026年6月18日傍晚，小夫在群聊里说晚上看他表现；仆仆催他先把活干完，璐璐让他别在群里嚎。",
+              "followup_hint": "晚上可自然看小夫是否兑现表现。",
+              "confidence": 0.9,
+              "step_type": "user"
+            }
+          ],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+        from pupu.memory import get_person_facts
+
+        with (
+            patch("pupu.agent.get_pupu_name", return_value="璐璐"),
+            patch("pupu.agent.json_task", return_value=raw),
+        ):
+            _maybe_batch_review(group_session, identity_session=identity_session)
+
+        facts = get_person_facts(subject_person_keys=["owner"], include_relationships=True)
+        fact_values = {
+            (
+                row["subject_person_key"],
+                row["object_person_key"],
+                row["scope"],
+                row["fact_key"],
+            ): row["fact_value"]
+            for row in facts
+        }
+        self.assertEqual(
+            fact_values[("owner", "", "person", "群聊习惯")],
+            "小夫会在群聊里向仆仆和璐璐撒娇。",
+        )
+        self.assertEqual(
+            fact_values[("owner", "qq:3853876778", "relationship", "互动方式")],
+            "仆仆会催小夫先把活干完。",
+        )
+        self.assertFalse(any(row["subject_person_key"] == "qq:424225912" for row in facts))
+
+        events = get_event_threads(identity_session, limit=5)
+        event = next(
+            item
+            for item in events
+            if item["thread_key"] == "xiaofu-pupu-lulu-evening-plan-20260618"
+        )
+        self.assertEqual(event["people_label"], "小夫 / 仆仆 / 璐璐")
+        self.assertNotIn("钮钴禄", event["people_label"])
+        self.assertNotIn("璐璐 / 璐璐", event["people_label"])
+
+        thread, steps = get_event_thread_steps(
+            identity_session,
+            "xiaofu-pupu-lulu-evening-plan-20260618",
+        )
+        self.assertIsNotNone(thread)
+        self.assertEqual(steps[-1]["people_label"], "小夫 / 仆仆 / 璐璐")
 
     def test_live_prompt_uses_fixed_person_names_for_group_prefixes(self):
         conn = get_conn()

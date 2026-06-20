@@ -539,6 +539,12 @@ def _merge_people_for_prompt(*groups: list[dict]) -> list[dict]:
         for person in group or []:
             if not isinstance(person, dict):
                 continue
+            person = resolve_person_for_prompt(
+                person_key=str(person.get("person_key") or ""),
+                qq_id=str(person.get("qq_id") or ""),
+                display_name=str(person.get("display_name") or ""),
+                kind=str(person.get("kind") or "user"),
+            )
             key = str(person.get("person_key") or "").strip()
             qq = str(person.get("qq_id") or "").strip()
             merge_key = key or (f"qq:{qq}" if qq else "")
@@ -547,7 +553,22 @@ def _merge_people_for_prompt(*groups: list[dict]) -> list[dict]:
             existing = merged.setdefault(merge_key, {})
             for field in ("person_key", "kind", "display_name", "qq_id", "aliases"):
                 value = person.get(field)
-                if value not in (None, "", []):
+                if value in (None, "", []):
+                    continue
+                if field == "display_name" and existing.get(field) and existing.get(field) != value:
+                    aliases = existing.setdefault("aliases", [])
+                    if not isinstance(aliases, list):
+                        aliases = [str(aliases)]
+                        existing["aliases"] = aliases
+                    aliases.append(str(existing.get(field) or ""))
+                    existing[field] = value
+                    continue
+                if field == "aliases" and existing.get(field):
+                    aliases = existing.setdefault("aliases", [])
+                    if isinstance(aliases, list):
+                        aliases.extend(value if isinstance(value, list) else [str(value)])
+                    continue
+                if existing.get(field) in (None, "", []):
                     existing[field] = value
     return list(merged.values())
 

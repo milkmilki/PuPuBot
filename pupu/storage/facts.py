@@ -171,6 +171,21 @@ def upsert_person_facts(
             display_name=instance["display_name"],
             now=now,
         )
+        for person in known_people or []:
+            if not isinstance(person, dict):
+                continue
+            person_key = normalize_person_key(person.get("person_key"))
+            if not person_key:
+                continue
+            upsert_person(
+                conn,
+                person_key,
+                kind=_text(person.get("kind")),
+                display_name=_text(person.get("display_name")),
+                qq_id=_text(person.get("qq_id")),
+                aliases=person.get("aliases"),
+                now=now,
+            )
 
         if isinstance(facts, dict):
             raw_items: list[dict[str, Any]] = [
