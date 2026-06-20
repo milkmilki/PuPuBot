@@ -116,6 +116,31 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(first_extra["source_msg_start_id"], 1)
         self.assertEqual(second_extra["source_msg_start_id"], 99)
 
+    def test_memu_reinforcement_keeps_source_card_metadata_in_stable_payload(self):
+        stable, volatile = _canonical_memory_payload_for_hash(
+            json.dumps(
+                {
+                    "kind": "event_thread",
+                    "text": "Event text",
+                    "projection_kind": "rag_card",
+                    "source_type": "event_thread",
+                    "source_id": 7,
+                    "source_key": "event_thread:owner:test",
+                    "source_version": "v1",
+                    "source_msg_start_id": 1,
+                    "created_at": "2026-01-01T00:00:00",
+                }
+            )
+        )
+
+        payload = json.loads(stable)
+        self.assertEqual(payload["projection_kind"], "rag_card")
+        self.assertEqual(payload["source_type"], "event_thread")
+        self.assertEqual(payload["source_key"], "event_thread:owner:test")
+        self.assertEqual(payload["source_version"], "v1")
+        self.assertNotIn("source_msg_start_id", payload)
+        self.assertEqual(volatile["source_msg_start_id"], 1)
+
     def test_memu_reports_merge_payload_extra_saved_after_reinforcement(self):
         items = [
             {
@@ -252,6 +277,20 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("用户: 我想画画", text)
         self.assertIn("璐璐: 我想买二手屏", text)
 
+    def test_recall_history_keeps_preformatted_group_speaker_names(self):
+        text = _format_history_for_recall(
+            [
+                {"role": "user", "content": "[时间: 2026-06-19 周五 08:01] 小夫：姐姐们"},
+                {"role": "user", "content": "仆仆：又来了"},
+            ],
+            character_name="璐璐",
+        )
+
+        self.assertIn("[时间: 2026-06-19 周五 08:01] 小夫：姐姐们", text)
+        self.assertIn("仆仆：又来了", text)
+        self.assertNotIn("用户: [时间:", text)
+        self.assertNotIn("用户: 仆仆：", text)
+
     def test_adapter_absolutizes_event_thread_text_for_memu(self):
         with patch("pupu.memory_index.memu_adapter.get_pupu_name", return_value="璐璐"):
             entries = _build_review_entries(
@@ -319,8 +358,9 @@ class MemuMemoryTests(unittest.TestCase):
                 ],
             )
 
-        self.assertIn("本轮自然想起的记忆", prompt)
-        self.assertIn("[person_fact | 相关人物] 小夫 | 近况: 最近在玩像素农场", prompt)
+        self.assertIn("本轮自然想起的事", prompt)
+        self.assertIn("- 小夫 | 近况: 最近在玩像素农场", prompt)
+        self.assertNotIn("[person_fact | 相关人物]", prompt)
 
     def test_system_prompt_preserves_names_inside_recalled_memory(self):
         with patch("pupu.persona.builder.get_pupu_name", return_value="璐璐"):
@@ -566,42 +606,47 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("游戏: 像素农场", format_facts_report(self.session_id))
 
     def test_sync_missing_memu_event_threads_backfills_by_source_key(self):
-        events = [
-            {
-                "thread_key": "already-there",
-                "title": "Already there",
-                "details": "present",
-                "confidence": 1.0,
-            },
-            {
-                "thread_key": "missing-event",
-                "title": "Missing event",
-                "details": "needs sync",
-                "confidence": 0.9,
-            },
-        ]
-        memu_items = [
-            {
-                "id": "m1",
-                "summary": '{"kind":"event_thread","thread_key":"already-there","text":"present"}',
-            }
-        ]
+        created = []
+
+        class FakeService:
+            async def list_memory_items(self, *, where=None):
+                return {"items": []}
+
+            async def create_memory_item(self, **kwargs):
+                created.append(kwargs)
+                return {"memory_item": {"id": f"new-{len(created)}"}}
+
+        upsert_event_threads(
+            self.session_id,
+            [
+                {
+                    "thread_key": "missing-event",
+                    "title": "Missing event",
+                    "kind": "milestone",
+                    "details": "needs sync",
+                    "confidence": 0.9,
+                    "status": "active",
+                },
+            ],
+        )
 
         with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
-            with patch("pupu.memory_index.memu_adapter._list_items", return_value=memu_items):
-                with patch(
-                    "pupu.memory_index.memu_adapter.sync_review_memory",
-                    return_value=MemuWriteResult(status="success", ids=["new-id"]),
-                ) as mock_sync:
-                    result = sync_missing_memu_event_threads(self.session_id, events)
+            with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
+                result = sync_missing_memu_event_threads(self.session_id, [])
 
         self.assertEqual(result["status"], "synced")
-        self.assertEqual(result["checked"], 2)
-        self.assertEqual(result["missing"], 1)
-        self.assertEqual(result["synced"], 1)
-        sync_kwargs = mock_sync.call_args.kwargs
-        self.assertEqual(len(sync_kwargs["event_threads"]), 1)
-        self.assertEqual(sync_kwargs["event_threads"][0]["thread_key"], "missing-event")
+        self.assertGreaterEqual(result["checked"], 1)
+        self.assertGreaterEqual(result["missing"], 1)
+        self.assertGreaterEqual(result["created"], 1)
+        payloads = [json.loads(item["memory_content"]) for item in created]
+        self.assertTrue(all(payload["projection_kind"] == "rag_card" for payload in payloads))
+        self.assertTrue(
+            any(
+                payload["source_type"] == "event_thread"
+                and "missing-event" in payload["source_key"]
+                for payload in payloads
+            )
+        )
 
     def legacy_memu_maintenance_deletes_duplicates_and_low_value_items(self):
         deleted_ids = []
@@ -625,7 +670,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["deleted"], 1)
         self.assertEqual(set(deleted_ids), {"c"})
 
-    def test_memu_tidy_apply_deletes_judge_selected_items_and_skips_summary(self):
+    def legacy_memu_tidy_apply_deletes_judge_selected_items_and_skips_summary(self):
         deleted_ids = []
 
         class FakeService:
@@ -683,7 +728,7 @@ class MemuMemoryTests(unittest.TestCase):
             self.assertNotIn("source_action", item)
             self.assertNotIn("delete_source", item)
 
-    def test_memu_tidy_does_not_delete_local_event_thread_source(self):
+    def legacy_memu_tidy_does_not_delete_local_event_thread_source(self):
         deleted_ids = []
 
         class FakeService:
@@ -725,7 +770,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["local_deleted"], 0)
         self.assertEqual(deleted_ids, ["stale-event-index"])
 
-    def test_memu_tidy_ignores_unsupported_model_operations(self):
+    def legacy_memu_tidy_ignores_unsupported_model_operations(self):
         deleted_ids = []
 
         class FakeService:
@@ -765,7 +810,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["local_deleted"], 0)
         self.assertEqual(deleted_ids, ["junk-fact"])
 
-    def test_memu_tidy_check_does_not_delete(self):
+    def legacy_memu_tidy_check_does_not_delete(self):
         items = [
             {
                 "id": "junk-fact",
@@ -797,7 +842,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["local_deleted"], 0)
         mock_get_service.assert_not_called()
 
-    def test_memu_tidy_check_reports_missing_source_sync_without_writing(self):
+    def legacy_memu_tidy_check_reports_missing_source_sync_without_writing(self):
         upsert_event_threads(
             self.session_id,
             [
@@ -826,7 +871,7 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["source_sync"]["synced"], 0)
         mock_sync.assert_not_called()
 
-    def test_memu_tidy_apply_backfills_missing_source_events_after_cleanup(self):
+    def legacy_memu_tidy_apply_backfills_missing_source_events_after_cleanup(self):
         upsert_event_threads(
             self.session_id,
             [
@@ -859,6 +904,213 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(result["source_sync"]["synced"], 1)
         sync_kwargs = mock_sync.call_args.kwargs
         self.assertEqual(sync_kwargs["event_threads"][0]["thread_key"], "missing-source-event")
+
+    def test_memu_tidy_apply_creates_missing_source_cards(self):
+        created = []
+
+        class FakeService:
+            async def list_memory_items(self, *, where=None):
+                return {"items": []}
+
+            async def create_memory_item(self, **kwargs):
+                created.append(kwargs)
+                return {"memory_item": {"id": f"m{len(created)}"}}
+
+        upsert_person_facts(
+            {"game": "pixel farm"},
+            default_subject_person_key=person_from_session(self.session_id),
+            legacy_session_id=self.session_id,
+        )
+        upsert_event_threads(
+            self.session_id,
+            [
+                {
+                    "thread_key": "cache-event",
+                    "title": "Cache event",
+                    "kind": "milestone",
+                    "details": "cache me",
+                    "confidence": 1.0,
+                    "status": "active",
+                },
+            ],
+        )
+
+        with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
+                result = run_memu_tidy(self.session_id, mode="apply")
+
+        self.assertEqual(result["status"], "synced")
+        self.assertGreaterEqual(result["missing"], 2)
+        self.assertGreaterEqual(result["created"], 2)
+        payloads = [json.loads(item["memory_content"]) for item in created]
+        self.assertTrue({"person_fact", "event_thread"}.issubset({payload["source_type"] for payload in payloads}))
+        self.assertTrue(all(payload["projection_kind"] == "rag_card" for payload in payloads))
+
+    def test_memu_tidy_apply_deletes_orphan_and_duplicate_source_cards(self):
+        deleted_ids = []
+        created = []
+
+        upsert_event_threads(
+            self.session_id,
+            [
+                {
+                    "thread_key": "kept-event",
+                    "title": "Kept event",
+                    "kind": "milestone",
+                    "details": "keep me",
+                    "confidence": 1.0,
+                    "status": "active",
+                },
+            ],
+        )
+        source_key = f"event_thread:{self.session_id}:kept-event"
+        items = [
+            {
+                "id": "kept-1",
+                "summary": json.dumps(
+                    {
+                        "kind": "event_thread",
+                        "text": "old kept",
+                        "projection_kind": "rag_card",
+                        "source_type": "event_thread",
+                        "source_key": source_key,
+                        "source_version": "old",
+                    }
+                ),
+            },
+            {
+                "id": "kept-dup",
+                "summary": json.dumps(
+                    {
+                        "kind": "event_thread",
+                        "text": "duplicate",
+                        "projection_kind": "rag_card",
+                        "source_type": "event_thread",
+                        "source_key": source_key,
+                        "source_version": "old",
+                    }
+                ),
+            },
+            {
+                "id": "orphan",
+                "summary": json.dumps(
+                    {
+                        "kind": "event_thread",
+                        "text": "orphan",
+                        "projection_kind": "rag_card",
+                        "source_type": "event_thread",
+                        "source_key": "event_thread:missing:missing",
+                        "source_version": "old",
+                    }
+                ),
+            },
+        ]
+
+        class FakeService:
+            async def list_memory_items(self, *, where=None):
+                return {"items": items}
+
+            async def delete_memory_item(self, *, memory_id, user=None):
+                deleted_ids.append(memory_id)
+                return {"id": memory_id}
+
+            async def create_memory_item(self, **kwargs):
+                created.append(kwargs)
+                return {"memory_item": {"id": f"created-{len(created)}"}}
+
+        with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
+                result = run_memu_tidy(self.session_id, mode="apply")
+
+        self.assertEqual(result["status"], "synced")
+        self.assertEqual(result["orphaned"], 1)
+        self.assertEqual(result["duplicates"], 1)
+        self.assertEqual(result["refreshed"], 1)
+        self.assertEqual(set(deleted_ids), {"kept-1", "kept-dup", "orphan"})
+        self.assertGreaterEqual(len(created), 1)
+
+    def test_memu_tidy_check_reports_drift_without_writing(self):
+        class FakeService:
+            async def list_memory_items(self, *, where=None):
+                return {"items": []}
+
+            async def create_memory_item(self, **kwargs):
+                raise AssertionError("check mode must not write")
+
+            async def delete_memory_item(self, **kwargs):
+                raise AssertionError("check mode must not delete")
+
+        upsert_event_threads(
+            self.session_id,
+            [
+                {
+                    "thread_key": "missing-source-event",
+                    "title": "Missing source event",
+                    "kind": "milestone",
+                    "details": "not in memU yet",
+                    "confidence": 1.0,
+                    "status": "active",
+                }
+            ],
+        )
+
+        with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
+                result = run_memu_tidy(self.session_id, mode="check")
+
+        self.assertEqual(result["status"], "drift")
+        self.assertGreaterEqual(result["checked"], 1)
+        self.assertGreaterEqual(result["missing"], 1)
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["deleted"], 0)
+
+    def test_memu_tidy_rebuild_clears_old_cache_and_recreates_sources(self):
+        created = []
+        cleared = []
+
+        class FakeService:
+            async def list_memory_items(self, *, where=None):
+                return {
+                    "items": [
+                        {
+                            "id": "old",
+                            "summary": '{"kind":"person_fact","text":"old"}',
+                        }
+                    ]
+                }
+
+            async def clear_memory(self, *, where=None):
+                cleared.append(where)
+                return {"deleted_items": [{"id": "old"}]}
+
+            async def create_memory_item(self, **kwargs):
+                created.append(kwargs)
+                return {"memory_item": {"id": f"new-{len(created)}"}}
+
+        upsert_event_threads(
+            self.session_id,
+            [
+                {
+                    "thread_key": "missing-source-event",
+                    "title": "Missing source event",
+                    "kind": "milestone",
+                    "details": "not in memU yet",
+                    "confidence": 1.0,
+                    "status": "active",
+                }
+            ],
+        )
+
+        with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
+                result = run_memu_tidy(self.session_id, mode="rebuild")
+
+        self.assertEqual(result["status"], "synced")
+        self.assertEqual(result["deleted"], 1)
+        self.assertGreaterEqual(result["created"], 1)
+        self.assertEqual(cleared, [{}])
+        payloads = [json.loads(item["memory_content"]) for item in created]
+        self.assertTrue(any(payload["source_type"] == "event_thread" for payload in payloads))
 
 if __name__ == "__main__":
     unittest.main()

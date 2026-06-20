@@ -214,7 +214,7 @@ class MaintenanceTests(unittest.TestCase):
         with patch("pupu.maintenance.run_memu_tidy", return_value=tidy_result) as mock_run:
             self.assertIsNone(maybe_run_daily_memu_tidy(datetime(2026, 4, 26, 2, 59, 0)))
             report = maybe_run_daily_memu_tidy(datetime(2026, 4, 26, 3, 1, 0))
-            self.assertIn("memU tidy complete", report)
+            self.assertIn("memU cache sync complete", report)
             mock_run.assert_called_once()
 
         conn = _get_conn()

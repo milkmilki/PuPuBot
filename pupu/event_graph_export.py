@@ -268,6 +268,25 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       stroke: var(--relationship);
       stroke-width: 2.2;
     }
+    .link.person-thread {
+      stroke: var(--person);
+      opacity: 0.34;
+      stroke-width: 1.5;
+    }
+    .link.event-step {
+      stroke-width: 1.9;
+      opacity: 0.68;
+    }
+    .link.step-user { stroke: var(--user); }
+    .link.step-instance { stroke: var(--instance); }
+    .link.step-time {
+      stroke: var(--time);
+      stroke-dasharray: 6 5;
+    }
+    .link.step-system {
+      stroke: var(--system);
+      stroke-dasharray: 3 5;
+    }
     .node circle {
       stroke: #fff;
       stroke-width: 2.2;
@@ -414,6 +433,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       nodeEls: new Map(),
       physicsFrame: 0,
       physicsRunning: false,
+      eventsLayoutKey: "",
       factsLayoutKey: "",
       activePointers: new Map(),
       pinch: null,
@@ -708,26 +728,73 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       const people = nodes.filter((node) => node.type === "person");
       const centerX = 640;
       const centerY = 420;
+      const layoutKey = nodes.map((node) => node.id).sort().join("|");
+      const shouldReset = state.eventsLayoutKey !== layoutKey;
+      if (!shouldReset && nodes.every((node) => node._eventsPlaced && Number.isFinite(node.x) && Number.isFinite(node.y))) {
+        return;
+      }
+      state.eventsLayoutKey = layoutKey;
+      for (const node of nodes) {
+        node.vx = 0;
+        node.vy = 0;
+      }
       people.forEach((node, index) => {
         const angle = people.length <= 1 ? Math.PI : -Math.PI / 2 + (Math.PI * 2 * index) / people.length;
         const radius = people.length <= 1 ? 0 : 88;
         node.x = centerX + Math.cos(angle) * radius;
         node.y = centerY + Math.sin(angle) * radius;
+        node._eventsAnchorX = node.x;
+        node._eventsAnchorY = node.y;
+        node._eventsPlaced = true;
       });
 
       const maxSteps = Math.max(1, ...shown.map((thread) => threadSteps(thread.id).length));
-      const innerRadius = shown.length <= 1 ? 190 : Math.max(190, Math.min(430, shown.length * 24));
+      const threadPlacements = [];
+      if (shown.length <= 1) {
+        threadPlacements.push({ angle: 0, radius: 190 });
+      } else {
+        let placed = 0;
+        let ring = 0;
+        while (placed < shown.length) {
+          const radius = 210 + ring * 155;
+          const capacity = Math.max(7, Math.floor((Math.PI * 2 * radius) / 118));
+          const count = Math.min(capacity, shown.length - placed);
+          for (let slot = 0; slot < count; slot += 1) {
+            threadPlacements.push({
+              angle: -Math.PI / 2 + (Math.PI * 2 * slot) / count + ring * 0.21,
+              radius,
+            });
+          }
+          placed += count;
+          ring += 1;
+        }
+      }
       const stepStart = shown.length <= 1 ? 165 : 155;
       const stepGap = Math.max(118, Math.min(148, 650 / Math.max(1, maxSteps)));
       shown.forEach((thread, index) => {
-        const angle = shown.length <= 1 ? 0 : -Math.PI / 2 + (Math.PI * 2 * index) / shown.length;
+        const placement = threadPlacements[index] || { angle: 0, radius: 190 };
+        const angle = placement.angle;
         const ux = Math.cos(angle);
         const uy = Math.sin(angle);
-        const threadX = centerX + ux * innerRadius;
-        const threadY = centerY + uy * innerRadius;
+        const threadX = centerX + ux * placement.radius;
+        const threadY = centerY + uy * placement.radius;
         placeNode(`thread-${thread.id}`, threadX, threadY);
+        const threadNode = byNodeId.get(`thread-${thread.id}`);
+        if (threadNode) {
+          threadNode._eventsAnchorX = threadX;
+          threadNode._eventsAnchorY = threadY;
+          threadNode._eventsPlaced = true;
+        }
         threadSteps(thread.id).forEach((step, idx) => {
-          placeNode(`step-${step.id}`, threadX + ux * (stepStart + idx * stepGap), threadY + uy * (stepStart + idx * stepGap));
+          const stepX = threadX + ux * (stepStart + idx * stepGap);
+          const stepY = threadY + uy * (stepStart + idx * stepGap);
+          placeNode(`step-${step.id}`, stepX, stepY);
+          const stepNode = byNodeId.get(`step-${step.id}`);
+          if (stepNode) {
+            stepNode._eventsAnchorX = stepX;
+            stepNode._eventsAnchorY = stepY;
+            stepNode._eventsPlaced = true;
+          }
         });
       });
     }
@@ -817,10 +884,16 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       for (const node of state.visibleNodes) updateNodePosition(node);
       updateEdgePositions();
     }
-    function stopFactsPhysics() {
+    function stopPhysics() {
       if (state.physicsFrame) cancelAnimationFrame(state.physicsFrame);
       state.physicsFrame = 0;
       state.physicsRunning = false;
+    }
+    function stopFactsPhysics() {
+      stopPhysics();
+    }
+    function stopEventsPhysics() {
+      stopPhysics();
     }
     function factsSpringLength(edge) {
       if (edge.type === "fact_subject" || edge.type === "fact_object") return 125;
@@ -922,6 +995,123 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
       state.physicsRunning = true;
       state.physicsFrame = requestAnimationFrame(factsPhysicsStep);
     }
+    function eventSpringLength(edge) {
+      if (edge.type === "person_thread") return 190;
+      if (edge.step_type === "time") return 132;
+      if (edge.step_type === "system") return 120;
+      return 142;
+    }
+    function isEventStepEdge(edge) {
+      return !!edge.step_type || (!(edge.type || "") && String(edge.target || "").startsWith("step-"));
+    }
+    function eventsPhysicsStep() {
+      if (state.view !== "events" || !state.visibleNodes.length) {
+        stopEventsPhysics();
+        return;
+      }
+      const nodes = state.visibleNodes;
+      const visibleIds = new Set(nodes.map((node) => node.id));
+      const forces = new Map(nodes.map((node) => [node.id, { x: 0, y: 0 }]));
+      const movableNodes = nodes.filter((node) => node.type !== "person");
+
+      for (let i = 0; i < movableNodes.length; i += 1) {
+        for (let j = i + 1; j < movableNodes.length; j += 1) {
+          const a = movableNodes[i], b = movableNodes[j];
+          let dx = b.x - a.x;
+          let dy = b.y - a.y;
+          let distSq = dx * dx + dy * dy;
+          if (distSq < 0.01) {
+            dx = 0.1 + i * 0.01;
+            dy = 0.1 + j * 0.01;
+            distSq = dx * dx + dy * dy;
+          }
+          const dist = Math.sqrt(distSq);
+          const minGap = nodeRadius(a) + nodeRadius(b) + (a.type === "thread" || b.type === "thread" ? 42 : 30);
+          if (dist >= minGap) continue;
+          const force = (minGap - dist) * 0.12;
+          const fx = (dx / dist) * force;
+          const fy = (dy / dist) * force;
+          forces.get(a.id).x -= fx;
+          forces.get(a.id).y -= fy;
+          forces.get(b.id).x += fx;
+          forces.get(b.id).y += fy;
+        }
+      }
+
+      for (const edge of state.visibleEdges) {
+        if (!visibleIds.has(edge.source) || !visibleIds.has(edge.target)) continue;
+        if (!isEventStepEdge(edge)) continue;
+        const source = byNodeId.get(edge.source);
+        const target = byNodeId.get(edge.target);
+        if (!source || !target) continue;
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const targetLen = eventSpringLength(edge);
+        const spring = 0.032;
+        const force = (dist - targetLen) * spring;
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        const sourceWeight = source.type === "thread" ? 0.18 : 0.42;
+        const targetWeight = target.type === "thread" ? 0.18 : 1;
+        if (source.type !== "person") {
+          forces.get(source.id).x += fx * sourceWeight;
+          forces.get(source.id).y += fy * sourceWeight;
+        }
+        if (target.type !== "person") {
+          forces.get(target.id).x -= fx * targetWeight;
+          forces.get(target.id).y -= fy * targetWeight;
+        }
+      }
+
+      for (const node of nodes) {
+        if (node.type !== "person" && Number.isFinite(node._eventsAnchorX) && Number.isFinite(node._eventsAnchorY)) {
+          const anchorStrength = node.type === "thread" ? 0.022 : 0.007;
+          forces.get(node.id).x += (node._eventsAnchorX - node.x) * anchorStrength;
+          forces.get(node.id).y += (node._eventsAnchorY - node.y) * anchorStrength;
+        }
+      }
+
+      let maxVelocity = 0;
+      for (const node of nodes) {
+        if (node === state.draggingNode || node.fx !== null || node.fy !== null) {
+          node.x = Number.isFinite(node.fx) ? node.fx : node.x;
+          node.y = Number.isFinite(node.fy) ? node.fy : node.y;
+          node.vx = 0;
+          node.vy = 0;
+          continue;
+        }
+        if (node.type === "person") {
+          node.vx = 0;
+          node.vy = 0;
+          continue;
+        }
+        const force = forces.get(node.id) || { x: 0, y: 0 };
+        node.vx = (node.vx + force.x) * 0.76;
+        node.vy = (node.vy + force.y) * 0.76;
+        node.x += node.vx;
+        node.y += node.vy;
+        maxVelocity = Math.max(maxVelocity, Math.hypot(node.vx, node.vy));
+      }
+
+      updateGraphPositions();
+      if (maxVelocity > 0.04 || state.draggingNode) {
+        state.physicsFrame = requestAnimationFrame(eventsPhysicsStep);
+      } else {
+        state.physicsFrame = 0;
+        state.physicsRunning = false;
+      }
+    }
+    function startEventsPhysics() {
+      if (state.view !== "events") return;
+      if (state.physicsRunning) return;
+      state.physicsRunning = true;
+      state.physicsFrame = requestAnimationFrame(eventsPhysicsStep);
+    }
+    function startViewPhysics() {
+      if (state.view === "facts") startFactsPhysics();
+      else startEventsPhysics();
+    }
     function setPanning(active) {
       state.panning = active;
       svg.classList.toggle("is-panning", active);
@@ -940,8 +1130,10 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
         updateGraphPositions();
         startFactsPhysics();
       } else {
-        updateNodePosition(node);
-        updateEdgePositions();
+        node.fx = pt.x;
+        node.fy = pt.y;
+        updateGraphPositions();
+        startEventsPhysics();
       }
       return true;
     }
@@ -957,7 +1149,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
         try { group.releasePointerCapture(ev.pointerId); } catch (_e) {}
         group.style.cursor = "grab";
       }
-      if (state.view === "facts") startFactsPhysics();
+      startViewPhysics();
       return true;
     }
     function selectedNodeIdSet() {
@@ -1002,11 +1194,16 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
         const selectedEdge = selectedIds.has(edge.source)
           || selectedIds.has(edge.target)
           || (edge.fact_id && String(edge.fact_id) === String(state.selectedFactId));
-        const edgeKind = edge.type === "relationship_fact"
-          ? " relationship"
-          : (edge.type || "").includes("fact")
-            ? " fact"
-            : "";
+        let edgeKind = "";
+        if (edge.type === "relationship_fact") {
+          edgeKind = " relationship";
+        } else if ((edge.type || "").includes("fact")) {
+          edgeKind = " fact";
+        } else if (edge.type === "person_thread") {
+          edgeKind = " person-thread";
+        } else if (isEventStepEdge(edge)) {
+          edgeKind = " event-step step-" + (edge.step_type || "system");
+        }
         line.setAttribute("class", "link" + edgeKind + (selectedEdge ? " selected" : ""));
         const edgeLines = state.edgeEls.get(edgeId) || [];
         edgeLines.push(line);
@@ -1037,6 +1234,10 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
             node.fx = node.x;
             node.fy = node.y;
             startFactsPhysics();
+          } else {
+            node.fx = node.x;
+            node.fy = node.y;
+            startEventsPhysics();
           }
           try { group.setPointerCapture(ev.pointerId); } catch (_e) {}
           group.style.cursor = "grabbing";
@@ -1054,7 +1255,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
             state.draggingNode = null;
             node.fx = null;
             node.fy = null;
-            if (state.view === "facts") startFactsPhysics();
+            startViewPhysics();
           }
           state.activeNodePointerId = null;
           group.style.cursor = "grab";
@@ -1071,7 +1272,7 @@ def _build_event_graph_html(payload: dict[str, Any]) -> str:
         state.nodeEls.set(node.id, group);
         g.appendChild(group);
       }
-      if (state.view === "facts") startFactsPhysics();
+      startViewPhysics();
     }
     function toGraphPoint(ev) {
       const rect = svg.getBoundingClientRect();

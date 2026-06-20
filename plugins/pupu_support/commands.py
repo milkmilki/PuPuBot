@@ -151,9 +151,10 @@ async def handle_events(event: Event, args: Message = CommandArg()):
 
 
 @facts_cmd.handle()
-async def handle_facts(event: Event):
+async def handle_facts(event: Event, args: Message = CommandArg()):
     _context_sid, identity_sid = resolve_sessions(event)
-    report = await asyncio.to_thread(format_facts_report, identity_sid)
+    query = args.extract_plain_text().strip()
+    report = await asyncio.to_thread(format_facts_report, identity_sid, query)
     await facts_cmd.finish(report)
 
 
@@ -208,7 +209,7 @@ async def handle_tidy(event: Event, args: Message = CommandArg()):
     mode = args.extract_plain_text().strip().lower()
     if not mode:
         mode = "apply"
-    if mode not in {"check", "apply"}:
+    if mode not in {"check", "apply", "rebuild"}:
         await tidy_cmd.finish(TIDY_USAGE)
         return
     report = await asyncio.to_thread(

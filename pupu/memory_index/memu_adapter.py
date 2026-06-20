@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import threading
 import time
 from collections import Counter
@@ -12,16 +14,19 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, unquote
 
 from pydantic import BaseModel
 
 from ..persona.core import get_pupu_name
 from ..storage.db import get_conn, get_data_dir
 from ..storage.event_threads import get_recent_event_threads
+from ..storage.facts import get_person_facts
 
 DEFAULT_TOP_K = 6
 DEFAULT_LOG_PREVIEW_CHARS = 220
 DEFAULT_RECENCY_DECAY_DAYS = 30.0
+DEFAULT_SOURCE_SUMMARY_LIMIT = 80
 _service = None
 _service_error: str | None = None
 _service_lock = threading.Lock()
@@ -45,6 +50,15 @@ def _speaker_label(role: object, character_name: str | None = None) -> str:
     return "用户" if str(role or "") == "user" else str(character_name or _current_character_name())
 
 
+def _has_speaker_label(text: object) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    first = next((line.strip() for line in value.splitlines() if line.strip()), "")
+    first = re.sub(r"^\[时间:[^\]]+\]\s*", "", first)
+    return bool(re.match(r"^[^:：\n]{1,32}\s*[:：]\s*\S", first))
+
+
 def _format_history_for_recall(
     history: list[dict] | None,
     *,
@@ -57,7 +71,10 @@ def _format_history_for_recall(
         content = _replace_default_character_name(item.get("content") or "", name).strip()
         if not content:
             continue
-        lines.append(f"{_speaker_label(item.get('role'), name)}: {content}")
+        if _has_speaker_label(content):
+            lines.append(content)
+        else:
+            lines.append(f"{_speaker_label(item.get('role'), name)}: {content}")
     return "\n".join(lines)
 
 
@@ -75,7 +92,8 @@ class MemuWriteResult:
     error: str = ""
 
 
-TARGET_MAINTENANCE_KINDS = {"person_fact", "event_thread"}
+SOURCE_BACKED_KINDS = {"summary", "person_fact", "event_thread"}
+SOURCE_PROJECTION_KIND = "rag_card"
 RELATIVE_TIME_TERMS = (
     "今天",
     "今晚",
@@ -230,7 +248,19 @@ def _canonical_memory_payload_for_hash(value: object) -> tuple[str, dict[str, An
     text = " ".join(str(payload.get("text") or "").split())
     if not text:
         return "", {}
-    stable_keys = ("kind", "text", "key", "thread_key", "event_time", "confidence")
+    stable_keys = (
+        "kind",
+        "text",
+        "key",
+        "thread_key",
+        "event_time",
+        "confidence",
+        "projection_kind",
+        "source_type",
+        "source_id",
+        "source_key",
+        "source_version",
+    )
     stable = {key: payload.get(key) for key in stable_keys if payload.get(key) not in (None, "")}
     stable["text"] = text
     volatile = {key: val for key, val in payload.items() if key not in stable}
@@ -301,6 +331,16 @@ def _top_k() -> int:
         return DEFAULT_TOP_K
 
 
+def _source_summary_limit() -> int:
+    try:
+        value = int(os.environ.get("PUPU_MEMU_SOURCE_SUMMARY_LIMIT", str(DEFAULT_SOURCE_SUMMARY_LIMIT)))
+    except Exception:
+        return DEFAULT_SOURCE_SUMMARY_LIMIT
+    if value < 0:
+        return 0
+    return value
+
+
 def _memu_ranking() -> str:
     value = os.environ.get("PUPU_MEMU_RANKING", "salience").strip().lower()
     return value if value in {"similarity", "salience"} else "salience"
@@ -319,7 +359,7 @@ def _enable_reinforcement() -> bool:
 
 
 def _native_category_summaries() -> bool:
-    raw = os.environ.get("PUPU_MEMU_NATIVE_CATEGORY_SUMMARIES", "true").strip().lower()
+    raw = os.environ.get("PUPU_MEMU_NATIVE_CATEGORY_SUMMARIES", "false").strip().lower()
     return not _falsey(raw)
 
 
@@ -364,6 +404,7 @@ def _log_config_once(reason: str) -> None:
         "config "
         f"reason={reason} enabled_env={_env_bool_auto('PUPU_MEMU_ENABLED', 'auto')} "
         f"db={_memu_db_path()} method={os.environ.get('PUPU_MEMU_METHOD', 'rag')} top_k={_top_k()} "
+        f"source_summary_limit={_source_summary_limit()} "
         f"ranking={_memu_ranking()} recency_decay_days={_recency_decay_days()} "
         f"reinforcement={'yes' if _enable_reinforcement() else 'no'} "
         f"native_category_summaries={'yes' if _native_category_summaries() else 'no'} "
@@ -862,6 +903,96 @@ def _memory_payload(kind: str, text: str, **extra: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
+def _short_hash(value: object) -> str:
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _source_version(*values: object) -> str:
+    return _short_hash([value for value in values])
+
+
+def _summary_source_key(context_session: str, start_msg_id: int, end_msg_id: int) -> str:
+    return f"summary:{quote(str(context_session or ''), safe='')}:{int(start_msg_id or 0)}:{int(end_msg_id or 0)}"
+
+
+def _person_fact_source_key(fact: dict[str, Any]) -> str:
+    subject = str(fact.get("subject_person_key") or fact.get("subject") or "").strip()
+    obj = str(fact.get("object_person_key") or fact.get("object") or "").strip()
+    scope = str(fact.get("scope") or "person").strip()
+    key = str(fact.get("fact_key") or fact.get("key") or "").strip()
+    return ":".join(
+        (
+            "person_fact",
+            quote(subject, safe=""),
+            quote(obj, safe=""),
+            quote(scope, safe=""),
+            quote(key, safe=""),
+        )
+    )
+
+
+def _event_thread_source_key(event: dict[str, Any]) -> str:
+    session_id = str(event.get("session_id") or "").strip()
+    thread_key = str(event.get("thread_key") or event.get("key") or "").strip()
+    return ":".join(
+        (
+            "event_thread",
+            quote(session_id, safe=""),
+            quote(thread_key, safe=""),
+        )
+    )
+
+
+def _summary_source_version(summary: dict[str, Any]) -> str:
+    return _source_version(
+        summary.get("session_id"),
+        summary.get("summary"),
+        summary.get("start_msg_id"),
+        summary.get("end_msg_id"),
+    )
+
+
+def _person_fact_source_version(fact: dict[str, Any]) -> str:
+    return _source_version(
+        fact.get("id"),
+        fact.get("subject_person_key"),
+        fact.get("object_person_key"),
+        fact.get("scope"),
+        fact.get("fact_key"),
+        fact.get("fact_value"),
+        fact.get("confidence"),
+        fact.get("updated_at"),
+    )
+
+
+def _event_thread_source_version(event: dict[str, Any]) -> str:
+    return _source_version(
+        event.get("id"),
+        event.get("session_id"),
+        event.get("thread_key") or event.get("key"),
+        event.get("title"),
+        event.get("status"),
+        event.get("event_time"),
+        event.get("details"),
+        event.get("current_summary"),
+        event.get("current_cause"),
+        event.get("current_reflection"),
+        event.get("followup_hint"),
+        event.get("confidence"),
+        event.get("last_seen_at") or event.get("updated_at"),
+    )
+
+
+def _payload_with_extra(item: dict[str, Any]) -> dict[str, Any]:
+    payload = _parse_memory_payload(item.get("summary") or item.get("content"))
+    item_extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+    payload_extra = item_extra.get("pupu_payload_extra") if isinstance(item_extra, dict) else None
+    if isinstance(payload_extra, dict):
+        payload = {**payload_extra, **payload}
+    return payload
+
+
 def _parse_memory_payload(value: object) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -876,7 +1007,7 @@ def _parse_memory_payload(value: object) -> dict[str, Any]:
             return parsed
     except Exception:
         pass
-        return {"kind": "other", "text": text}
+    return {"kind": "other", "text": text}
 
 
 def _payload_from_item(item: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -1060,6 +1191,331 @@ def _extract_item_id(result: object) -> str:
     return ""
 
 
+def _summary_row_to_dict(row: Any) -> dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "session_id": row["session_id"],
+        "summary": row["summary"],
+        "start_msg_id": int(row["start_msg_id"]),
+        "end_msg_id": int(row["end_msg_id"]),
+        "created_at": row["created_at"],
+    }
+
+
+def _load_all_summaries_from_sqlite() -> list[dict[str, Any]]:
+    conn = get_conn()
+    try:
+        limit = _source_summary_limit()
+        if limit > 0:
+            rows = conn.execute(
+                """SELECT id, session_id, summary, start_msg_id, end_msg_id, created_at
+                   FROM summaries
+                   ORDER BY created_at DESC, id DESC
+                   LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return list(reversed([_summary_row_to_dict(row) for row in rows]))
+        rows = conn.execute(
+            """SELECT id, session_id, summary, start_msg_id, end_msg_id, created_at
+               FROM summaries
+               ORDER BY created_at ASC, id ASC"""
+        ).fetchall()
+        return [_summary_row_to_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _load_summary_by_source_key(source_key: str) -> dict[str, Any] | None:
+    parts = str(source_key or "").split(":")
+    if len(parts) < 4 or parts[0] != "summary":
+        return None
+    try:
+        start_msg_id = int(parts[-2])
+        end_msg_id = int(parts[-1])
+    except Exception:
+        return None
+    context_session = unquote(":".join(parts[1:-2]))
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """SELECT id, session_id, summary, start_msg_id, end_msg_id, created_at
+               FROM summaries
+               WHERE session_id = ? AND start_msg_id = ? AND end_msg_id = ?
+               ORDER BY id DESC
+               LIMIT 1""",
+            (context_session, start_msg_id, end_msg_id),
+        ).fetchone()
+        return _summary_row_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def _load_all_event_threads_from_sqlite() -> list[dict[str, Any]]:
+    conn = get_conn()
+    try:
+        rows = conn.execute("SELECT DISTINCT session_id FROM event_threads ORDER BY session_id ASC").fetchall()
+        session_ids = [str(row["session_id"] or "").strip() for row in rows if str(row["session_id"] or "").strip()]
+    finally:
+        conn.close()
+
+    events: list[dict[str, Any]] = []
+    for session_id in session_ids:
+        events.extend(get_recent_event_threads(session_id, limit=None))
+    return events
+
+
+def _load_event_thread_by_source_key(source_key: str) -> dict[str, Any] | None:
+    parts = str(source_key or "").split(":")
+    if len(parts) < 3 or parts[0] != "event_thread":
+        return None
+    session_id = unquote(parts[1])
+    thread_key = unquote(":".join(parts[2:]))
+    for event in get_recent_event_threads(session_id, limit=None):
+        if str(event.get("thread_key") or "") == thread_key:
+            return event
+    return None
+
+
+def _load_person_fact_by_source_key(source_key: str) -> dict[str, Any] | None:
+    parts = str(source_key or "").split(":")
+    if len(parts) < 5 or parts[0] != "person_fact":
+        return None
+    subject = unquote(parts[1])
+    obj = unquote(parts[2])
+    scope = unquote(parts[3])
+    key = unquote(":".join(parts[4:]))
+    for fact in get_person_facts(include_relationships=True):
+        if (
+            str(fact.get("subject_person_key") or "") == subject
+            and str(fact.get("object_person_key") or "") == obj
+            and str(fact.get("scope") or "") == scope
+            and str(fact.get("fact_key") or "") == key
+        ):
+            return fact
+    return None
+
+
+def _source_backed_payload(kind: str, text: str, source: dict[str, Any], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    source_id = source.get("id")
+    source_key = ""
+    source_version = ""
+    if kind == "summary":
+        source_key = _summary_source_key(
+            str(source.get("session_id") or ""),
+            int(source.get("start_msg_id") or 0),
+            int(source.get("end_msg_id") or 0),
+        )
+        source_version = _summary_source_version(source)
+    elif kind == "person_fact":
+        source_key = _person_fact_source_key(source)
+        source_version = _person_fact_source_version(source)
+    elif kind == "event_thread":
+        source_key = _event_thread_source_key(source)
+        source_version = _event_thread_source_version(source)
+    payload = {
+        "source_type": kind,
+        "source_id": source_id,
+        "source_key": source_key,
+        "source_version": source_version,
+        "projection_kind": SOURCE_PROJECTION_KIND,
+    }
+    if extra:
+        payload.update(extra)
+    return {key: value for key, value in payload.items() if value not in (None, "")}
+
+
+def _summary_to_entry(summary: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
+    entries = _build_review_entries(summary=str(summary.get("summary") or ""))
+    if not entries:
+        return None
+    kind, text, extra = entries[0]
+    return kind, text, _source_backed_payload(kind, text, summary, extra)
+
+
+def _person_fact_to_entry(fact: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
+    entries = _build_review_entries(summary="", person_facts=[fact])
+    if not entries:
+        return None
+    kind, text, extra = entries[0]
+    return kind, text, _source_backed_payload(kind, text, fact, extra)
+
+
+def _event_thread_to_entry(event: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
+    entries = _build_review_entries(summary="", event_threads=[event])
+    if not entries:
+        return None
+    kind, text, extra = entries[0]
+    return kind, text, _source_backed_payload(kind, text, event, extra)
+
+
+def _entry_source_key(entry: tuple[str, str, dict[str, Any]]) -> str:
+    _kind, _text, extra = entry
+    return str(extra.get("source_key") or "").strip()
+
+
+def _entry_source_version(entry: tuple[str, str, dict[str, Any]]) -> str:
+    _kind, _text, extra = entry
+    return str(extra.get("source_version") or "").strip()
+
+
+def _expected_source_entries(identity_session: str | None = None) -> list[tuple[str, str, dict[str, Any]]]:
+    entries: list[tuple[str, str, dict[str, Any]]] = []
+    for summary in _load_all_summaries_from_sqlite():
+        entry = _summary_to_entry(summary)
+        if entry:
+            entries.append(entry)
+    for fact in get_person_facts(include_relationships=True):
+        entry = _person_fact_to_entry(fact)
+        if entry:
+            entries.append(entry)
+    for event in _load_all_event_threads_from_sqlite():
+        entry = _event_thread_to_entry(event)
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def _lookup_source_entry(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any]] | None:
+    source_type = str(payload.get("source_type") or payload.get("kind") or "").strip()
+    source_key = str(payload.get("source_key") or "").strip()
+    if not source_type or not source_key:
+        return None
+    if source_type == "summary":
+        row = _load_summary_by_source_key(source_key)
+        return _summary_to_entry(row) if row else None
+    if source_type == "person_fact":
+        row = _load_person_fact_by_source_key(source_key)
+        return _person_fact_to_entry(row) if row else None
+    if source_type == "event_thread":
+        row = _load_event_thread_by_source_key(source_key)
+        return _event_thread_to_entry(row) if row else None
+    return None
+
+
+def _entries_with_source_metadata(
+    entries: list[tuple[str, str, dict[str, Any]]],
+    *,
+    context_session: str,
+    start_msg_id: int,
+    end_msg_id: int,
+    summary: str,
+    person_facts: list[dict] | None,
+    event_threads: list[dict] | None,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    out: list[tuple[str, str, dict[str, Any]]] = []
+    facts = [item for item in (person_facts or []) if isinstance(item, dict)]
+    events = [item for item in (event_threads or []) if isinstance(item, dict)]
+    fact_index = 0
+    event_index = 0
+    for kind, text, extra in entries:
+        source: dict[str, Any] = {}
+        if kind == "summary":
+            source = {
+                "session_id": context_session,
+                "summary": summary,
+                "start_msg_id": start_msg_id,
+                "end_msg_id": end_msg_id,
+            }
+            persisted = _load_summary_by_source_key(
+                _summary_source_key(context_session, start_msg_id, end_msg_id)
+            )
+            if persisted:
+                source.update(persisted)
+        elif kind == "person_fact":
+            while fact_index < len(facts):
+                candidate = facts[fact_index]
+                fact_index += 1
+                if str(candidate.get("fact_key") or candidate.get("key") or "").strip() and str(
+                    candidate.get("fact_value") or candidate.get("value") or ""
+                ).strip():
+                    source = candidate
+                    break
+        elif kind == "event_thread":
+            while event_index < len(events):
+                candidate = events[event_index]
+                event_index += 1
+                if str(candidate.get("thread_key") or candidate.get("key") or "").strip():
+                    source = candidate
+                    break
+        payload_extra = dict(extra or {})
+        if kind in SOURCE_BACKED_KINDS and source:
+            payload_extra.update(_source_backed_payload(kind, text, source, extra))
+        out.append((kind, text, payload_extra))
+    return out
+
+
+def _dedupe_entries_by_source_key(
+    entries: list[tuple[str, str, dict[str, Any]]],
+) -> list[tuple[str, str, dict[str, Any]]]:
+    out: list[tuple[str, str, dict[str, Any]]] = []
+    positions: dict[str, int] = {}
+    for entry in entries:
+        source_key = _entry_source_key(entry)
+        if source_key:
+            position = positions.get(source_key)
+            if position is not None:
+                out[position] = entry
+                continue
+            positions[source_key] = len(out)
+        out.append(entry)
+    return out
+
+
+async def _delete_memu_items(
+    service: Any,
+    *,
+    identity_session: str,
+    item_ids: list[str],
+) -> tuple[int, int]:
+    deleted = 0
+    failed = 0
+    user_scope = _scope(identity_session, identity_session)
+    for item_id in item_ids:
+        if not item_id:
+            continue
+        try:
+            await service.delete_memory_item(memory_id=item_id, user=user_scope)
+            deleted += 1
+        except Exception as exc:
+            failed += 1
+            _log(
+                "delete item failed "
+                f"identity={identity_session} item_id={item_id} "
+                f"error={type(exc).__name__}: {_preview(exc, 500)}"
+            )
+    return deleted, failed
+
+
+async def _delete_existing_source_cards(
+    service: Any,
+    *,
+    identity_session: str,
+    source_keys: set[str],
+) -> tuple[int, int]:
+    if not source_keys:
+        return 0, 0
+    listed = await service.list_memory_items(where=_global_cache_where())
+    delete_ids: list[str] = []
+    for item in _items_from_result(listed):
+        item_id = str(item.get("id") or "").strip()
+        if not item_id:
+            continue
+        payload = _payload_with_extra(item)
+        if str(payload.get("source_key") or "").strip() in source_keys:
+            delete_ids.append(item_id)
+    if not delete_ids:
+        return 0, 0
+    _log(
+        "source cache replace "
+        f"identity={identity_session} source_keys={len(source_keys)} delete_existing={len(delete_ids)}"
+    )
+    return await _delete_memu_items(
+        service,
+        identity_session=identity_session,
+        item_ids=delete_ids,
+    )
+
+
 def _build_review_entries(
     *,
     summary: str,
@@ -1183,6 +1639,16 @@ def sync_review_memory(
         person_facts=person_facts,
         event_threads=event_threads,
     )
+    entries = _entries_with_source_metadata(
+        entries,
+        context_session=context_session,
+        start_msg_id=start_msg_id,
+        end_msg_id=end_msg_id,
+        summary=summary,
+        person_facts=person_facts,
+        event_threads=event_threads,
+    )
+    entries = _dedupe_entries_by_source_key(entries)
     kind_counts = Counter(kind for kind, _, _ in entries)
     _log(
         "sync entries "
@@ -1203,6 +1669,22 @@ def sync_review_memory(
             "source_msg_start_id": start_msg_id,
             "source_msg_end_id": end_msg_id,
         }
+        source_keys = {
+            str(extra.get("source_key") or "").strip()
+            for _kind, _text, extra in entries
+            if str(extra.get("source_key") or "").strip()
+        }
+        deleted_existing, failed_existing = await _delete_existing_source_cards(
+            service,
+            identity_session=identity_session,
+            source_keys=source_keys,
+        )
+        if deleted_existing or failed_existing:
+            _log(
+                "sync source cache replaced "
+                f"context={context_session} identity={identity_session} "
+                f"deleted={deleted_existing} failed={failed_existing}"
+            )
 
         for index, (kind, text, extra) in enumerate(entries, start=1):
             payload_extra = dict(batch_extra)
@@ -1336,11 +1818,20 @@ def recall_memories(
 
     out: list[dict[str, Any]] = []
     for index, item in enumerate(raw_items, start=1):
-        payload = _parse_memory_payload(item.get("summary") or item.get("content"))
-        item_extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
-        payload_extra = item_extra.get("pupu_payload_extra") if isinstance(item_extra, dict) else None
-        if isinstance(payload_extra, dict):
-            payload = {**payload_extra, **payload}
+        payload = _payload_with_extra(item)
+        source_entry = _lookup_source_entry(payload)
+        if str(payload.get("projection_kind") or "") == SOURCE_PROJECTION_KIND:
+            if source_entry:
+                source_kind, source_text, source_extra = source_entry
+                payload = {**payload, **source_extra, "kind": source_kind, "text": source_text}
+            else:
+                _log(
+                    "recall item skipped "
+                    f"index={index} reason=missing_sqlite_source "
+                    f"source_type={payload.get('source_type') or '<none>'} "
+                    f"source_key={payload.get('source_key') or '<none>'}"
+                )
+                continue
         text = _replace_default_character_name(payload.get("text") or "", character_name).strip()
         kind = str(payload.get("kind") or item.get("memory_type") or "other")
         score = item.get("score")
@@ -1360,6 +1851,9 @@ def recall_memories(
             "score": score,
             "created_at": payload.get("created_at") or item.get("created_at"),
         }
+        for meta_key in ("source_type", "source_id", "source_key", "source_version", "projection_kind"):
+            if payload.get(meta_key) not in (None, ""):
+                memory[meta_key] = payload.get(meta_key)
         out.append(memory)
         score_text = f"{float(score):.4f}" if isinstance(score, (int, float)) else str(score or "")
         _log(
@@ -1402,6 +1896,238 @@ def _list_items(identity_session: str, limit: int = 200) -> list[dict[str, Any]]
     return limited
 
 
+def _source_card_report_base(mode: str) -> dict[str, Any]:
+    return {
+        "mode": mode,
+        "status": "ok",
+        "checked": 0,
+        "present": 0,
+        "missing": 0,
+        "created": 0,
+        "deleted": 0,
+        "refreshed": 0,
+        "duplicates": 0,
+        "orphaned": 0,
+        "failed": 0,
+        "source_kind_counts": {},
+        "memu_kind_counts": {},
+        "missing_keys": [],
+        "orphaned_keys": [],
+        "duplicate_keys": [],
+        "refreshed_keys": [],
+        "error": "",
+    }
+
+
+async def _create_source_card(
+    service: Any,
+    *,
+    identity_session: str,
+    context_session: str,
+    entry: tuple[str, str, dict[str, Any]],
+) -> str:
+    kind, text, extra = entry
+    result = await service.create_memory_item(
+        memory_type=_memory_type_for(kind),
+        memory_content=_memory_payload(kind, text, **dict(extra or {})),
+        memory_categories=_categories_for(kind),
+        user=_scope(identity_session, context_session),
+    )
+    return _extract_item_id(result)
+
+
+def reconcile_memu_source_cache(
+    identity_session: str,
+    *,
+    context_session: str | None = None,
+    dry_run: bool = False,
+    rebuild: bool = False,
+) -> dict[str, Any]:
+    """Reconcile memU's rebuildable RAG-card cache with SQLite sources."""
+    identity_session = str(identity_session or "default")
+    context_session = str(context_session or identity_session)
+    mode = "rebuild" if rebuild else ("check" if dry_run else "apply")
+    result = _source_card_report_base(mode)
+
+    expected_entries = _dedupe_entries_by_source_key(_expected_source_entries(identity_session))
+    expected_by_key = {
+        _entry_source_key(entry): entry
+        for entry in expected_entries
+        if _entry_source_key(entry)
+    }
+    result["checked"] = len(expected_by_key)
+    result["source_kind_counts"] = dict(Counter(kind for kind, _text, _extra in expected_entries))
+
+    if not is_memu_long_term_enabled():
+        result["status"] = "disabled"
+        result["error"] = "memU disabled"
+        return result
+
+    try:
+        service = _get_service()
+        items = _list_items(identity_session, limit=10000)
+    except Exception as exc:
+        result["status"] = "unavailable"
+        result["error"] = str(exc)
+        _log(
+            "source cache reconcile skipped "
+            f"identity={identity_session} error={type(exc).__name__}: {_preview(exc, 500)}"
+        )
+        return result
+
+    source_items_by_key: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    source_memu_kind_counts: Counter[str] = Counter()
+    for item in items:
+        payload = _payload_with_extra(item)
+        source_key = str(payload.get("source_key") or "").strip()
+        projection_kind = str(payload.get("projection_kind") or "").strip()
+        source_type = str(payload.get("source_type") or payload.get("kind") or "").strip()
+        if not source_key or projection_kind != SOURCE_PROJECTION_KIND:
+            continue
+        source_items_by_key.setdefault(source_key, []).append((item, payload))
+        source_memu_kind_counts[source_type or "unknown"] += 1
+    result["memu_kind_counts"] = dict(source_memu_kind_counts)
+
+    missing_keys = [key for key in expected_by_key if key not in source_items_by_key]
+    orphaned_keys = [key for key in source_items_by_key if key not in expected_by_key]
+    duplicate_keys = [
+        key
+        for key, values in source_items_by_key.items()
+        if key in expected_by_key and len(values) > 1
+    ]
+    refreshed_keys = []
+    for key, values in source_items_by_key.items():
+        if key not in expected_by_key or not values:
+            continue
+        expected_version = _entry_source_version(expected_by_key[key])
+        existing_version = str(values[0][1].get("source_version") or "").strip()
+        if expected_version and existing_version != expected_version:
+            refreshed_keys.append(key)
+
+    result.update(
+        {
+            "present": len(expected_by_key) - len(missing_keys),
+            "missing": len(missing_keys),
+            "orphaned": len(orphaned_keys),
+            "duplicates": sum(max(0, len(values) - 1) for values in source_items_by_key.values()),
+            "refreshed": len(refreshed_keys),
+            "missing_keys": missing_keys[:50],
+            "orphaned_keys": orphaned_keys[:50],
+            "duplicate_keys": duplicate_keys[:50],
+            "refreshed_keys": refreshed_keys[:50],
+        }
+    )
+
+    if dry_run:
+        if missing_keys or orphaned_keys or duplicate_keys or refreshed_keys:
+            result["status"] = "drift"
+        return result
+
+    async def _apply() -> dict[str, int]:
+        stats = {"created": 0, "deleted": 0, "failed": 0}
+        if rebuild:
+            try:
+                cleared = await service.clear_memory(where=_global_cache_where())
+                deleted_items = cleared.get("deleted_items", []) if isinstance(cleared, dict) else []
+                stats["deleted"] += len(deleted_items)
+            except Exception as exc:
+                _log(
+                    "source cache rebuild clear failed; fallback item delete "
+                    f"identity={identity_session} error={type(exc).__name__}: {_preview(exc, 500)}"
+                )
+                delete_ids = [str(item.get("id") or "") for item in items if str(item.get("id") or "")]
+                deleted, failed = await _delete_memu_items(
+                    service,
+                    identity_session=identity_session,
+                    item_ids=delete_ids,
+                )
+                stats["deleted"] += deleted
+                stats["failed"] += failed
+        else:
+            delete_ids: list[str] = []
+            for key in orphaned_keys:
+                delete_ids.extend(str(item.get("id") or "") for item, _payload in source_items_by_key.get(key, []))
+            for key in refreshed_keys:
+                delete_ids.extend(str(item.get("id") or "") for item, _payload in source_items_by_key.get(key, []))
+            for key in duplicate_keys:
+                values = source_items_by_key.get(key, [])
+                delete_ids.extend(str(item.get("id") or "") for item, _payload in values[1:])
+            delete_ids = list(dict.fromkeys(item_id for item_id in delete_ids if item_id))
+            deleted, failed = await _delete_memu_items(
+                service,
+                identity_session=identity_session,
+                item_ids=delete_ids,
+            )
+            stats["deleted"] += deleted
+            stats["failed"] += failed
+
+        create_keys = list(missing_keys)
+        if rebuild:
+            create_keys = list(expected_by_key)
+        else:
+            create_keys.extend(refreshed_keys)
+        seen_create: set[str] = set()
+        for key in create_keys:
+            if key in seen_create:
+                continue
+            seen_create.add(key)
+            entry = expected_by_key.get(key)
+            if not entry:
+                continue
+            try:
+                item_id = await _create_source_card(
+                    service,
+                    identity_session=identity_session,
+                    context_session=context_session,
+                    entry=entry,
+                )
+            except Exception as exc:
+                stats["failed"] += 1
+                _log(
+                    "source cache create failed "
+                    f"identity={identity_session} source_key={key} "
+                    f"error={type(exc).__name__}: {_preview(exc, 500)}"
+                )
+                continue
+            if item_id:
+                stats["created"] += 1
+        return stats
+
+    with _op_lock:
+        stats = _run(_apply())
+    result["created"] = int(stats.get("created") or 0)
+    result["deleted"] = int(stats.get("deleted") or 0)
+    result["failed"] = int(stats.get("failed") or 0)
+    if result["failed"]:
+        result["status"] = "partial"
+    elif missing_keys or orphaned_keys or duplicate_keys or refreshed_keys or rebuild:
+        result["status"] = "synced"
+    else:
+        result["status"] = "ok"
+    _log(
+        "source cache reconcile done "
+        f"identity={identity_session} mode={mode} checked={result['checked']} "
+        f"missing={result['missing']} orphaned={result['orphaned']} "
+        f"duplicates={result['duplicates']} refreshed={result['refreshed']} "
+        f"created={result['created']} deleted={result['deleted']} failed={result['failed']} "
+        f"status={result['status']}"
+    )
+    return result
+
+
+def rebuild_memu_source_cache(
+    identity_session: str,
+    *,
+    context_session: str | None = None,
+) -> dict[str, Any]:
+    return reconcile_memu_source_cache(
+        identity_session,
+        context_session=context_session,
+        dry_run=False,
+        rebuild=True,
+    )
+
+
 def sync_missing_memu_event_threads(
     identity_session: str,
     events: list[dict[str, Any]],
@@ -1409,97 +2135,14 @@ def sync_missing_memu_event_threads(
     context_session: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Ensure structured event_threads have corresponding memU items."""
-    identity_session = str(identity_session)
-    context_session = str(context_session or identity_session)
-    if not is_memu_long_term_enabled():
-        return {
-            "status": "disabled",
-            "checked": len(events or []),
-            "present": 0,
-            "missing": 0,
-            "synced": 0,
-            "error": "",
-        }
-
-    keyed_events = [
-        event
-        for event in (events or [])
-        if str(event.get("thread_key") or "").strip()
-    ]
-    try:
-        items = _list_items(identity_session, limit=10000)
-    except Exception as exc:
-        _log(
-            "event_threads sync check failed "
-            f"identity={identity_session} error={type(exc).__name__}: {_preview(exc, 500)}"
-        )
-        return {
-            "status": "unavailable",
-            "checked": len(keyed_events),
-            "present": 0,
-            "missing": 0,
-            "synced": 0,
-            "error": str(exc),
-        }
-
-    memu_keys: set[str] = set()
-    for item in items:
-        payload = _parse_memory_payload(item.get("summary") or item.get("content"))
-        if str(payload.get("kind") or "") != "event_thread":
-            continue
-        key = str(payload.get("thread_key") or "").strip()
-        if key:
-            memu_keys.add(key)
-
-    missing_events = [
-        event
-        for event in keyed_events
-        if str(event.get("thread_key") or "").strip() not in memu_keys
-    ]
-    if not missing_events:
-        return {
-            "status": "ok",
-            "checked": len(keyed_events),
-            "present": len(keyed_events),
-            "missing": 0,
-            "synced": 0,
-            "error": "",
-        }
-    if dry_run:
-        return {
-            "status": "missing",
-            "checked": len(keyed_events),
-            "present": len(keyed_events) - len(missing_events),
-            "missing": len(missing_events),
-            "synced": 0,
-            "missing_keys": [event.get("thread_key") for event in missing_events],
-            "error": "",
-        }
-
-    _log(
-        "event_threads sync missing "
-        f"identity={identity_session} context={context_session} "
-        f"missing={len(missing_events)} keys="
-        f"{_json_compact([event.get('thread_key') for event in missing_events[:20]])}"
-    )
-    result = sync_review_memory(
+    result = reconcile_memu_source_cache(
+        identity_session,
         context_session=context_session,
-        identity_session=identity_session,
-        start_msg_id=0,
-        end_msg_id=0,
-        summary="",
-        event_threads=missing_events,
+        dry_run=dry_run,
+        rebuild=False,
     )
-    status = "synced" if result.status in {"success", "empty"} else result.status
-    return {
-        "status": status,
-        "checked": len(keyed_events),
-        "present": len(keyed_events) - len(missing_events),
-        "missing": len(missing_events),
-        "synced": len(result.ids),
-        "error": result.error,
-    }
+    result.setdefault("synced", int(result.get("created") or 0))
+    return result
 
 
 def _format_items(identity_session: str, kinds: set[str], empty_text: str) -> str:

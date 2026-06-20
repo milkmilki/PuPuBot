@@ -11,6 +11,8 @@ from .memu_adapter import (
     format_memu_recall_report,
     is_memu_long_term_enabled,
     recall_memories,
+    rebuild_memu_source_cache,
+    reconcile_memu_source_cache,
     sync_missing_memu_event_threads,
     sync_review_memory,
 )
@@ -25,6 +27,8 @@ __all__ = [
     "analyze_memu_tidy",
     "is_memu_long_term_enabled",
     "recall_memories",
+    "rebuild_memu_source_cache",
+    "reconcile_memu_source_cache",
     "run_memu_maintenance",
     "run_memu_tidy",
     "sync_missing_memu_event_threads",

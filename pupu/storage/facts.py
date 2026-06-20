@@ -337,6 +337,73 @@ def get_person_fact_map(subject_person_key: str) -> dict[str, str]:
     }
 
 
+def update_person_fact_by_id(
+    fact_id: int,
+    *,
+    value: str,
+    confidence: Any = None,
+    context_session: str | None = None,
+    source_msg_start_id: int | None = None,
+    source_msg_end_id: int | None = None,
+) -> dict[str, Any] | None:
+    fact_value = _fact_scalar(value)
+    if not fact_value:
+        return None
+    now = _now()
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            """SELECT pf.*,
+                      sp.display_name AS subject_display_name,
+                      op.display_name AS object_display_name
+               FROM person_facts pf
+               LEFT JOIN people sp ON sp.person_key = pf.subject_person_key
+               LEFT JOIN people op ON op.person_key = pf.object_person_key
+               WHERE pf.id = ?""",
+            (int(fact_id),),
+        ).fetchone()
+        if not row:
+            return None
+        next_confidence = (
+            float(row["confidence"] or 0.0)
+            if confidence is None
+            else _clamp_confidence(confidence)
+        )
+        conn.execute(
+            """UPDATE person_facts
+               SET fact_value = ?,
+                   confidence = ?,
+                   source_context_session = ?,
+                   source_msg_start_id = ?,
+                   source_msg_end_id = ?,
+                   updated_at = ?
+               WHERE id = ?""",
+            (
+                fact_value,
+                next_confidence,
+                _text(context_session),
+                source_msg_start_id,
+                source_msg_end_id,
+                now,
+                int(fact_id),
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            """SELECT pf.*,
+                      sp.display_name AS subject_display_name,
+                      op.display_name AS object_display_name
+               FROM person_facts pf
+               LEFT JOIN people sp ON sp.person_key = pf.subject_person_key
+               LEFT JOIN people op ON op.person_key = pf.object_person_key
+               WHERE pf.id = ?""",
+            (int(fact_id),),
+        ).fetchone()
+        return _fact_row_to_dict(updated) if updated else None
+    finally:
+        conn.close()
+
+
 def format_person_fact_subject(row: dict[str, Any]) -> str:
     subject = _text(row.get("subject_display_name")) or _text(row.get("subject_person_key"))
     object_name = _text(row.get("object_display_name")) or _text(row.get("object_person_key"))

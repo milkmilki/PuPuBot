@@ -5,6 +5,7 @@ from .facts import (
     get_person_fact_map,
     get_person_facts,
     group_person_facts_for_display,
+    update_person_fact_by_id,
     upsert_person_facts,
 )
 from .familiarity_store import (
@@ -135,6 +136,7 @@ __all__ = [
     "table_columns",
     "update_familiarity",
     "update_event_threads_for_task",
+    "update_person_fact_by_id",
     "upsert_event_threads",
     "upsert_person_facts",
     "INSTANCE_PERSON_KEY",

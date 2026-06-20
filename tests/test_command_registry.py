@@ -34,7 +34,7 @@ class CommandRegistryTests(unittest.TestCase):
 
     def test_aliases_and_usage_helpers(self) -> None:
         self.assertIn("事件线", command_aliases("events"))
-        self.assertEqual(command_usage("tidy"), "/tidy [check|apply]")
+        self.assertEqual(command_usage("tidy"), "/tidy [check|apply|rebuild]")
 
 
 if __name__ == "__main__":

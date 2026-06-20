@@ -52,15 +52,13 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
 
         scheduled = object()
         with patch.object(state, "DEBOUNCE_SECONDS", 0):
-            with patch("plugins.pupu_support.buffering.get_familiarity", return_value=50):
-                with patch("plugins.pupu_support.buffering.compute_reply_delay", return_value=(0, None)):
-                    with patch("plugins.pupu_support.buffering.chat", side_effect=fake_chat):
-                        with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
-                            with patch(
-                                "plugins.pupu_support.buffering.asyncio.create_task",
-                                return_value=scheduled,
-                            ) as mock_create:
-                                await debounce_flush(sid)
+            with patch("plugins.pupu_support.buffering.chat", side_effect=fake_chat):
+                with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
+                    with patch(
+                        "plugins.pupu_support.buffering.asyncio.create_task",
+                        return_value=scheduled,
+                    ) as mock_create:
+                        await debounce_flush(sid)
 
         self.assertIs(state.debounce_tasks[sid], scheduled)
         self.assertEqual(state.msg_buffers[sid]["texts"], ["second"])
@@ -81,15 +79,13 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch.object(state, "DEBOUNCE_SECONDS", 0):
-            with patch("plugins.pupu_support.buffering.get_familiarity", return_value=50):
-                with patch("plugins.pupu_support.buffering.compute_reply_delay", return_value=(0, None)):
-                    with patch("plugins.pupu_support.buffering.chat", return_value="reply"):
-                        with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
-                            with patch(
-                                "plugins.pupu_support.buffering.asyncio.create_task",
-                                return_value=Mock(),
-                            ) as mock_create:
-                                await debounce_flush(sid)
+            with patch("plugins.pupu_support.buffering.chat", return_value="reply"):
+                with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
+                    with patch(
+                        "plugins.pupu_support.buffering.asyncio.create_task",
+                        return_value=Mock(),
+                    ) as mock_create:
+                        await debounce_flush(sid)
 
         mock_create.assert_not_called()
         self.assertNotIn(sid, state.msg_buffers)
@@ -175,7 +171,7 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         }
 
         with patch("plugins.pupu_support.buffering.load_open_group_debounce_seconds", return_value=0):
-            with patch("plugins.pupu_support.buffering.save_message") as mock_save:
+            with patch("plugins.pupu_support.buffering.save_message_with_speaker") as mock_save:
                 with patch("plugins.pupu_support.buffering.chat") as mock_chat:
                     await debounce_flush(sid)
 
@@ -183,7 +179,7 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
         mock_chat.assert_not_called()
         self.assertNotIn(sid, state.msg_buffers)
 
-    async def test_open_group_selected_speaker_uses_context_and_identity(self):
+    async def test_open_group_selected_speaker_uses_group_context_and_owner_identity(self):
         sid = "group_100"
         state.msg_buffers[sid] = {
             "texts": ["[user(QQ:1)] hi"],
@@ -200,21 +196,85 @@ class BufferingTests(unittest.IsolatedAsyncioTestCase):
             "last_message_id": "10",
         }
 
-        with patch("plugins.pupu_support.buffering.get_familiarity", return_value=100):
-            with patch("plugins.pupu_support.buffering.compute_reply_delay", return_value=(0, None)):
-                with patch("plugins.pupu_support.buffering.save_message"):
-                    with patch("plugins.pupu_support.buffering.chat", return_value="reply") as mock_chat:
-                        with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
-                            with patch(
-                                "plugins.pupu_support.buffering._post_self_reply_observe",
-                                new=AsyncMock(),
-                            ):
-                                await act_as_selected_speaker(sid)
+        with patch("plugins.pupu_support.buffering.chat", return_value="reply") as mock_chat:
+            with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
+                with patch(
+                    "plugins.pupu_support.buffering._post_self_reply_observe",
+                    new=AsyncMock(),
+                ):
+                    await act_as_selected_speaker(sid)
 
         _args, kwargs = mock_chat.call_args
         self.assertEqual(kwargs["context_session"], sid)
-        self.assertEqual(kwargs["identity_session"], "private_1")
+        self.assertEqual(kwargs["identity_session"], OWNER_SESSION)
         self.assertFalse(kwargs["persist_user"])
+
+    async def test_open_group_selected_speaker_persists_timestamped_history(self):
+        sid = "group_100"
+        state.msg_buffers[sid] = {
+            "texts": ["[user(QQ:1)] hi"],
+            "image_urls": [],
+            "bot": object(),
+            "event": object(),
+            "is_admin": False,
+            "nickname": "user",
+            "session_label": "群100",
+            "reply_prefix": None,
+            "identity_session": "private_1",
+            "is_open_group": True,
+            "group_id": "100",
+            "last_message_id": "10",
+        }
+
+        with patch("plugins.pupu_support.buffering._format_turn_timestamp", return_value="2026-06-19 周五 08:10"):
+            with patch("plugins.pupu_support.buffering.save_message_with_speaker") as mock_save:
+                with patch("plugins.pupu_support.buffering.chat", return_value="reply"):
+                    with patch("plugins.pupu_support.buffering.send_segments", new=AsyncMock()):
+                        with patch(
+                            "plugins.pupu_support.buffering._post_self_reply_observe",
+                            new=AsyncMock(),
+                        ):
+                            await act_as_selected_speaker(sid)
+
+        self.assertEqual(mock_save.call_args.args[1], "[时间: 2026-06-19 周五 08:10] [user(QQ:1)] hi")
+
+    async def test_open_group_buffer_keeps_owner_identity_even_when_last_speaker_changes(self):
+        sid = "group_100"
+        with patch("plugins.pupu_support.buffering._post_observe_async", new=AsyncMock(return_value={"latest_decision_id": 0})):
+            with patch("plugins.pupu_support.buffering._ensure_arbiter_subscriber"):
+                await buffer_message(
+                    sid=sid,
+                    text="[user(QQ:1)] hi",
+                    image_urls=[],
+                    bot=object(),
+                    event=object(),
+                    is_admin=False,
+                    nickname="user",
+                    session_label="群100",
+                    identity_session="private_1",
+                    is_open_group=True,
+                    group_id="100",
+                    speaker_user_id="1",
+                    speaker_name="user",
+                )
+                await buffer_message(
+                    sid=sid,
+                    text="[bot peer(QQ:2)] yo",
+                    image_urls=[],
+                    bot=object(),
+                    event=object(),
+                    is_admin=False,
+                    nickname="peer",
+                    session_label="群100",
+                    identity_session="private_2",
+                    is_open_group=True,
+                    group_id="100",
+                    speaker_user_id="2",
+                    speaker_name="peer",
+                    speaker_is_bot=True,
+                )
+
+        self.assertEqual(state.msg_buffers[sid]["identity_session"], OWNER_SESSION)
 
 
 if __name__ == "__main__":

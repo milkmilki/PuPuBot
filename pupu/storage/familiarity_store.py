@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from ..familiarity import (
-    DEFAULT_FAMILIARITY_LEVEL,
-    DEFAULT_FAMILIARITY_SCORE,
+    clamp_familiarity_score,
+    default_familiarity_score,
     score_to_level,
 )
 from .db import get_conn
@@ -17,15 +17,17 @@ def _resolve_identity_session(session_id: str = "default", identity_session: str
 
 
 def ensure_familiarity(conn, session_id: str):
+    session_id = _resolve_identity_session(session_id)
     row = conn.execute(
         "SELECT session_id FROM familiarity WHERE session_id = ?",
         (session_id,),
     ).fetchone()
     if not row:
+        default_score = default_familiarity_score(session_id)
         now = datetime.now().isoformat()
         conn.execute(
             "INSERT INTO familiarity (session_id, score, level, updated_at) VALUES (?, ?, ?, ?)",
-            (session_id, DEFAULT_FAMILIARITY_SCORE, DEFAULT_FAMILIARITY_LEVEL, now),
+            (session_id, default_score, score_to_level(default_score), now),
         )
         conn.commit()
 
@@ -43,7 +45,9 @@ def get_familiarity(
         (session_id,),
     ).fetchone()
     conn.close()
-    return row["score"] if row else DEFAULT_FAMILIARITY_SCORE
+    if row:
+        return clamp_familiarity_score(row["score"], session_id)
+    return default_familiarity_score(session_id)
 
 
 def update_familiarity(
@@ -61,8 +65,8 @@ def update_familiarity(
         "SELECT score FROM familiarity WHERE session_id = ?",
         (session_id,),
     ).fetchone()
-    old_score = row["score"] if row else DEFAULT_FAMILIARITY_SCORE
-    new_score = max(0, min(100, old_score + int(delta)))
+    old_score = row["score"] if row else default_familiarity_score(session_id)
+    new_score = clamp_familiarity_score(old_score + int(delta), session_id)
     new_level = score_to_level(new_score)
     now = datetime.now().isoformat()
     conn.execute(
@@ -89,7 +93,7 @@ def set_familiarity(
     session_id = _resolve_identity_session(session_id, identity_session)
     conn = get_conn()
     ensure_familiarity(conn, session_id)
-    new_score = max(0, min(100, int(score)))
+    new_score = clamp_familiarity_score(score, session_id)
     new_level = score_to_level(new_score)
     now = datetime.now().isoformat()
     conn.execute(
@@ -138,13 +142,15 @@ def get_familiarity_info(
     ).fetchone()
     conn.close()
     if row:
+        score = clamp_familiarity_score(row["score"], session_id)
         return {
-            "score": row["score"],
-            "level": row["level"],
+            "score": score,
+            "level": score_to_level(score),
             "updated_at": row["updated_at"],
         }
+    default_score = default_familiarity_score(session_id)
     return {
-        "score": DEFAULT_FAMILIARITY_SCORE,
-        "level": DEFAULT_FAMILIARITY_LEVEL,
+        "score": default_score,
+        "level": score_to_level(default_score),
         "updated_at": "",
     }

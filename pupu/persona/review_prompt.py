@@ -9,17 +9,17 @@ _FAMILIARITY_DELTA_INSTRUCTIONS = """
 - familiarity_delta: 这 8 轮对关系分数的总变化，整数；没有明显变化就给 0"""
 
 _BATCH_REVIEW_FIELDS = """
-- person_facts: 按人物或人物关系归属的稳定长期 facts；没有就返回 []
+- fact_updates: 按人物或人物关系归属的稳定长期 facts 写入动作；只允许 create / update_existing；没有就返回 []
 - event_updates: 事件线进展；优先 append_step 到候选 thread_key，确实无关才 create_thread；没有就返回 []
 - task_updates: 对定时任务的统一更新；没有就返回 []"""
 
 _CONCRETE_MEMORY_RULES = """
 
 具体记录规则（非常重要）：
-- 任何要写入 summary、event_updates、person_facts 的内容，都必须能回答“谁在什么时间/场景做了什么/说了什么/答应了什么”
+- 任何要写入 summary、event_updates、fact_updates 的内容，都必须能回答“谁在什么时间/场景做了什么/说了什么/答应了什么”
 - summary 要像事件流水账的浓缩版，可以用分号串起 1-3 件具体事；不要写“关系升温、进行了亲密互动、氛围很好、日常陪伴”这类抽象判断
 - event_updates 的 title/summary/followup_hint 必须包含具体对象、具体时间、具体行为或后续动作；不要只写“重要约定”“一次互动”“情绪事件”
-- person_facts 是唯一长期 facts 字段，只记录稳定长期事实，并必须写清 subject。
+- fact_updates 是唯一长期 facts 写入字段，只记录稳定长期事实，并必须写清 subject。
 - facts 的 key 和 value 都必须是普通自然语言字符串；不要输出数组、对象、布尔值、嵌套结构或 Python/JSON 字面量字符串。
 - 临时状态、当天偏好、一次性动作不要放进 facts，例如“今天喝冰美式”“刚才在画画”“今晚看动画”通常不要写成 fact
 - 如果事件发生在本轮对话里但没有更具体时间，用 Current local time 标注到具体日期，例如“2026年5月19日这轮对话中”
@@ -61,12 +61,16 @@ _FAMILIARITY_SCORING_RULES = """
 
 _FULL_FAMILIARITY_RULES = """
 
-当前关系分数已经达到 100，不要评估关系分数变化，JSON 里也不要包含任何分数字段。"""
+当前关系分数已经达到这个身份允许的上限，不要评估关系分数变化，JSON 里也不要包含任何分数字段。"""
 
 _EVENT_UPDATE_RULES = """
 
-person_facts 字段格式：
-- 每条为对象：{"subject":"人物名", "object":"可选人物名", "scope":"person/relationship", "key":"事实键", "value":"事实内容", "confidence":0.0到1.0}
+fact_updates 字段格式：
+- 如果“候选长期 facts”已经覆盖这轮信息，不要输出 fact_update。
+- 只允许 action=create 或 action=update_existing；不要输出 skip、merge、delete、rename。
+- create 用于新增候选里没有覆盖的长期事实：{"action":"create", "subject":"人物名", "object":"可选人物名", "scope":"person/relationship", "key":"事实键", "value":"事实内容", "confidence":0.0到1.0}
+- update_existing 用于补充或改写候选 fact：{"action":"update_existing", "fact_id":候选中的数字, "value":"更新后的事实内容", "confidence":0.0到1.0}
+- update_existing 只能使用候选长期 facts 里出现的 fact_id；不要改 key、subject、object、scope。
 - subject/object 只能使用输入对话里出现的人物名，例如“小夫”“璐璐”“仆仆”；不要输出 QQ 号、person_key 或 qq:xxx。
 - 个人属性用 scope=person，例如“小夫喜欢草莓”；关系事实用 scope=relationship，例如“小夫习惯叫璐璐姐姐”。
 - key 和 value 必须都是单条自然语言字符串；不要写成 {"爱好":["打游戏","看番"]}、["打游戏","看番"]、true、false 这类结构。

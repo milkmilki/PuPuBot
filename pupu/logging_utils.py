@@ -14,6 +14,7 @@ _log_path = None
 _print_lock = threading.Lock()
 _original_print = builtins.print
 _original_stderr = sys.stderr
+LOG_RETENTION_DAYS = 3
 
 _VERBOSE_CONSOLE_PREFIXES = (
     "[pupu][memu]",
@@ -84,6 +85,46 @@ def _ensure_log_dir() -> Path:
     return log_dir
 
 
+def _log_sort_key(path: Path) -> tuple[str, str]:
+    name = path.name
+    date_text = name[5:-4] if name.startswith("pupu-") and name.endswith(".log") else ""
+    if len(date_text) == 8 and date_text.isdigit():
+        return date_text, name
+    return "", name
+
+
+def _daily_log_paths(log_dir: Path | None = None) -> list[Path]:
+    root = log_dir or _ensure_log_dir()
+    out: list[Path] = []
+    for path in root.glob("pupu-*.log"):
+        name = path.name
+        date_text = name[5:-4] if name.startswith("pupu-") and name.endswith(".log") else ""
+        if len(date_text) == 8 and date_text.isdigit():
+            out.append(path)
+    return out
+
+
+def prune_old_logs(keep: int = LOG_RETENTION_DAYS, log_dir: Path | None = None) -> list[Path]:
+    """Delete older daily PuPu log files, keeping the newest snapshots."""
+    try:
+        keep_count = max(1, int(keep))
+    except Exception:
+        keep_count = LOG_RETENTION_DAYS
+
+    logs = sorted(_daily_log_paths(log_dir), key=_log_sort_key, reverse=True)
+    current_path = _log_path.resolve() if _log_path is not None else None
+    deleted: list[Path] = []
+    for path in logs[keep_count:]:
+        try:
+            if current_path is not None and path.resolve() == current_path:
+                continue
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        deleted.append(path)
+    return deleted
+
+
 def _build_log_path() -> Path:
     stamp = datetime.now().strftime("%Y%m%d")
     return _ensure_log_dir() / f"pupu-{stamp}.log"
@@ -112,6 +153,7 @@ def _ensure_current_log_file():
         if old_path is not None and old_path != _log_path:
             _log_file.write(f"[pupu] logging rotated to {_log_path}\n")
             _log_file.flush()
+        prune_old_logs(log_dir=_log_path.parent)
         return _log_file
 
 
@@ -158,6 +200,7 @@ def setup_runtime_logging() -> str:
 
     _log_path = _build_log_path()
     _log_file = _log_path.open("a", encoding="utf-8", buffering=1)
+    prune_old_logs(log_dir=_log_path.parent)
     builtins.print = _patched_print
     sys.stderr = _TeeStderr(_original_stderr, _get_sink)
 

@@ -14,6 +14,13 @@ from .llm import (
     last_provider_label,
     provider_label,
 )
+from .familiarity import (
+    clamp_familiarity_score,
+    default_familiarity_score,
+    max_familiarity_score,
+    score_to_level,
+)
+from .fact_search import find_related_person_facts
 from .memory import (
     count_pending_review_turns,
     get_familiarity,
@@ -35,6 +42,7 @@ from .memory import (
     save_message_with_speaker,
     save_summary,
     update_familiarity,
+    update_person_fact_by_id,
     upsert_person_facts,
 )
 from .memory_index import is_memu_long_term_enabled, recall_memories, sync_review_memory
@@ -48,6 +56,7 @@ from .review_followups import (
     save_review_event_updates,
 )
 from .storage.people import resolve_person_for_prompt
+from .storage.db import get_conn
 from .tools import execute_tool, get_chat_tool_definitions, is_admin_tool
 
 REVIEW_INTERVAL = 10
@@ -99,6 +108,58 @@ def _normalize_person_facts(value) -> list[dict]:
     return cleaned
 
 
+def _normalize_fact_updates(value, *, legacy_person_facts=None) -> list[dict]:
+    raw_items: list[dict] = []
+    if isinstance(value, list):
+        raw_items.extend(item for item in value if isinstance(item, dict))
+    for item in _normalize_person_facts(legacy_person_facts or []):
+        raw_items.append({"action": "create", **item})
+
+    cleaned: list[dict] = []
+    for item in raw_items:
+        action = _clean_fact_scalar(item.get("action") or "create").lower()
+        if action not in {"create", "update_existing"}:
+            continue
+        confidence = item.get("confidence", 1.0)
+        if action == "update_existing":
+            try:
+                fact_id = int(item.get("fact_id") or item.get("matched_fact_id") or 0)
+            except Exception:
+                fact_id = 0
+            val = _clean_fact_scalar(item.get("value") or item.get("fact_value"))
+            if fact_id <= 0 or not val:
+                continue
+            cleaned.append(
+                {
+                    "action": "update_existing",
+                    "fact_id": fact_id,
+                    "value": val,
+                    "confidence": confidence,
+                }
+            )
+            continue
+
+        key = _clean_fact_scalar(item.get("key") or item.get("fact_key"))
+        val = _clean_fact_scalar(item.get("value") or item.get("fact_value"))
+        subject = _clean_fact_scalar(item.get("subject") or item.get("subject_person_key"))
+        obj = _clean_fact_scalar(item.get("object") or item.get("object_person_key"))
+        scope = (_clean_fact_scalar(item.get("scope") or "person").lower() or "person")
+        if not key or not val:
+            continue
+        cleaned.append(
+            {
+                "action": "create",
+                "subject": subject,
+                "object": obj,
+                "scope": scope,
+                "key": key,
+                "value": val,
+                "confidence": confidence,
+            }
+        )
+    return cleaned
+
+
 def _normalize_familiarity_delta(value) -> int:
     try:
         delta = int(value or 0)
@@ -113,18 +174,25 @@ def _normalize_batch_review_result(value) -> dict:
             "summary": "",
             "familiarity_delta": 0,
             "person_facts": [],
+            "fact_updates": [],
             "event_updates": [],
             "task_updates": [],
         }
 
     event_updates = normalize_review_event_updates(value.get("event_updates", []))
+    legacy_person_facts = _normalize_person_facts(value.get("person_facts", []))
+    fact_updates = _normalize_fact_updates(
+        value.get("fact_updates", []),
+        legacy_person_facts=legacy_person_facts,
+    )
 
     return {
         "summary": str(value.get("summary", "")).strip(),
         "familiarity_delta": _normalize_familiarity_delta(
             value.get("familiarity_delta", 0)
         ),
-        "person_facts": _normalize_person_facts(value.get("person_facts", [])),
+        "person_facts": legacy_person_facts,
+        "fact_updates": fact_updates,
         "event_updates": event_updates,
         "task_updates": normalize_review_task_updates(value.get("task_updates", [])),
     }
@@ -275,6 +343,50 @@ def _format_event_thread_candidates_for_review(
     return "\n".join(lines)
 
 
+def _format_fact_candidates_for_review(
+    identity_session: str,
+    context_session: str,
+    text: str,
+    *,
+    person_keys: set[str] | None = None,
+    people: list[dict] | None = None,
+) -> tuple[str, set[int]]:
+    candidates = find_related_person_facts(
+        text,
+        identity_session=identity_session,
+        context_session=context_session,
+        person_keys=person_keys,
+        limit=8,
+    )
+    if not candidates:
+        return "候选长期 facts：无", set()
+    allowed_ids: set[int] = set()
+    labels = {
+        str(person.get("person_key") or ""): str(person.get("display_name") or "").strip()
+        for person in (people or [])
+        if str(person.get("person_key") or "").strip() and str(person.get("display_name") or "").strip()
+    }
+    labels.setdefault("instance", get_pupu_name())
+    lines = ["候选长期 facts（已有事实能覆盖时不要重复输出；需要补充时用 update_existing 的 fact_id）："]
+    for item in candidates:
+        fact_id = int(item.get("fact_id") or item.get("id") or 0)
+        if fact_id > 0:
+            allowed_ids.add(fact_id)
+        score = float(item.get("score") or 0.0)
+        subject_key = str(item.get("subject_person_key") or "")
+        object_key = str(item.get("object_person_key") or "")
+        subject = str(labels.get(subject_key) or item.get("subject_display_name") or subject_key or "相关人物")
+        obj = str(labels.get(object_key) or item.get("object_display_name") or object_key or "")
+        scope = str(item.get("scope") or "person")
+        label = subject
+        if scope == "relationship" and obj:
+            label = f"{subject} -> {obj}"
+        key = _compact_review_field(item.get("fact_key"), 50)
+        value = _compact_review_field(item.get("fact_value"), 130)
+        lines.append(f"- [fact_id={fact_id}] score={score:.2f} | {label} | {key}: {value}")
+    return "\n".join(lines), allowed_ids
+
+
 def _sanitize_review_speaker_name(value: object, fallback: str) -> str:
     text = str(value or "").replace("<end>", "").strip()
     text = re.sub(r"\s+", " ", text).strip("：:")
@@ -299,6 +411,126 @@ def _known_review_people_map(people: list[dict]) -> dict[str, str]:
         if qq and name:
             known[f"qq:{qq}"] = name
     return known
+
+
+def _identity_session_for_group_person(person: dict | None) -> str:
+    if not isinstance(person, dict):
+        return ""
+    key = str(person.get("person_key") or "").strip()
+    kind = str(person.get("kind") or "").strip()
+    qq_id = str(person.get("qq_id") or "").strip()
+    if key == "owner" or kind == "owner":
+        return "owner"
+    if key.startswith("qq:"):
+        qq_id = key.removeprefix("qq:")
+    elif key.startswith("qqofficial:"):
+        return f"c2c_{key.removeprefix('qqofficial:')}"
+    if qq_id:
+        return f"private_{qq_id}"
+    return ""
+
+
+def _familiarity_level_for_identity_session(identity_session: str) -> str:
+    sid = str(identity_session or "").strip()
+    if not sid:
+        return "认识"
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT score FROM familiarity WHERE session_id = ?",
+            (sid,),
+        ).fetchone()
+    except Exception:
+        row = None
+    finally:
+        conn.close()
+    if not row:
+        return score_to_level(default_familiarity_score(sid))
+    try:
+        return score_to_level(clamp_familiarity_score(int(row["score"]), sid))
+    except Exception:
+        return "认识"
+
+
+def _group_relationship_prefix_for_person(person: dict | None) -> str:
+    if not isinstance(person, dict):
+        return "认识"
+    key = str(person.get("person_key") or "").strip()
+    kind = str(person.get("kind") or "").strip()
+    if key == "instance" or kind == "instance":
+        return "自己"
+    identity_session = _identity_session_for_group_person(person)
+    if not identity_session:
+        return "认识"
+    return _familiarity_level_for_identity_session(identity_session)
+
+
+def _group_relationship_prefix_for_label(
+    label: str,
+    people: list[dict],
+) -> str:
+    cleaned = str(label or "").strip()
+    if not cleaned:
+        return ""
+    matches: list[str] = []
+    for person in people or []:
+        if not isinstance(person, dict):
+            continue
+        name = _sanitize_review_speaker_name(person.get("display_name"), "")
+        key = str(person.get("person_key") or "").strip()
+        if cleaned not in {name, key}:
+            continue
+        prefix = _group_relationship_prefix_for_person(person)
+        if prefix and prefix not in matches:
+            matches.append(prefix)
+    if len(matches) == 1:
+        return matches[0]
+    return ""
+
+
+def _format_group_relationship_speaker(
+    label: str,
+    people: list[dict],
+) -> str:
+    speaker = str(label or "").strip()
+    if not speaker:
+        return speaker
+    prefix = _group_relationship_prefix_for_label(speaker, people)
+    if not prefix:
+        return speaker
+    return f"“{prefix}”{speaker}"
+
+
+def _format_group_people_context(
+    people: list[dict],
+    *,
+    character_name: str,
+) -> str:
+    known_names = _known_review_people_map(people)
+    lines = [f"你是{character_name}。"]
+    seen: set[str] = set()
+    for person in people or []:
+        if not isinstance(person, dict):
+            continue
+        key = str(person.get("person_key") or "").strip()
+        kind = str(person.get("kind") or "").strip()
+        qq = str(person.get("qq_id") or "").strip()
+        name = (
+            known_names.get(key)
+            or (known_names.get(f"qq:{qq}") if qq else "")
+            or _sanitize_review_speaker_name(person.get("display_name"), "")
+        )
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        if key == "instance" or kind == "instance" or name == character_name:
+            continue
+        relation = _group_relationship_prefix_for_person(person)
+        if relation:
+            lines.append(f"{name}：与你的关系是{relation}。")
+        else:
+            lines.append(f"{name}：群聊成员。")
+    return "\n".join(lines)
 
 
 def _merge_people_for_prompt(*groups: list[dict]) -> list[dict]:
@@ -348,6 +580,8 @@ def _review_name_for_prefixed_qq(
     raw_name: str,
     payload: list[dict],
     known_names: dict[str, str],
+    prompt_people: list[dict] | None = None,
+    include_relationship_prefix: bool = False,
 ) -> str:
     qq = str(qq_id or "").strip()
     if not qq:
@@ -357,34 +591,59 @@ def _review_name_for_prefixed_qq(
             continue
         key = str(speaker.get("person_key") or "").strip()
         if key and known_names.get(key):
-            return known_names[key]
+            name = known_names[key]
+            return (
+                _format_group_relationship_speaker(name, prompt_people or [])
+                if include_relationship_prefix
+                else name
+            )
         qq_key = f"qq:{qq}"
         if known_names.get(qq_key):
-            return known_names[qq_key]
-        return _sanitize_review_speaker_name(
+            name = known_names[qq_key]
+            return (
+                _format_group_relationship_speaker(name, prompt_people or [])
+                if include_relationship_prefix
+                else name
+            )
+        name = _sanitize_review_speaker_name(
             speaker.get("display_name") or raw_name,
             "用户",
         )
+        return (
+            _format_group_relationship_speaker(name, prompt_people or [])
+            if include_relationship_prefix
+            else name
+        )
     qq_key = f"qq:{qq}"
     if known_names.get(qq_key):
-        return known_names[qq_key]
-    return _sanitize_review_speaker_name(raw_name, "用户")
+        name = known_names[qq_key]
+    else:
+        name = _sanitize_review_speaker_name(raw_name, "用户")
+    return (
+        _format_group_relationship_speaker(name, prompt_people or [])
+        if include_relationship_prefix
+        else name
+    )
 
 
 def _review_speaker_name_for_message(
     item: dict,
     known_names: dict[str, str],
     character_name: str,
+    prompt_people: list[dict] | None = None,
+    include_relationship_prefix: bool = False,
 ) -> str:
     role = str(item.get("role") or "")
     if role == "assistant":
         row_name = _sanitize_review_speaker_name(item.get("speaker_name"), "")
         if row_name:
-            return row_name
+            return f"“自己”{row_name}" if include_relationship_prefix else row_name
         known_instance = known_names.get("instance") or ""
         if known_instance and known_instance != "实例":
-            return known_instance
-        return character_name
+            name = known_instance
+        else:
+            name = character_name
+        return f"“自己”{name}" if include_relationship_prefix else name
 
     payload = _speaker_payload_from_message(item)
     if payload:
@@ -397,20 +656,37 @@ def _review_speaker_name_for_message(
             label = " / ".join(names[:3])
             if len(names) > 3:
                 label += " 等"
-            return label
+            return (
+                _format_group_relationship_speaker(label, prompt_people or [])
+                if include_relationship_prefix
+                else label
+            )
 
     key = str(item.get("speaker_key") or "").strip()
     if key and known_names.get(key):
-        return known_names[key]
+        name = known_names[key]
+        return (
+            _format_group_relationship_speaker(name, prompt_people or [])
+            if include_relationship_prefix
+            else name
+        )
     if not key and known_names.get("owner"):
-        return known_names["owner"]
-    return _sanitize_review_speaker_name(item.get("speaker_name"), "用户")
+        name = known_names["owner"]
+    else:
+        name = _sanitize_review_speaker_name(item.get("speaker_name"), "用户")
+    return (
+        _format_group_relationship_speaker(name, prompt_people or [])
+        if include_relationship_prefix
+        else name
+    )
 
 
 def _format_prefixed_group_review_lines(
     content: str,
     payload: list[dict],
     known_names: dict[str, str],
+    prompt_people: list[dict] | None = None,
+    include_relationship_prefix: bool = False,
 ) -> list[str]:
     if "QQ:" not in content:
         return []
@@ -429,17 +705,80 @@ def _format_prefixed_group_review_lines(
                 match.group("name"),
                 payload,
                 known_names,
+                prompt_people=prompt_people,
+                include_relationship_prefix=include_relationship_prefix,
             )
             if speaker:
                 current_speaker = speaker
                 text = match.group("text").replace("<end>", "[end]").strip()
+                text = _strip_leading_speaker_prefix(text, [speaker])
                 if text:
                     lines.append(f"{speaker}：{text} <end>")
                 continue
         if current_speaker:
-            lines.append(f"{current_speaker}：{line.replace('<end>', '[end]')} <end>")
+            text = _strip_leading_speaker_prefix(
+                line.replace("<end>", "[end]"),
+                [current_speaker],
+            )
+            if text:
+                lines.append(f"{current_speaker}：{text} <end>")
 
     return lines
+
+
+def _strip_leading_speaker_prefix(text: object, speaker_names: list[str] | tuple[str, ...]) -> str:
+    cleaned = str(text or "").replace("<end>", "[end]").strip()
+    names: list[str] = []
+    for raw_name in speaker_names:
+        name = str(raw_name or "").strip().strip(":：")
+        if name and name not in names:
+            names.append(name)
+        plain_name = re.sub(r"^“[^”]+”", "", name).strip()
+        if plain_name and plain_name not in names:
+            names.append(plain_name)
+    if not cleaned or not names:
+        return cleaned
+
+    for _ in range(4):
+        before = cleaned
+        for name in names:
+            cleaned = re.sub(
+                r"^\s*(?:“[^”]+”\s*)?" + re.escape(name) + r"\s*[:：]\s*",
+                "",
+                cleaned,
+                count=1,
+            )
+        cleaned = cleaned.lstrip()
+        if cleaned == before:
+            break
+    return cleaned
+
+
+def _speaker_prefix_strip_candidates(*people_groups: list[dict], character_name: str = "") -> list[str]:
+    names: list[str] = []
+
+    def add(value: object) -> None:
+        name = _sanitize_review_speaker_name(value, "")
+        if name and name not in names:
+            names.append(name)
+
+    for value in (character_name, get_pupu_name(), "仆仆", "璐璐", "用户", "实例", "assistant"):
+        add(value)
+    for group in people_groups:
+        for person in group or []:
+            if not isinstance(person, dict):
+                continue
+            add(person.get("display_name"))
+            add(person.get("person_key"))
+    return names
+
+
+def _split_leading_turn_timestamp(text: object) -> tuple[str, str]:
+    cleaned = str(text or "").strip()
+    match = re.match(r"^\s*(?P<stamp>\[时间:[^\]]+\])\s*(?P<body>.*)$", cleaned, flags=re.DOTALL)
+    if not match:
+        return "", cleaned
+    return match.group("stamp").strip(), match.group("body").strip()
 
 
 def _format_review_conversation_transcript(
@@ -454,13 +793,19 @@ def _format_review_conversation_transcript(
         content = str(item.get("content") or "").replace("<end>", "[end]").strip()
         if not content:
             continue
+        turn_timestamp, content = _split_leading_turn_timestamp(content)
         payload = _speaker_payload_from_message(item)
         prefixed_lines = _format_prefixed_group_review_lines(content, payload, known_names)
         if prefixed_lines:
-            lines.extend(prefixed_lines)
+            if turn_timestamp:
+                lines.extend(f"{turn_timestamp} {line}" for line in prefixed_lines)
+            else:
+                lines.extend(prefixed_lines)
             continue
         speaker = _review_speaker_name_for_message(item, known_names, character_name)
-        lines.append(f"{speaker}：{content} <end>")
+        content = _strip_leading_speaker_prefix(content, [speaker])
+        prefix = f"{turn_timestamp} " if turn_timestamp else ""
+        lines.append(f"{prefix}{speaker}：{content} <end>")
     return "\n".join(lines)
 
 
@@ -470,22 +815,44 @@ def _format_message_content_for_prompt(
     character_name: str,
     people: list[dict],
     include_end_marker: bool = False,
+    include_relationship_prefix: bool = False,
+    bare_assistant: bool = False,
 ) -> str:
     known_names = _known_review_people_map(people)
     content = str(item.get("content") or "").replace("<end>", "[end]").strip()
     if not content:
         return ""
+    turn_timestamp, content = _split_leading_turn_timestamp(content)
+    if bare_assistant and str(item.get("role") or "") == "assistant":
+        speaker = _review_speaker_name_for_message(item, known_names, character_name)
+        return _strip_leading_speaker_prefix(content, [speaker])
     payload = _speaker_payload_from_message(item)
     prompt_people = _merge_people_for_prompt(payload, people)
     prompt_names = _known_review_people_map(prompt_people)
-    prefixed_lines = _format_prefixed_group_review_lines(content, payload, prompt_names)
+    prefixed_lines = _format_prefixed_group_review_lines(
+        content,
+        payload,
+        prompt_names,
+        prompt_people=prompt_people,
+        include_relationship_prefix=include_relationship_prefix,
+    )
     if prefixed_lines:
+        if turn_timestamp:
+            prefixed_lines = [f"{turn_timestamp} {line}" for line in prefixed_lines]
         if include_end_marker:
             return "\n".join(prefixed_lines)
         return "\n".join(line.removesuffix(" <end>") for line in prefixed_lines)
-    speaker = _review_speaker_name_for_message(item, known_names, character_name)
+    speaker = _review_speaker_name_for_message(
+        item,
+        known_names,
+        character_name,
+        prompt_people=people,
+        include_relationship_prefix=include_relationship_prefix,
+    )
+    content = _strip_leading_speaker_prefix(content, [speaker])
     suffix = " <end>" if include_end_marker else ""
-    return f"{speaker}：{content}{suffix}"
+    prefix = f"{turn_timestamp} " if turn_timestamp else ""
+    return f"{prefix}{speaker}：{content}{suffix}"
 
 
 def _format_chat_history_for_prompt(
@@ -493,6 +860,8 @@ def _format_chat_history_for_prompt(
     *,
     character_name: str,
     people: list[dict],
+    include_relationship_prefix: bool = False,
+    bare_assistant: bool = False,
 ) -> list[dict]:
     formatted: list[dict] = []
     for item in history or []:
@@ -501,6 +870,8 @@ def _format_chat_history_for_prompt(
             item,
             character_name=character_name,
             people=people,
+            include_relationship_prefix=include_relationship_prefix,
+            bare_assistant=bare_assistant,
         )
         if content:
             formatted.append({"role": role, "content": content})
@@ -593,6 +964,7 @@ def chat(
 
     context_session = str(context_session or session_id or "default")
     identity_session = str(identity_session or session_id or "default")
+    is_group_context = context_session.startswith("group_") or context_session.startswith("qqgroup_")
 
     cancel_wait_timer(context_session)
 
@@ -670,6 +1042,7 @@ def chat(
                 history,
                 character_name=get_pupu_name(),
                 people=history_people,
+                bare_assistant=is_group_context,
             ),
         )
         person_facts = []
@@ -689,12 +1062,22 @@ def chat(
         event_threads=event_threads,
         reply_speed_hint=reply_speed_hint,
         recalled_memories=recalled_memories,
+        include_familiarity_prompt=not is_group_context,
+        group_people_context=(
+            _format_group_people_context(
+                _merge_people_for_prompt(history_people, current_people),
+                character_name=get_pupu_name(),
+            )
+            if is_group_context
+            else ""
+        ),
     )
 
     messages = _format_chat_history_for_prompt(
         history,
         character_name=get_pupu_name(),
         people=history_people,
+        bare_assistant=is_group_context,
     )
 
     def _tool_handler(tool_name: str, tool_input: dict, reason_hint: str | None = None):
@@ -722,6 +1105,14 @@ def chat(
         tool_exposure="chat",
     )
     final_text, should_wait = _parse_dialogue_output(final_text_raw)
+    final_text = _strip_leading_speaker_prefix(
+        final_text,
+        _speaker_prefix_strip_candidates(
+            history_people,
+            current_people,
+            character_name=get_pupu_name(),
+        ),
+    )
     print(
         "[pupu] dialogue decision: "
         f"context={context_session} identity={identity_session} "
@@ -845,6 +1236,13 @@ def _maybe_batch_review_unlocked(
             character_name=character_name,
             people=batch_people,
         )
+        fact_candidates_text, allowed_fact_update_ids = _format_fact_candidates_for_review(
+            identity_session,
+            context_session,
+            conversation_text,
+            person_keys=batch_person_keys,
+            people=batch_people,
+        )
         event_candidates_text = _format_event_thread_candidates_for_review(
             identity_session,
             conversation_text,
@@ -854,12 +1252,15 @@ def _maybe_batch_review_unlocked(
             f"Current local time: {datetime.now().isoformat(timespec='seconds')}\n\n"
             + active_tasks_text
             + "\n\n"
+            + fact_candidates_text
+            + "\n\n"
             + event_candidates_text
             + "\n\n待整理对话：\n"
             + conversation_text
         )
         familiarity_score = get_familiarity(identity_session)
-        include_familiarity_delta = familiarity_score < 100
+        familiarity_score_limit = max_familiarity_score(identity_session)
+        include_familiarity_delta = familiarity_score < familiarity_score_limit
         review_prompt = build_batch_review_prompt(
             include_familiarity_delta=include_familiarity_delta,
             character_name=character_name,
@@ -869,6 +1270,7 @@ def _maybe_batch_review_unlocked(
             f"provider={provider_label('judge', JUDGE_MODEL)}, "
             f"input_chars={len(conversation_text)}, "
             f"familiarity_score={familiarity_score}, "
+            f"familiarity_limit={familiarity_score_limit}, "
             f"delta_enabled={include_familiarity_delta}"
         )
 
@@ -901,6 +1303,7 @@ def _maybe_batch_review_unlocked(
                 "summary": _build_fallback_summary(batch, character_name=character_name),
                 "familiarity_delta": 0,
                 "person_facts": [],
+                "fact_updates": [],
                 "event_updates": [],
                 "task_updates": [],
             }
@@ -920,7 +1323,7 @@ def _maybe_batch_review_unlocked(
         if not include_familiarity_delta and familiarity_delta:
             print(
                 "[pupu] batch review familiarity delta ignored: "
-                f"score already 100, model_delta={familiarity_delta}"
+                f"score already {familiarity_score_limit}, model_delta={familiarity_delta}"
             )
             familiarity_delta = 0
         if familiarity_delta:
@@ -932,9 +1335,9 @@ def _maybe_batch_review_unlocked(
         else:
             print("[pupu] batch review familiarity delta empty")
 
-        person_facts = list(result.get("person_facts", []) or [])
+        fact_updates = list(result.get("fact_updates", []) or [])
         saved_person_facts = []
-        if person_facts:
+        if fact_updates:
             fact_known_people = list(batch_people or [])
             if character_name:
                 fact_known_people.append(
@@ -944,18 +1347,48 @@ def _maybe_batch_review_unlocked(
                         "display_name": character_name,
                     }
                 )
-            saved_person_facts = upsert_person_facts(
-                person_facts,
-                default_subject_person_key=person_from_session(identity_session),
-                legacy_session_id=identity_session,
-                known_people=fact_known_people,
-                context_session=context_session,
-                source_msg_start_id=batch[0]["id"],
-                source_msg_end_id=batch[-1]["id"],
-            )
+            create_facts = [
+                item for item in fact_updates if str(item.get("action") or "") == "create"
+            ]
+            updated_facts = []
+            skipped_updates = 0
+            for item in fact_updates:
+                if str(item.get("action") or "") != "update_existing":
+                    continue
+                fact_id = int(item.get("fact_id") or 0)
+                if fact_id not in allowed_fact_update_ids:
+                    skipped_updates += 1
+                    print(
+                        "[pupu] batch review fact_update skipped: "
+                        f"reason=not_candidate fact_id={fact_id}"
+                    )
+                    continue
+                updated = update_person_fact_by_id(
+                    fact_id,
+                    value=str(item.get("value") or ""),
+                    confidence=item.get("confidence"),
+                    context_session=context_session,
+                    source_msg_start_id=batch[0]["id"],
+                    source_msg_end_id=batch[-1]["id"],
+                )
+                if updated:
+                    updated_facts.append(updated)
+            created_facts = []
+            if create_facts:
+                created_facts = upsert_person_facts(
+                    create_facts,
+                    default_subject_person_key=person_from_session(identity_session),
+                    legacy_session_id=identity_session,
+                    known_people=fact_known_people,
+                    context_session=context_session,
+                    source_msg_start_id=batch[0]["id"],
+                    source_msg_end_id=batch[-1]["id"],
+                )
+            saved_person_facts = [*updated_facts, *created_facts]
             print(
-                "[pupu] batch review person_facts upserted: "
-                f"count={len(saved_person_facts)}"
+                "[pupu] batch review fact_updates applied: "
+                f"input={len(fact_updates)}, created={len(created_facts)}, "
+                f"updated={len(updated_facts)}, skipped={skipped_updates}"
             )
             saved_subject_keys = {
                 str(item.get("subject_person_key") or "")
@@ -988,7 +1421,7 @@ def _maybe_batch_review_unlocked(
                     in saved_signatures
                 ]
         else:
-            print("[pupu] batch review person_facts empty")
+            print("[pupu] batch review fact_updates empty")
 
         event_updates = result.get("event_updates", [])
         saved_event_rows = {}
@@ -1083,7 +1516,7 @@ def _maybe_batch_review_unlocked(
             "[pupu] batch review done: "
             f"trigger={trigger}, messages_count={batch_turns}, summary_chars={len(summary)}, "
             f"familiarity_delta={familiarity_delta}, "
-            f"person_facts={len(saved_person_facts)}, "
+            f"fact_updates={len(fact_updates)}, person_facts={len(saved_person_facts)}, "
             f"event_updates={len(event_updates)}, "
             f"task_updates={len(task_updates)}"
         )

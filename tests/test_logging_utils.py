@@ -58,6 +58,73 @@ class RuntimeLoggingTests(unittest.TestCase):
                 logging_utils._log_file = old_log_file
                 logging_utils._log_path = old_log_path
 
+    def test_prune_old_logs_keeps_latest_three_daily_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            for day in range(1, 6):
+                (log_dir / f"pupu-2026040{day}.log").write_text(f"log-{day}", encoding="utf-8")
+            unrelated = log_dir / "manual.log"
+            unrelated.write_text("keep me", encoding="utf-8")
+
+            deleted = logging_utils.prune_old_logs(log_dir=log_dir)
+
+            self.assertEqual(
+                {path.name for path in deleted},
+                {"pupu-20260401.log", "pupu-20260402.log"},
+            )
+            self.assertEqual(
+                {path.name for path in log_dir.glob("*.log")},
+                {
+                    "manual.log",
+                    "pupu-20260403.log",
+                    "pupu-20260404.log",
+                    "pupu-20260405.log",
+                },
+            )
+            self.assertTrue(unrelated.exists())
+
+    def test_log_rotation_prunes_old_daily_files(self):
+        old_initialized = logging_utils._initialized
+        old_log_file = logging_utils._log_file
+        old_log_path = logging_utils._log_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_dir = root / "data" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            for day in range(25, 29):
+                (log_dir / f"pupu-202604{day}.log").write_text(f"log-{day}", encoding="utf-8")
+            try:
+                logging_utils._initialized = True
+                logging_utils._log_file = None
+                logging_utils._log_path = None
+
+                with patch.object(logging_utils, "_get_project_root", return_value=root):
+                    with patch.object(logging_utils, "datetime", _FakeDatetime):
+                        _FakeDatetime.current = datetime(2026, 4, 29, 0, 0, 1)
+                        sink = logging_utils._ensure_current_log_file()
+                        sink.write("latest\n")
+                        sink.flush()
+
+                sink.close()
+                self.assertEqual(
+                    {path.name for path in log_dir.glob("pupu-*.log")},
+                    {
+                        "pupu-20260427.log",
+                        "pupu-20260428.log",
+                        "pupu-20260429.log",
+                    },
+                )
+            finally:
+                if logging_utils._log_file is not None and logging_utils._log_file is not old_log_file:
+                    try:
+                        logging_utils._log_file.close()
+                    except Exception:
+                        pass
+                logging_utils._initialized = old_initialized
+                logging_utils._log_file = old_log_file
+                logging_utils._log_path = old_log_path
+
     def test_verbose_pupu_lines_are_hidden_from_console_unless_debug_enabled(self):
         sink = StringIO()
         with patch.object(logging_utils, "_original_print") as original_print:

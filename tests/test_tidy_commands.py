@@ -93,11 +93,12 @@ class TidyCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(selected)
         mock_input.assert_not_called()
 
-    def test_cli_tidy_accepts_check_apply_and_defaults_to_apply(self):
+    def test_cli_tidy_accepts_check_apply_rebuild_and_defaults_to_apply(self):
         cases = [
             ("/tidy", "apply"),
             ("/tidy check", "check"),
             ("/cleanup apply", "apply"),
+            ("/tidy rebuild", "rebuild"),
         ]
         for command, mode in cases:
             with self.subTest(command=command):
@@ -120,10 +121,11 @@ class TidyCommandTests(unittest.IsolatedAsyncioTestCase):
         mock_run.assert_not_called()
         mock_print.assert_any_call(cli.TIDY_USAGE)
 
-    async def test_nonebot_tidy_defaults_to_apply_and_accepts_check(self):
+    async def test_nonebot_tidy_defaults_to_apply_and_accepts_check_rebuild(self):
         cases = [
             ("", "apply"),
             ("check", "check"),
+            ("rebuild", "rebuild"),
         ]
         for arg, mode in cases:
             with self.subTest(arg=arg):

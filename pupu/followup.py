@@ -16,6 +16,7 @@ DIALOGUE_OUTPUT_PROTOCOL = (
     "- 你必须只输出一个 JSON 对象，不要输出 Markdown 代码块。\n"
     "- JSON 字段固定为 content 和 should_wait。\n"
     "- content 是你要实际发给用户的话（字符串）。\n"
+    "- content 不要带任何说话人前缀，不要写“仆仆：”“璐璐：”“用户：”这类剧本格式。\n"
     "- should_wait 是布尔值：true 表示你期待用户回复；false 表示不期待。\n"
     "- 只要 content 里出现提问、让对方给结论/选择/反馈，should_wait 应优先设为 true。\n"
     "- 除 JSON 对象外不要输出任何其他文字。"

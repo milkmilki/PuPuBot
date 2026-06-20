@@ -70,6 +70,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
         aliases=("fact", "memory_facts", "长期记忆", "事实记忆"),
         category="记忆",
         description="查看长期事实记忆",
+        usage="/facts\n/facts search [--debug] <内容>",
     ),
     CommandSpec(
         "recall",
@@ -85,7 +86,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
         aliases=("cleanup", "整理记忆", "整理"),
         category="记忆",
         description="整理 memU 长期记忆，默认 apply，也可用 check",
-        usage="/tidy [check|apply]",
+        usage="/tidy [check|apply|rebuild]",
         admin_surfaces=_surface_set(("qq",)),
     ),
     CommandSpec(

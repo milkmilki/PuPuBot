@@ -24,7 +24,7 @@ import time
 
 import httpx
 
-from pupu.agent import chat
+from pupu.agent import _format_turn_timestamp, chat
 from pupu.config import (
     load_arbiter_base_url,
     load_arbiter_subscribe_timeout_seconds,
@@ -37,8 +37,7 @@ from pupu.config import (
     load_peer_config,
 )
 from pupu.dialogue_loop import cancel_wait_timer, is_followup_eligible, register_sender
-from pupu.familiarity import compute_reply_delay
-from pupu.memory import get_familiarity, save_message, save_message_with_speaker
+from pupu.memory import save_message_with_speaker
 from pupu.storage.people import resolve_person_for_prompt
 
 from . import state
@@ -91,6 +90,30 @@ def _configured_persona_brief() -> str:
     except Exception:
         return ""
     return str(cfg.get("display_name") or cfg.get("name") or cfg.get("bot_id") or "").strip()
+
+
+def _bot_log_name(bot=None) -> str:
+    return (
+        _configured_persona_brief()
+        or str(getattr(bot, "self_id", "") or "").strip()
+        or load_bot_id()
+        or "bot"
+    )
+
+
+def _identity_session_for_context(sid: str, identity_session: str | None = None) -> str:
+    if str(sid or "").startswith("group_"):
+        return state.OWNER_SESSION
+    return str(identity_session or sid)
+
+
+def _with_turn_timestamp(text: str) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return value
+    if value.startswith("[时间:"):
+        return value
+    return f"[时间: {_format_turn_timestamp()}] {value}"
 
 
 def _at_targets(text: str) -> list[str]:
@@ -244,7 +267,7 @@ async def arbiter_decision_subscriber(group_id: str, sid: str, bot) -> None:
             if speaker != bot_id:
                 continue
             phase = state.session_phase.get(sid)
-            if phase in ("delaying", "processing"):
+            if phase == "processing":
                 print(
                     f"[pupu][arbiter] skip act: session={sid} phase={phase} "
                     f"decision_id={decision_id}"
@@ -312,13 +335,11 @@ async def act_as_selected_speaker(sid: str) -> None:
 
     Mirrors the behaviour of the legacy ``debounce_flush`` for open groups,
     but is triggered by the arbiter subscriber rather than a local timer.
-    Familiarity-based delays / replacements still run client-side because
-    they reflect each bot's individual relationship with the speaker.
     """
     buf = state.msg_buffers.get(sid)
     if not buf:
         return
-    if state.session_phase.get(sid) in ("delaying", "processing"):
+    if state.session_phase.get(sid) == "processing":
         return
 
     state.session_phase[sid] = "processing"
@@ -329,7 +350,7 @@ async def act_as_selected_speaker(sid: str) -> None:
 
     combined_text = "\n".join(text for text in buf.get("texts") or [] if text)
     image_urls = list(buf.get("image_urls") or [])
-    identity_session = str(buf.get("identity_session") or sid)
+    identity_session = _identity_session_for_context(sid, str(buf.get("identity_session") or ""))
 
     if not combined_text and not image_urls:
         state.session_phase.pop(sid, None)
@@ -341,34 +362,12 @@ async def act_as_selected_speaker(sid: str) -> None:
             speaker_payload = json.dumps(buf.get("speakers") or [], ensure_ascii=False)
             save_message_with_speaker(
                 "user",
-                combined_text,
+                _with_turn_timestamp(combined_text),
                 sid,
                 speaker_key=speaker_payload,
                 speaker_name=str(buf.get("speaker_name") or buf.get("nickname") or ""),
                 speaker_qq=str(buf.get("speaker_user_id") or ""),
             )
-
-        score = get_familiarity(identity_session)
-        delay, replacement = compute_reply_delay(score)
-        if replacement is not None:
-            print(f"[pupu] 敷衍回复: {replacement}")
-            save_message("assistant", replacement, sid)
-            log("send", buf.get("session_label") or "", buf.get("nickname") or "", replacement)
-            segments = split_message(replacement)
-            await send_segments(
-                buf["bot"],
-                buf["event"],
-                segments,
-                prefix=buf.get("reply_prefix"),
-            )
-            await _post_self_reply_observe(buf, buf["bot"], replacement)
-            return
-
-        if delay > 0:
-            state.session_phase[sid] = "delaying"
-            print(f"[pupu] 延迟回复: {delay:.1f}秒 (好感度{score})")
-            await asyncio.sleep(delay)
-            state.session_phase[sid] = "processing"
 
         speed_hint = compute_reply_speed_hint(sid)
         speaker_payload = json.dumps(buf.get("speakers") or [], ensure_ascii=False)
@@ -386,7 +385,7 @@ async def act_as_selected_speaker(sid: str) -> None:
             speaker_name=str(buf.get("speaker_name") or buf.get("nickname") or ""),
             speaker_qq=str(buf.get("speaker_user_id") or ""),
         )
-        log("send", buf.get("session_label") or "", buf.get("nickname") or "", reply)
+        log("send", buf.get("session_label") or "", _bot_log_name(buf.get("bot")), reply)
         segments = split_message(reply)
         await send_segments(
             buf["bot"],
@@ -432,7 +431,7 @@ async def buffer_message(
     if _is_command_text(text):
         return
 
-    identity_session = identity_session or sid
+    identity_session = _identity_session_for_context(sid, identity_session)
     if sid not in state.msg_buffers:
         state.msg_buffers[sid] = {
             "texts": [],
@@ -520,7 +519,7 @@ async def buffer_message(
     if buf.get("is_open_group"):
         # Open-group path: always push the observation so the arbiter has fresh
         # context, even if this bot is currently busy generating a previous
-        # reply (phase=delaying/processing). The subscriber + watchdog will
+        # reply (phase=processing). The subscriber + watchdog will
         # decide who speaks for the next round.
         gid = str(buf.get("group_id") or sid.removeprefix("group_"))
         msg_id = str(buf.get("last_message_id") or "") or f"local:{int(time.time_ns())}"
@@ -543,7 +542,7 @@ async def buffer_message(
             )
         return
 
-    if phase in ("delaying", "processing"):
+    if phase == "processing":
         return
 
     if sid in state.debounce_tasks:
@@ -569,7 +568,7 @@ async def debounce_flush(sid: str):
 
     buf = state.msg_buffers.get(sid) or {}
     is_open_group = bool(buf.get("is_open_group"))
-    identity_session = str(buf.get("identity_session") or sid)
+    identity_session = _identity_session_for_context(sid, str(buf.get("identity_session") or ""))
     if is_open_group:
         # Defensive guard: should not happen now that buffer_message routes
         # open-group traffic through the arbiter. Drop the buffer rather than
@@ -578,37 +577,6 @@ async def debounce_flush(sid: str):
         state.debounce_tasks.pop(sid, None)
         state.session_phase.pop(sid, None)
         return
-
-    score = get_familiarity(identity_session)
-    delay, replacement = compute_reply_delay(score)
-
-    if replacement is not None:
-        print(f"[pupu] 敷衍回复: {replacement}")
-        buf = state.msg_buffers.pop(sid, None)
-        state.debounce_tasks.pop(sid, None)
-        state.session_phase.pop(sid, None)
-        if buf:
-            combined = "\n".join(text for text in buf["texts"] if text)
-            if combined:
-                save_message("user", combined, sid)
-            save_message("assistant", replacement, sid)
-            log("recv", buf["session_label"], buf["nickname"], combined or "[图片]")
-            log("send", buf["session_label"], buf["nickname"], replacement)
-            segments = split_message(replacement)
-            await send_segments(
-                buf["bot"],
-                buf["event"],
-                segments,
-                prefix=buf.get("reply_prefix"),
-            )
-        return
-
-    if delay > 0:
-        state.session_phase[sid] = "delaying"
-        print(f"[pupu] 延迟回复: {delay:.1f}秒 (好感度{score})")
-        await asyncio.sleep(delay)
-        state.session_phase[sid] = "buffering"
-        await asyncio.sleep(state.DEBOUNCE_SECONDS)
 
     state.session_phase[sid] = "processing"
     buf = state.msg_buffers.pop(sid, None)

@@ -70,7 +70,7 @@ def _parse_tidy_mode(command_arg: str) -> tuple[str | None, str | None]:
     mode = command_arg.strip().lower()
     if not mode:
         return "apply", None
-    if mode in {"check", "apply"}:
+    if mode in {"check", "apply", "rebuild"}:
         return mode, None
     return None, TIDY_USAGE
 
@@ -225,7 +225,7 @@ def handle_command(cmd: str) -> bool:
         console.print(format_event_threads_report(OWNER_SESSION, query=command_arg))
         return False
     elif spec.command_id == "facts":
-        console.print(format_facts_report(OWNER_SESSION))
+        console.print(format_facts_report(OWNER_SESSION, query=command_arg))
         return False
     elif spec.command_id == "tidy":
         tidy_mode, tidy_usage = _parse_tidy_mode(command_arg)

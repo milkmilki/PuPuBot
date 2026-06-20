@@ -27,23 +27,13 @@ def _format_person_facts(facts: list[dict], character_name: str) -> str:
     return "\n".join(lines)
 
 
-def _memory_subject(kind: str, character_name: str) -> str:
-    if kind in {"summary", "event_thread"}:
-        return f"用户 / {character_name}"
-    if kind == "person_fact":
-        return "相关人物"
-    return "相关记忆"
-
-
 def _format_recalled_memories(memories: list[dict], character_name: str) -> str:
     lines = []
     for item in memories:
         text = str(item.get("text") or "").strip()
         if not text:
             continue
-        kind = str(item.get("kind") or "memory").strip()
-        subject = _memory_subject(kind, character_name)
-        lines.append(f"- [{kind} | {subject}] {text}")
+        lines.append(f"- {text}")
     return "\n".join(lines)
 
 
@@ -54,6 +44,8 @@ def build_system_prompt(
     event_threads: list[dict] = None,
     reply_speed_hint: str = None,
     recalled_memories: list[dict] = None,
+    include_familiarity_prompt: bool = True,
+    group_people_context: str = "",
 ) -> str:
     level = score_to_level(familiarity_score)
     character_name = get_pupu_name()
@@ -63,9 +55,13 @@ def build_system_prompt(
         f"你就是{character_name}。用户现在是在和{character_name}说话，"
         f"不要把自己说成其他名字或其他角色。\n\n"
         + core_persona
-        + "\n"
-        + FAMILIARITY_PROMPTS[level]
     )
+    if include_familiarity_prompt:
+        prompt += "\n" + FAMILIARITY_PROMPTS[level]
+
+    group_people_context = str(group_people_context or "").strip()
+    if group_people_context:
+        prompt += "\n\n## 当前群聊人物\n" + group_people_context
 
     person_facts_section = _format_person_facts(person_facts or [], character_name)
     if person_facts_section:
@@ -92,7 +88,7 @@ def build_system_prompt(
 
     recalled_section = _format_recalled_memories(recalled_memories or [], character_name)
     if recalled_section:
-        prompt += "\n\n## 本轮自然想起的记忆\n" + recalled_section
+        prompt += "\n\n## 本轮自然想起的事\n" + recalled_section
         prompt += "\n这些是当前对话相关的联想线索，可以自然使用，但不要生硬复述。"
 
     if reply_speed_hint:

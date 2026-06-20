@@ -140,6 +140,32 @@ class FactsReportTests(unittest.TestCase):
         self.assertEqual(scopes[("owner", "", "称呼")], "person")
         self.assertEqual(scopes[("owner", "instance", "互动习惯")], "relationship")
 
+    def test_facts_search_finds_related_person_fact(self):
+        subject_key = person_from_session(self.session_id)
+        upsert_person_facts(
+            {"外貌": "小夫是光头，没有刘海"},
+            default_subject_person_key=subject_key,
+            legacy_session_id=self.session_id,
+        )
+
+        report = format_facts_report(self.session_id, query="search 刘海")
+
+        self.assertIn("相关 facts", report)
+        self.assertIn("外貌: 小夫是光头，没有刘海", report)
+
+    def test_facts_search_debug_includes_score_details(self):
+        subject_key = person_from_session(self.session_id)
+        upsert_person_facts(
+            {"外貌": "小夫是光头，没有刘海"},
+            default_subject_person_key=subject_key,
+            legacy_session_id=self.session_id,
+        )
+
+        report = format_facts_report(self.session_id, query="search --debug 刘海")
+
+        self.assertIn("debug:", report)
+        self.assertIn("used_memu=", report)
+
 
 if __name__ == "__main__":
     unittest.main()
