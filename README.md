@@ -2,73 +2,106 @@
 
 PuPuBot 是一个面向长期陪伴聊天的 AI bot 实验项目。它可以运行在命令行、QQ 私聊/群聊和本地 Web 控制台里，核心目标不是只回答当下这一句话，而是维护一段持续关系里的记忆、事件、约定和后续进展。
 
-![PuPuBot 记忆系统设计图](docs/assets/event-chain-design.svg)
+![PuPuBot 记忆系统架构图](docs/assets/event-chain-design.svg)
 
 ## 项目亮点
 
 - **长期角色陪伴**：支持角色人设、好感度、按人物归属的长期事实、对话摘要、主动消息和定时跟进。
 - **事件链记忆**：用 `event_threads` + `event_steps` 记录持续事件的状态演进。
-- **增强召回归并**：用 SQLite FTS5 倒排召回 + 关键词 overlap + 近期/状态/置信度重排，减少重复事件线。
+- **写入前候选召回**：batch review 在写 facts 和 events 前会先看到相关候选，优先更新已有事实或追加已有事件线，减少重复记忆。
 - **人物索引**：用 `people` + `event_people` 把事件线和参与人物绑定，私聊、群聊和多实例场景能更稳地区分“谁做了什么”。
 - **实例化运行**：每个 bot 都运行在 `instances/<id>` 下，CLI、NapCat、QQ 官方和 Console 共用同一套实例模型。
 - **可视化记忆图谱**：`/events url` 可导出自包含 HTML，内置 `events` / `facts` 两种视图，分别查看事件链进展和人物事实关系。
-- **可选 memU 长期记忆缓存**：SQLite 是主记忆库；memU 只作为可删除、可重建的 RAG 缓存，用来按需召回相关摘要、事实和事件线快照。
+- **SQLite 主库 + memU 语义缓存**：SQLite 保存结构化事实源；memU 只保存由 SQLite 投影出的可删除、可重建 embedding 召回 card。
 - **任务与提醒**：支持 scheduled tasks，并把任务取消、错过、重排等变化写回事件线。
 
 ## 记忆系统设计
 
-PuPuBot 的记忆系统分成两层：本地 SQLite 主记忆库，以及可选的 memU 召回缓存。SQLite 始终是唯一事实源；memU 不负责决定事件或 facts 是否存在，只保存可检索、可删除、可重建的长期记忆副本。你可以把它理解成“主库 + 召回缓存”的组合：主库负责真实，缓存负责更容易想起来。
+PuPuBot 的记忆系统分成两层：**SQLite 主记忆库**和可选的 **memU 语义召回缓存**。SQLite 始终是唯一事实源；memU 不决定 facts 或 events 是否存在，只保存从 SQLite 投影出来的自然语言 card，用 embedding 做 RAG 召回。你可以把它理解成“结构化主库 + 语义索引缓存”：主库负责真实、可审计、可迁移，缓存负责让模型更容易想起相关内容。
 
 ### 主记忆库
 
-很多长期陪伴对话里的事情不会停在单次记录上：一个约定会被推迟，一个计划会完成，一次互动会变成后续话题。如果每次都创建新的扁平事件，记忆很快会变得重复、碎片化，也更难被模型稳定召回。
+长期陪伴对话里的记忆通常不是一次性的：一个约定会被推迟，一个计划会完成，一次互动会变成后续话题。如果每次都创建新的扁平事件，记忆会快速重复、碎片化，也更难稳定召回。因此 PuPuBot 把长期记忆拆成结构化表：
 
-核心表大致分为几类：
-
-- `messages`：原始聊天记录，带 `source`、说话人 key、昵称和 QQ 号等上下文。
+- `people`：固定人物身份，QQ 号会映射到稳定 `person_key` 和显示名。
+- `messages`：原始聊天记录，带 `source`、说话人 key、昵称、QQ 号和时间上下文。
 - `summaries`：batch review 后写入的批次摘要。
-- `person_facts`：稳定长期事实的主表，按 `subject_person_key` / `object_person_key` 区分“某个人的事实”和“两个人之间的关系事实”。
+- `person_facts`：稳定长期事实。`subject_person_key` 表示某个人；`object_person_key` 为空时是个人事实，不为空时是两个人之间的关系事实。
 - `event_threads`：持续事件线，保存标题、当前状态、生命周期状态、置信度、跟进提示、合并提示、关联任务等。
 - `event_steps`：事件线里的进展节点，保存状态变化摘要、触发原因、发生时间和可选反思。
-- `people` / `event_people`：人物索引，把事件线、事件节点和固定人物身份关联起来。
+- `event_people`：事件参与人物索引，用于区分群聊、多实例和不同人的事件归属。
 - `scheduled_tasks`：提醒和定时任务；任务完成、取消、错过、重排会追加 `system` 类型事件节点。
 
-step 类型有四种：
+事件节点有四种类型：
 
 | step_type | 含义 |
 | --- | --- |
 | `user` | 用户的话或行为推动了事件变化 |
 | `instance` | bot 的话或行为推动了事件变化 |
 | `time` | 时间自然流逝带来的推测状态，必须保留“可能/推测”语气 |
-| `system` | 系统维护、任务取消/错过/重排等导致的状态变化 |
+| `system` | 系统维护、任务取消、错过、重排等导致的状态变化 |
 
 ### 写入流程
 
 正常聊天不会每句话都立刻写长期记忆，而是由 batch review 在累计到一定数量的 `chat` 消息后统一整理：
 
-1. 程序把消息预处理成“人物名：发言 `<end>`”格式，避免模型把 QQ 号、昵称和实例名混在一起。
-2. 先用 `find_related_event_threads()` 检索候选事件线，并把候选标题、当前状态和最近节点放进 review prompt。
-3. review 模型输出 `summary`、`person_facts`、`event_updates` 和 `task_updates`；长期 facts 只写入 `person_facts`。
-4. `event_updates` 优先 `append_step` 到已有事件线；只有明显无关才 `create_thread`。
-5. 写入本地 SQLite 后，如果启用了 memU，再把本轮 `summary` / `person_fact` / `event_thread` 快照写成可召回缓存。memU 写入失败只影响召回，不会阻断主库写入。
+1. 程序先把消息预处理成“人物名：发言 `<end>`”格式，避免模型把 QQ 号、临时昵称和实例名混在一起。
+2. 写入 facts 前，`find_related_person_facts()` 会召回本轮相关人物的候选 facts。memU 可用时优先用语义召回；不可用时退回 SQLite/关键词 overlap。
+3. 写入 events 前，`find_related_event_threads()` 会从 SQLite FTS5 召回候选事件线，并提供标题、当前状态和最近 steps。
+4. review 模型输出 `summary`、`fact_updates`、`event_updates` 和 `task_updates`。`fact_updates` 只允许 `create` 或 `update_existing`；`update_existing` 必须引用本轮候选里的 `fact_id`，不能任意改库。
+5. `event_updates` 优先 `append_step` 到已有事件线；只有明显不相关才 `create_thread`。
+6. 写入 SQLite 后，如果启用了 memU，再把本轮 `summary` / `person_fact` / `event_thread` 快照写成可召回缓存。memU 写入失败只影响召回，不阻断主库写入。
+
+### memU 语义缓存
+
+SQLite 本体不存 embedding。它保存结构化事实源，并用 SQL、FTS5、唯一索引和手写打分保证可控性。memU 才是 embedding 召回层。
+
+同步到 memU 时，PuPuBot 会把 SQLite 行投影成模型易读的自然语言 card，例如：
+
+```text
+小夫 | 外貌: 小夫是光头，没有刘海
+```
+
+或：
+
+```text
+相关人物: 小夫 / 璐璐; 2026年6月18日晚上亲密约定; 当前状态摘要...; 后续可自然询问...
+```
+
+每张 card 还会带源数据指针和版本：
+
+```json
+{
+  "source_type": "person_fact",
+  "source_id": 465,
+  "source_key": "person_fact:qq%3A424225912::person:%E5%A4%96%E8%B2%8C",
+  "source_version": "hash",
+  "projection_kind": "sqlite_source_card"
+}
+```
+
+`source_key` 用来定位 SQLite 源行；`source_version` 用来判断缓存是否过期。因此 memU 里的 card 可以随时删除并从 SQLite 重建。
 
 ### 召回流程
 
 聊天时有两种召回路径：
 
-- 未启用 memU：直接从 SQLite 读取近期 summaries、当前对话人物相关的 `person_facts` 和当前事件线，注入 system prompt。个人事实按当前用户/实例读取；关系事实只在参与双方都匹配时注入，避免把 A 和实例的关系带给 B。
-- 启用 memU：用当前消息和最近聊天作为 query，从 memU 召回相关 `summary` / `person_fact` / `event_thread` 缓存条目，再注入“本轮自然想起的记忆”。
+- 未启用 memU：直接从 SQLite 读取近期 summaries、当前对话人物相关的 `person_facts` 和当前事件线，注入 prompt。
+- 启用 memU：用当前消息和最近聊天作为 query，从 memU 召回相关 `summary` / `person_fact` / `event_thread` card，再把它们作为“本轮自然想起的事”注入 prompt。
 
-事件线自己的归并检索不依赖 memU。`find_related_event_threads()` 先用 SQLite FTS5 召回候选，再按关键词 overlap、事件状态、近期活跃度、置信度和人物匹配进行重排。`/events search --debug <query>` 可以看到每条候选的分数组成。
+事件线归并本身不依赖 memU。`find_related_event_threads()` 先用 SQLite FTS5 召回候选，再按关键词 overlap、事件状态、近期活跃度、置信度和人物匹配进行重排。`/events search --debug <query>` 可以看到每条候选的分数组成。
+
+Facts 的写入前候选召回会优先用 memU 的 `person_fact` card 做语义检索，并回 SQLite 读取最新值；memU 不可用时退回本地 overlap 搜索。`/facts search --debug <query>` 可以查看候选 fact 的分数、命中词和是否使用 memU。
 
 ### 整理与同步
 
-`/tidy` 和每日维护走两条不同职责：
+`/tidy` 现在只负责 memU 缓存一致性，不负责让模型语义归并或删除 SQLite 记忆：
 
-- 本地维护会合并摘要、轻量更新事件线标题/当前状态/置信度、整理 facts；它不会删除或 drop 本地事件线。
-- memU tidy 只整理 memU 缓存副本，删除明显重复或低价值的 memU 条目，不删除本地 facts、事件线或聊天记录；整理后会检查 active/scheduled 等事件线缓存是否缺失，缺了就从 SQLite 主库补齐。
+- `/tidy check`：只检查 SQLite 源数据和 memU source cards 是否一致。
+- `/tidy` 或 `/tidy apply`：补齐 memU 缺失 card，删除 memU 里的孤儿 card、重复 card，刷新版本过期 card。
+- `/tidy rebuild`：清理旧 memU source cache，再按 SQLite 全量重建。
 
-这样做的原则是：本地库负责“真实记忆”，memU 负责“更容易想起来”。
+本地维护仍会处理 SQLite 内部的摘要、facts 和事件线轻量更新，但不会 drop 本地事件线。整体原则是：**SQLite 负责真实记忆，memU 负责更容易想起来。**
 
 ### 可视化
 
@@ -127,7 +160,10 @@ python -m pupu.cli
 | `/events search <query>` | 搜索相关事件线 |
 | `/events search --debug <query>` | 查看召回评分细节 |
 | `/events url` | 导出独立记忆图谱 HTML，包含 events / facts 两种视图 |
-| `/tidy` | 整理长期记忆；启用 memU 时清理 memU 缓存并从主库补齐事件线缓存 |
+| `/facts` | 查看长期 facts |
+| `/facts search <query>` | 搜索相关 facts |
+| `/facts search --debug <query>` | 查看 facts 召回评分细节 |
+| `/tidy [check|apply|rebuild]` | 检查、同步或重建 memU 语义缓存 |
 | `/score` | 查看好感度 |
 | `/history` | 查看最近聊天 |
 | `/quit` | 退出 CLI |
