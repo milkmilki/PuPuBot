@@ -14,6 +14,7 @@ from pupu.memory import (
     save_message,
     upsert_person_facts,
 )
+from pupu.message_sources import SCHEDULED
 from pupu.storage.people import person_from_session
 
 
@@ -178,6 +179,15 @@ class StorageSplitTests(unittest.TestCase):
             [row["content"] for row in get_recent_messages(10, context_session=self.context_two)],
             ["from two"],
         )
+
+    def test_recent_messages_include_source_and_timestamp(self):
+        save_message("user", "scheduled input", self.context_one, source=SCHEDULED)
+
+        rows = get_recent_messages(10, session_id=self.context_one)
+
+        self.assertEqual(rows[0]["content"], "scheduled input")
+        self.assertEqual(rows[0]["source"], SCHEDULED)
+        self.assertTrue(rows[0]["timestamp"])
 
 
 if __name__ == "__main__":

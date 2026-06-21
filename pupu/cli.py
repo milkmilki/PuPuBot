@@ -307,7 +307,7 @@ def main():
         await actor.start()
 
         def _send(text: str) -> None:
-            console.print(f"[bold cyan]浠嗕粏:[/bold cyan] ", end="")
+            console.print(f"[bold cyan]{ctx.display_name}:[/bold cyan] ", end="")
             console.print(Markdown(str(text)))
             console.print()
 
@@ -315,20 +315,20 @@ def main():
             while True:
                 try:
                     user_input = await asyncio.to_thread(
-                        lambda: console.input("[bold green]浣? [/bold green]").strip()
+                        lambda: console.input("[bold green]你: [/bold green]").strip()
                     )
                 except (KeyboardInterrupt, EOFError):
-                    console.print("\n[dim]鍐嶈銆俒/dim]")
+                    console.print("\n[dim]再见。[/dim]")
                     break
 
                 if not user_input:
                     continue
 
-                with console.status("[cyan]浠嗕粏姝ｅ湪鎯?..[/cyan]"):
+                with console.status(f"[cyan]{ctx.display_name}正在想...[/cyan]"):
                     try:
                         should_exit = await actor.handle_cli_text(user_input, _send)
                     except Exception as e:
-                        console.print(f"[red]鍑洪敊浜? {e}[/red]")
+                        console.print(f"[red]出错了: {e}[/red]")
                         continue
                 if should_exit:
                     break

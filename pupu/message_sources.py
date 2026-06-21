@@ -3,7 +3,7 @@
 # Normal user-driven turn (batch review runs on this source only in agent.chat).
 CHAT = "chat"
 
-# Due DB scheduled_tasks tick → synthetic user message to chat().
+# Due DB scheduled_tasks tick -> synthetic user message to chat().
 SCHEDULED = "scheduled"
 
 # Idle proactive assistant line (persisted on assistant message).

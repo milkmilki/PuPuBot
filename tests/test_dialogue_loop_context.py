@@ -23,9 +23,11 @@ class DialogueLoopContextTests(unittest.TestCase):
             )
             ctx = InstanceContext.from_instance_dir(inst)
             seen = []
+            calls = []
 
-            def fake_chat(*_args, **_kwargs):
+            def fake_chat(*args, **kwargs):
                 seen.append(get_current_instance_context())
+                calls.append((args, kwargs))
                 return "followup"
 
             delivered = []
@@ -36,9 +38,12 @@ class DialogueLoopContextTests(unittest.TestCase):
 
             self.assertEqual(seen, [ctx])
             self.assertEqual(delivered, ["followup"])
+            self.assertIn("[系统触发的追问]", calls[0][0][0])
+            self.assertNotIn("????", calls[0][0][0])
+            self.assertNotIn("????", calls[0][1]["reply_speed_hint"])
+            self.assertEqual(calls[0][1]["message_source"], "wait_followup")
             dialogue_loop.unregister_sender("owner")
 
 
 if __name__ == "__main__":
     unittest.main()
-

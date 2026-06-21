@@ -43,7 +43,7 @@ from pupu.memory_index.memu_adapter import (
     sync_missing_memu_event_threads,
 )
 from pupu.memory_index import run_memu_maintenance, run_memu_tidy
-from pupu.message_sources import CHAT
+from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED, WAIT_FOLLOWUP
 from pupu.persona import build_system_prompt
 
 
@@ -510,10 +510,27 @@ class MemuMemoryTests(unittest.TestCase):
                             prompt = proactive._build_proactive_prompt(80, period)
 
         self.assertIn("## 之前聊过的摘要", prompt)
+        self.assertIn("## 最近上下文记录", prompt)
         self.assertIn("summary-two-recent", prompt)
         self.assertIn("summary-three-latest", prompt)
         self.assertIn("用户: 第一条最近消息", prompt)
         self.assertIn("璐璐: 第二条最近回复", prompt)
+
+    def test_proactive_context_labels_system_triggered_messages(self):
+        recent = [
+            {"role": "user", "content": "[定时任务「喝水」]\n提醒一下", "source": SCHEDULED},
+            {"role": "user", "content": "你刚才要不要继续问一句", "source": WAIT_FOLLOWUP},
+            {"role": "assistant", "content": "我主动问一句", "source": PROACTIVE},
+            {"role": "user", "content": "我本人说的话", "source": CHAT},
+        ]
+        with patch("pupu.proactive.get_pupu_name", return_value="璐璐"):
+            text = proactive._format_recent_context(recent)
+
+        self.assertIn("系统触发的定时任务: [定时任务「喝水」]", text)
+        self.assertIn("系统触发的追问（璐璐）: 你刚才要不要继续问一句", text)
+        self.assertIn("璐璐主动发出: 我主动问一句", text)
+        self.assertIn("用户: 我本人说的话", text)
+        self.assertNotIn("用户: [定时任务", text)
 
     def test_batch_review_syncs_long_term_memory_to_memu(self):
         for i in range(REVIEW_INTERVAL):

@@ -20,7 +20,7 @@ from .memory import (
     save_message,
 )
 from .memory_index import is_memu_long_term_enabled, recall_memories
-from .message_sources import PROACTIVE
+from .message_sources import CHAT, PROACTIVE, SCHEDULED, WAIT_FOLLOWUP
 from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT, get_pupu_name
 from .proactive_control import is_proactive_enabled
 from .sessions import OWNER_SESSION
@@ -143,11 +143,25 @@ def _format_recent_context(recent: list[dict]) -> str:
     character_name = get_pupu_name()
     lines = []
     for message in recent:
-        who = "用户" if message.get("role") == "user" else character_name
+        who = _recent_message_label(message, character_name)
         content = str(message.get("content") or "").strip()
         if content:
             lines.append(f"{who}: {content}")
     return "\n".join(lines) if lines else "（暂无历史对话）"
+
+
+def _recent_message_label(message: dict, character_name: str) -> str:
+    source = str(message.get("source") or CHAT).strip().lower()
+    role = str(message.get("role") or "").strip().lower()
+    if source == SCHEDULED:
+        return "系统触发的定时任务"
+    if source == WAIT_FOLLOWUP:
+        return f"系统触发的追问（{character_name}）"
+    if source == PROACTIVE:
+        return f"{character_name}主动发出"
+    if role == "user":
+        return "用户"
+    return character_name
 
 
 def _format_summary_context(summaries: list[dict]) -> str:
@@ -179,7 +193,7 @@ def _build_proactive_memu_query(score: int, period: dict, recent: list[dict]) ->
     character_name = get_pupu_name()
     recent_lines = []
     for item in recent[-4:]:
-        role = "用户" if item.get("role") == "user" else character_name
+        role = _recent_message_label(item, character_name)
         content = str(item.get("content") or "").replace("\n", " ").strip()
         if content:
             recent_lines.append(f"{role}: {content[:120]}")

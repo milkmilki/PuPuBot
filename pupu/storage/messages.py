@@ -74,7 +74,7 @@ def get_recent_messages(
     session_id = _resolve_context_session(session_id, context_session)
     conn = get_conn()
     rows = conn.execute(
-        """SELECT id, role, content, speaker_key, speaker_name, speaker_qq
+        """SELECT id, role, content, timestamp, source, speaker_key, speaker_name, speaker_qq
            FROM messages
            WHERE session_id = ?
            ORDER BY id DESC
