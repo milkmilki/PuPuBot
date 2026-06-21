@@ -47,6 +47,13 @@ from .memory import (
 )
 from .memory_index import is_memu_long_term_enabled, recall_memories, sync_review_memory
 from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
+from .hooks import (
+    emit_chat_error,
+    emit_chat_reply_created,
+    emit_chat_started,
+    emit_memory_review_finished,
+    emit_memory_review_started,
+)
 from .message_sources import CHAT, is_internal_message_source, message_source_label
 from .persona import build_batch_review_prompt, build_system_prompt, get_pupu_name
 from .review_followups import (
@@ -944,6 +951,59 @@ def chat(
     speaker_qq: str = "",
 ) -> str:
     """Process one turn of conversation. Returns the assistant's text reply."""
+    context_session = str(context_session or session_id or "default")
+    identity_session = str(identity_session or session_id or "default")
+    emit_chat_started(
+        context_session=context_session,
+        identity_session=identity_session,
+        source=message_source,
+        user_input=user_input,
+        image_count=len(image_urls or []),
+        persist_user=persist_user,
+        speaker_key=speaker_key,
+        speaker_name=speaker_name,
+        speaker_qq=speaker_qq,
+    )
+    try:
+        return _chat_impl(
+            user_input,
+            session_id=session_id,
+            is_admin=is_admin,
+            image_urls=image_urls,
+            reply_speed_hint=reply_speed_hint,
+            message_source=message_source,
+            context_session=context_session,
+            identity_session=identity_session,
+            persist_user=persist_user,
+            speaker_key=speaker_key,
+            speaker_name=speaker_name,
+            speaker_qq=speaker_qq,
+        )
+    except Exception as exc:
+        emit_chat_error(
+            context_session=context_session,
+            identity_session=identity_session,
+            source=message_source,
+            error=exc,
+        )
+        raise
+
+
+def _chat_impl(
+    user_input: str,
+    session_id: str = "default",
+    is_admin: bool = False,
+    image_urls: list[str] = None,
+    reply_speed_hint: str = None,
+    message_source: str = REVIEW_SOURCE,
+    *,
+    context_session: str | None = None,
+    identity_session: str | None = None,
+    persist_user: bool = True,
+    speaker_key: str = "",
+    speaker_name: str = "",
+    speaker_qq: str = "",
+) -> str:
     from .dialogue_loop import cancel_wait_timer, schedule_wait_timer
 
     context_session = str(context_session or session_id or "default")
@@ -1103,6 +1163,13 @@ def chat(
         f"context={context_session} identity={identity_session} "
         f"source={message_source} should_wait={should_wait}"
     )
+    emit_chat_reply_created(
+        context_session=context_session,
+        identity_session=identity_session,
+        source=message_source,
+        reply_text=final_text,
+        should_wait=should_wait,
+    )
 
     save_message_with_speaker(
         "assistant",
@@ -1156,6 +1223,11 @@ def _maybe_batch_review_unlocked(
     """Every REVIEW_INTERVAL chat messages, summarize + judge familiarity + extract facts."""
     context_session = str(context_session or session_id or "default")
     identity_session = str(identity_session or session_id or "default")
+    review_started = False
+    review_trigger = ""
+    review_message_count = 0
+    review_start_msg_id = 0
+    review_end_msg_id = 0
     try:
         print(
             "[pupu] batch review check: "
@@ -1197,6 +1269,19 @@ def _maybe_batch_review_unlocked(
             return
 
         batch_turns = len(batch)
+        review_started = True
+        review_trigger = trigger
+        review_message_count = batch_turns
+        review_start_msg_id = int(batch[0]["id"])
+        review_end_msg_id = int(batch[-1]["id"])
+        emit_memory_review_started(
+            context_session=context_session,
+            identity_session=identity_session,
+            trigger=review_trigger,
+            message_count=review_message_count,
+            start_msg_id=review_start_msg_id,
+            end_msg_id=review_end_msg_id,
+        )
         print(
             "[pupu] batch review trigger: "
             f"trigger={trigger}, messages_count={batch_turns}, pending_messages={pending_messages}, "
@@ -1503,6 +1588,31 @@ def _maybe_batch_review_unlocked(
             f"event_updates={len(event_updates)}, "
             f"task_updates={len(task_updates)}"
         )
+        emit_memory_review_finished(
+            context_session=context_session,
+            identity_session=identity_session,
+            status="success",
+            trigger=trigger,
+            message_count=batch_turns,
+            start_msg_id=batch[0]["id"],
+            end_msg_id=batch[-1]["id"],
+            summary_chars=len(summary),
+            fact_updates=len(fact_updates),
+            person_facts=len(saved_person_facts),
+            event_updates=len(event_updates),
+            task_updates=len(task_updates),
+        )
     except Exception as exc:
         print(f"[pupu] batch review failed: {exc}")
         print(traceback.format_exc())
+        if review_started:
+            emit_memory_review_finished(
+                context_session=context_session,
+                identity_session=identity_session,
+                status="error",
+                trigger=review_trigger,
+                message_count=review_message_count,
+                start_msg_id=review_start_msg_id,
+                end_msg_id=review_end_msg_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )

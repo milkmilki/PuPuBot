@@ -211,7 +211,18 @@ def on_status(event):
 unregister = register_hook("instance.status", on_status)
 ```
 
-`instance.status` 会在实例 actor 生命周期变化时触发：
+第一版钩子事件：
+
+| 事件 | 触发时机 |
+| --- | --- |
+| `instance.status` | 实例 actor 生命周期变化 |
+| `chat.started` | 用户发起一轮聊天，输入已进入主链路 |
+| `chat.reply_created` | 模型已经生成回复，尚未保存前 |
+| `chat.error` | 本轮聊天失败 |
+| `memory.review_started` | batch review 确认触发并开始整理 |
+| `memory.review_finished` | batch review 成功或失败结束 |
+
+`instance.status` 的 `payload.status` 取值：
 
 | status | 含义 |
 | --- | --- |
@@ -221,7 +232,9 @@ unregister = register_hook("instance.status", on_status)
 | `stopped` | 实例已停止 |
 | `failed` | 实例启动失败，`payload.error` 会带错误摘要 |
 
-事件 payload 会包含 `instance_id`、`display_name`、`qq_mode`、`instance_dir`、`runtime` 和 `error` 等字段。钩子函数可以是同步函数，也可以是 async 函数；钩子异常只会写入日志，不会阻断实例启动、停止或回复。
+`chat.*` 事件会带 `context_session`、`identity_session`、`source`、输入或回复预览、图片数量、`should_wait` 和错误摘要等字段。`memory.review_*` 会带整理触发原因、消息范围、摘要长度以及 facts/events/tasks 更新数量。
+
+钩子函数可以是同步函数，也可以是 async 函数；钩子异常只会写入日志，不会阻断实例启动、停止或回复。当前 hook 是**进程内 hook**：如果桌宠 API 挂在 PuPu Console 同一个 Python 进程里，可以直接订阅；如果以后 Tauri 直接启动独立 Python 进程，或实例重新拆成子进程，需要再加 WebSocket/event bus 转发层。
 
 ## 快速开始
 

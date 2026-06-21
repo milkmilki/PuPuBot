@@ -3,11 +3,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pupu.actor import InstanceActor
 from pupu.hooks import clear_hooks, list_hooks, register_hook
 from pupu.instance_context import InstanceContext, activate_instance_context
-from pupu.memory import init_db
+from pupu.memory import init_db, reset_session, save_message
+from pupu.message_sources import CHAT
 
 
 class HookLayerTests(unittest.IsolatedAsyncioTestCase):
@@ -124,6 +126,88 @@ class HookLayerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([status for status, _error in seen], ["starting", "failed"])
         self.assertIn("RuntimeError", seen[-1][1])
+
+
+class ChatAndMemoryHookTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_hooks()
+        self.session_id = f"hook_chat_{self._testMethodName}"
+        reset_session(self.session_id)
+
+    def tearDown(self) -> None:
+        clear_hooks()
+        reset_session(self.session_id)
+
+    def test_chat_emits_started_and_reply_created(self) -> None:
+        from pupu.agent import chat
+
+        seen = []
+        register_hook(
+            "chat.started",
+            lambda event: seen.append((event.name, dict(event.payload))),
+        )
+        register_hook(
+            "chat.reply_created",
+            lambda event: seen.append((event.name, dict(event.payload))),
+        )
+
+        with patch("pupu.agent.chat_complete", return_value='{"content":"好呀","should_wait":false}'):
+            with patch("pupu.agent._maybe_batch_review", return_value=None):
+                reply = chat("hello", session_id=self.session_id, is_admin=True)
+
+        self.assertEqual(reply, "好呀")
+        self.assertEqual([name for name, _payload in seen], ["chat.started", "chat.reply_created"])
+        self.assertEqual(seen[0][1]["context_session"], self.session_id)
+        self.assertEqual(seen[0][1]["input_preview"], "hello")
+        self.assertEqual(seen[1][1]["reply_preview"], "好呀")
+        self.assertFalse(seen[1][1]["should_wait"])
+
+    def test_chat_error_hook_fires_when_model_fails(self) -> None:
+        from pupu.agent import chat
+
+        seen = []
+        register_hook("chat.error", lambda event: seen.append(dict(event.payload)))
+
+        with patch("pupu.agent.chat_complete", side_effect=RuntimeError("model down")):
+            with self.assertRaises(RuntimeError):
+                chat("hello", session_id=self.session_id, is_admin=True)
+
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["context_session"], self.session_id)
+        self.assertIn("RuntimeError", seen[0]["error"])
+
+    def test_memory_review_hooks_fire_when_batch_review_runs(self) -> None:
+        from pupu.agent import REVIEW_INTERVAL, _maybe_batch_review
+
+        seen = []
+        register_hook(
+            "memory.review_started",
+            lambda event: seen.append((event.name, dict(event.payload))),
+        )
+        register_hook(
+            "memory.review_finished",
+            lambda event: seen.append((event.name, dict(event.payload))),
+        )
+        for index in range(REVIEW_INTERVAL):
+            save_message("user", f"user-{index}", self.session_id, source=CHAT)
+            save_message("assistant", f"assistant-{index}", self.session_id, source=CHAT)
+
+        raw = """
+        {
+          "summary": "hook review summary",
+          "fact_updates": [],
+          "event_updates": [],
+          "task_updates": []
+        }
+        """
+        with patch("pupu.agent.json_task", return_value=raw):
+            _maybe_batch_review(self.session_id)
+
+        self.assertEqual([name for name, _payload in seen], ["memory.review_started", "memory.review_finished"])
+        self.assertEqual(seen[0][1]["context_session"], self.session_id)
+        self.assertEqual(seen[0][1]["trigger"], "messages")
+        self.assertEqual(seen[1][1]["status"], "success")
+        self.assertEqual(seen[1][1]["summary_chars"], len("hook review summary"))
 
 
 if __name__ == "__main__":

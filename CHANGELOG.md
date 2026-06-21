@@ -6,6 +6,8 @@
 
 - 新增 `pupu.hooks` 进程内钩子层，支持注册同步或 async hook，并隔离 hook 异常，避免观察逻辑影响 bot 主流程。
 - 新增 `instance.status` 状态钩子，覆盖 actor 的 `starting`、`running`、`stopping`、`stopped`、`failed` 生命周期事件。
+- 新增聊天生命周期钩子：`chat.started`、`chat.reply_created`、`chat.error`，供桌宠 UI 显示 thinking/speaking/error 状态。
+- 新增记忆整理钩子：`memory.review_started`、`memory.review_finished`，供 UI 展示 batch review 整理进度。
 - `InstanceActor` 启停和启动失败路径会发出状态事件，并在失败路径清理 transport、后台任务和日志 sink。
 
 ### 开放群仲裁内嵌化
