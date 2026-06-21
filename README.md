@@ -342,6 +342,8 @@ docs/                       Extra guides and architecture notes
 tests/                      Unit tests
 ```
 
+分支职责和后端/前端同步流程见 [`docs/branch-workflow.md`](docs/branch-workflow.md)。
+
 ## 测试
 
 在仓库根目录运行：

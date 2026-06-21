@@ -2,6 +2,11 @@
 
 ## 2026-06-21
 
+### 分支协作
+
+- 新增 `docs/branch-workflow.md`，明确 `main` 是后端事实来源、`siri` 是桌宠前端集成分支，后端改动应先落 `main` 再同步到 `siri`。
+- README 增加分支协作文档入口，方便后续 agent 接手时先确认分支职责和同步方式。
+
 ### Proactive 与 CLI
 
 - CLI 实例现在与 NapCat 实例一样会在 `proactive_enabled=true` 时启动 proactive loop，不再只在 QQ/NapCat 通道自动运行。
