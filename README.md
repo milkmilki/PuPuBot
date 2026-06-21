@@ -196,6 +196,33 @@ flowchart TD
 
 静默状态保存在 `instances/_shared/arbiter.db`，重启控制台后仍会继承。
 
+## 钩子层
+
+PuPuBot 提供一个很薄的进程内钩子层，用来观察运行时事件。第一版先开放实例状态钩子，方便后续接入状态面板、外部自动化、本地脚本或调试记录。
+
+```python
+from pupu.hooks import register_hook
+
+
+def on_status(event):
+    print(event.name, event.payload)
+
+
+unregister = register_hook("instance.status", on_status)
+```
+
+`instance.status` 会在实例 actor 生命周期变化时触发：
+
+| status | 含义 |
+| --- | --- |
+| `starting` | 实例开始启动 |
+| `running` | 实例已完成启动 |
+| `stopping` | 实例开始停止 |
+| `stopped` | 实例已停止 |
+| `failed` | 实例启动失败，`payload.error` 会带错误摘要 |
+
+事件 payload 会包含 `instance_id`、`display_name`、`qq_mode`、`instance_dir`、`runtime` 和 `error` 等字段。钩子函数可以是同步函数，也可以是 async 函数；钩子异常只会写入日志，不会阻断实例启动、停止或回复。
+
 ## 快速开始
 
 ### 1. 安装依赖

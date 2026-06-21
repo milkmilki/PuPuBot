@@ -18,6 +18,7 @@ from pupu.config import (
     load_owner_id_set,
     load_peer_config,
 )
+from pupu.hooks import emit_instance_status
 from pupu.instance_context import InstanceContext, activate_instance_context
 from pupu.llm import ProviderConfigError, preflight_model_providers
 from pupu.logging_utils import close_current_instance_log_sinks, setup_runtime_logging
@@ -120,57 +121,80 @@ class InstanceActor:
         if self._started:
             return
         with activate_instance_context(self.context):
-            apply_app_config_env()
-            self.context.data_dir.mkdir(parents=True, exist_ok=True)
-            self.context.logs_dir.mkdir(parents=True, exist_ok=True)
-            setup_runtime_logging()
-            init_db()
-            if self._preflight:
-                try:
-                    preflight_model_providers(require_chat=True)
-                except ProviderConfigError:
-                    raise
-            if self.context.qq_mode == "napcat":
-                settings = self._read_napcat_settings()
-                self._transport = OneBotTransport(
-                    host=str(settings["host"]),
-                    port=int(settings["port"]),
-                    access_token=str(settings.get("access_token") or ""),
-                    on_event=self._handle_onebot_event_with_context,
-                    log=self._log,
+            await emit_instance_status("starting")
+            try:
+                apply_app_config_env()
+                self.context.data_dir.mkdir(parents=True, exist_ok=True)
+                self.context.logs_dir.mkdir(parents=True, exist_ok=True)
+                setup_runtime_logging()
+                init_db()
+                if self._preflight:
+                    try:
+                        preflight_model_providers(require_chat=True)
+                    except ProviderConfigError:
+                        raise
+                if self.context.qq_mode == "napcat":
+                    settings = self._read_napcat_settings()
+                    self._transport = OneBotTransport(
+                        host=str(settings["host"]),
+                        port=int(settings["port"]),
+                        access_token=str(settings.get("access_token") or ""),
+                        on_event=self._handle_onebot_event_with_context,
+                        log=self._log,
+                    )
+                    await self._transport.start()
+                    self._log("[PuPu QQ] mode: NapCat actor (OneBot v11)")
+                elif self.context.qq_mode == "cli":
+                    self._log("[PuPu CLI] mode: actor")
+                else:
+                    raise RuntimeError(
+                        f"actor runtime only supports napcat/cli for now, got {self.context.qq_mode!r}"
+                    )
+                if self._start_background_tasks:
+                    self._create_task(self._run_callable_with_context(self._scheduler_loop))
+                    self._create_task(self._run_callable_with_context(self._maintenance_loop))
+                    if self.context.qq_mode == "napcat" and is_proactive_enabled():
+                        self._start_proactive_loop()
+                self._started = True
+                await emit_instance_status("running")
+            except Exception as exc:
+                await emit_instance_status(
+                    "failed",
+                    error=f"{type(exc).__name__}: {exc}",
                 )
-                await self._transport.start()
-                self._log("[PuPu QQ] mode: NapCat actor (OneBot v11)")
-            elif self.context.qq_mode == "cli":
-                self._log("[PuPu CLI] mode: actor")
-            else:
-                raise RuntimeError(
-                    f"actor runtime only supports napcat/cli for now, got {self.context.qq_mode!r}"
-                )
-            if self._start_background_tasks:
-                self._create_task(self._run_callable_with_context(self._scheduler_loop))
-                self._create_task(self._run_callable_with_context(self._maintenance_loop))
-                if self.context.qq_mode == "napcat" and is_proactive_enabled():
-                    self._start_proactive_loop()
-            self._started = True
+                for task in list(self._tasks):
+                    task.cancel()
+                if self._tasks:
+                    await asyncio.gather(*self._tasks, return_exceptions=True)
+                self._tasks.clear()
+                if self._transport is not None:
+                    await self._transport.stop()
+                    self._transport = None
+                self._started = False
+                close_current_instance_log_sinks()
+                raise
 
     async def stop(self) -> None:
         if self._stopping:
             return
         self._stopping = True
         with activate_instance_context(self.context):
-            await self.buffer.stop()
-            for task in list(self._tasks):
-                task.cancel()
-            if self._tasks:
-                await asyncio.gather(*self._tasks, return_exceptions=True)
-            self._tasks.clear()
-            if self._transport is not None:
-                await self._transport.stop()
-                self._transport = None
-            close_current_instance_log_sinks()
-        self._started = False
-        self._stopping = False
+            await emit_instance_status("stopping")
+            try:
+                await self.buffer.stop()
+                for task in list(self._tasks):
+                    task.cancel()
+                if self._tasks:
+                    await asyncio.gather(*self._tasks, return_exceptions=True)
+                self._tasks.clear()
+                if self._transport is not None:
+                    await self._transport.stop()
+                    self._transport = None
+                self._started = False
+                await emit_instance_status("stopped")
+                close_current_instance_log_sinks()
+            finally:
+                self._stopping = False
 
     async def _run_with_context(self, coro) -> None:
         with activate_instance_context(self.context):

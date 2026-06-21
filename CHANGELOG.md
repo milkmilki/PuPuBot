@@ -2,6 +2,12 @@
 
 ## 2026-06-21
 
+### 钩子层
+
+- 新增 `pupu.hooks` 进程内钩子层，支持注册同步或 async hook，并隔离 hook 异常，避免观察逻辑影响 bot 主流程。
+- 新增 `instance.status` 状态钩子，覆盖 actor 的 `starting`、`running`、`stopping`、`stopped`、`failed` 生命周期事件。
+- `InstanceActor` 启停和启动失败路径会发出状态事件，并在失败路径清理 transport、后台任务和日志 sink。
+
 ### 开放群仲裁内嵌化
 
 - 移除独立的 `pupu_console.arbiter_server` HTTP 服务，开放群仲裁现在内嵌在控制台 actor runtime 中运行。
