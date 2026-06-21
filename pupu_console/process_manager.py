@@ -12,6 +12,8 @@ from pupu.app_config import apply_app_config_env, ensure_app_config_file
 
 from . import instance_store
 
+DESKTOP_SESSION_ID = "desktop_owner"
+
 
 class ProcessManager:
     def __init__(self) -> None:
@@ -119,6 +121,35 @@ class ProcessManager:
                 self._actors.pop(instance_id, None)
                 self._actor_tasks.pop(instance_id, None)
         return {"running": False, "pid": None, "runtime": "actor"}
+
+    def get_actor(self, instance_id: str) -> InstanceActor | None:
+        with self._lock:
+            actor = self._actors.get(instance_id)
+        if actor is not None and actor.running:
+            return actor
+        return None
+
+    async def desktop_chat(self, instance_id: str, text: str) -> str:
+        actor = self.get_actor(instance_id)
+        if actor is None:
+            raise RuntimeError("instance is not running")
+
+        from pupu.agent import chat
+        from pupu.instance_context import activate_instance_context
+
+        cleaned = str(text or "").strip()
+        with activate_instance_context(actor.context):
+            reply = await asyncio.to_thread(
+                chat,
+                cleaned,
+                DESKTOP_SESSION_ID,
+                True,
+                context_session=DESKTOP_SESSION_ID,
+                identity_session=DESKTOP_SESSION_ID,
+                speaker_key="owner",
+                speaker_name="Desktop User",
+            )
+        return str(reply or "")
 
     def tail_console_log(self, instance_id: str, n: int = 200) -> str:
         path = instance_store.console_log_path(instance_id)

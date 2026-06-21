@@ -11,6 +11,13 @@
 - `InstanceActor` 启停和启动失败路径会发出状态事件，并在失败路径清理 transport、后台任务和日志 sink。
 - 补充 hook 生命周期测试的实例上下文与 memU 隔离，单独运行 `tests.test_hooks` 不再误触真实长记忆索引。
 
+### 本地桌面客户端接入层
+
+- 新增桌宠 API：`GET /api/desktop/status`、`POST /api/desktop/chat` 和 `WS /ws/desktop/events`，供本地桌宠读取实例状态、发送桌面聊天并订阅 hook 事件。
+- `ProcessManager` 新增 `desktop_chat()`，在运行中的 actor 实例上下文内复用现有 `pupu.agent.chat()`，桌宠会话固定为 `desktop_owner`。
+- hook 转发保持只读，注册在 Console lifespan 内，异常不会影响 agent 主流程。
+- 增加桌宠 API 单测，覆盖 status、停止实例拒绝聊天、运行实例返回回复、WebSocket hook 转发和 actor 上下文复用。
+
 ### 开放群仲裁内嵌化
 
 - 移除独立的 `pupu_console.arbiter_server` HTTP 服务，开放群仲裁现在内嵌在控制台 actor runtime 中运行。

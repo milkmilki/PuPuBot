@@ -304,7 +304,27 @@ python -m pupu_console
 
 Windows 下也可以双击 `启动仆仆控制台.bat`。
 
-### 6. 启动 QQ Bot
+### 6. 本地桌面客户端接入 API
+
+PuPu Console 提供一组很薄的本地客户端接口，供桌宠、状态面板、语音入口或其它本机 UI 复用现有 agent runtime。客户端只通过 HTTP/WebSocket 和 Console 通信，不需要 import Python 代码，也不直接访问 actor 内部对象。
+
+接口：
+
+| Endpoint | 用途 |
+| --- | --- |
+| `GET /api/desktop/status` | 读取实例列表、当前可用实例和运行状态 |
+| `POST /api/desktop/chat` | 向运行中的实例发送桌面聊天，桌宠会话固定为 `desktop_owner` |
+| `WS /ws/desktop/events` | 订阅 `instance.status`、`chat.*` 和 `memory.review_*` hook 事件 |
+
+先启动 Console：
+
+```powershell
+python -m pupu_console
+```
+
+打开 [http://127.0.0.1:8770](http://127.0.0.1:8770)，创建或启动一个实例后，本地客户端即可调用这些接口。当前接口按本机 Console 使用场景设计，不应直接暴露到公网；如果后续要给非本机客户端使用，需要先补 token、origin 或其它访问控制。
+
+### 7. 启动 QQ Bot
 
 创建或编辑一个 `qq_mode=napcat` 的实例，然后运行 `python start.py` 并选择它。多实例运行推荐使用 PuPu Console 启停。
 

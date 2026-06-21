@@ -14,23 +14,78 @@ from fastapi.staticfiles import StaticFiles
 
 from pupu.arbiter_runtime import get_shared_arbiter_runtime
 from pupu.app_config import apply_app_config_env, default_instance_settings
+from pupu.hooks import HookEvent, register_hook
 from pupu.shared_runtime import async_shutdown_shared_runtime
 
 from . import instance_store, souls_store
 from .paths import instances_dir
-from .process_manager import ProcessManager
+from .process_manager import DESKTOP_SESSION_ID, ProcessManager
 
 pm = ProcessManager()
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+_DESKTOP_HOOK_NAMES = (
+    "instance.status",
+    "chat.started",
+    "chat.reply_created",
+    "chat.error",
+    "memory.review_started",
+    "memory.review_finished",
+)
+_desktop_event_queues: list[asyncio.Queue[dict[str, Any]]] = []
+_desktop_event_loop: asyncio.AbstractEventLoop | None = None
+_desktop_hook_unsubscribers: list[Any] = []
+
+
+def _desktop_event_from_hook(event: HookEvent) -> dict[str, Any]:
+    return {
+        "name": event.name,
+        "created_at": event.created_at,
+        "instance_id": event.instance_id,
+        "payload": dict(event.payload),
+    }
+
+
+def _publish_desktop_event(event: HookEvent) -> None:
+    loop = _desktop_event_loop
+    if loop is None:
+        return
+    message = _desktop_event_from_hook(event)
+    for queue in list(_desktop_event_queues):
+        loop.call_soon_threadsafe(queue.put_nowait, message)
+
+
+def _register_desktop_hooks(loop: asyncio.AbstractEventLoop) -> None:
+    global _desktop_event_loop
+    _desktop_event_loop = loop
+    if _desktop_hook_unsubscribers:
+        return
+    for name in _DESKTOP_HOOK_NAMES:
+        _desktop_hook_unsubscribers.append(register_hook(name, _publish_desktop_event))
+
+
+def _unregister_desktop_hooks() -> None:
+    global _desktop_event_loop
+    while _desktop_hook_unsubscribers:
+        unregister = _desktop_hook_unsubscribers.pop()
+        try:
+            unregister()
+        except Exception:
+            pass
+    _desktop_event_loop = None
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    pm.set_event_loop(asyncio.get_running_loop())
-    yield
-    pm.stop_all()
-    await async_shutdown_shared_runtime()
-    pm.set_event_loop(None)
+    loop = asyncio.get_running_loop()
+    pm.set_event_loop(loop)
+    _register_desktop_hooks(loop)
+    try:
+        yield
+    finally:
+        _unregister_desktop_hooks()
+        pm.stop_all()
+        await async_shutdown_shared_runtime()
+        pm.set_event_loop(None)
 
 
 app = FastAPI(title="PuPu Console", lifespan=_lifespan)
@@ -93,6 +148,46 @@ def api_list_instances() -> list[dict[str, Any]]:
         except Exception:
             continue
     return out
+
+
+@app.get("/api/desktop/status")
+def api_desktop_status() -> dict[str, Any]:
+    instances = api_list_instances()
+    running = [item for item in instances if item.get("running")]
+    selected = running[0] if running else (instances[0] if instances else None)
+    return {
+        "instances": instances,
+        "selected_instance_id": selected.get("id") if selected else "",
+        "running": bool(running),
+        "session_id": DESKTOP_SESSION_ID,
+    }
+
+
+@app.post("/api/desktop/chat")
+async def api_desktop_chat(body: dict[str, Any]) -> dict[str, Any]:
+    instance_id = str(body.get("instance_id") or "").strip()
+    text = str(body.get("text") or "").strip()
+    if not instance_id:
+        raise HTTPException(status_code=400, detail="missing instance_id")
+    if not text:
+        raise HTTPException(status_code=400, detail="missing text")
+    try:
+        instance_store.validate_instance_id(instance_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not instance_store.instance_dir(instance_id).is_dir():
+        raise HTTPException(status_code=404, detail="unknown instance")
+    if not pm.status(instance_id)["running"]:
+        raise HTTPException(status_code=409, detail="instance is not running")
+    try:
+        reply = await pm.desktop_chat(instance_id, text)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return {
+        "instance_id": instance_id,
+        "session_id": DESKTOP_SESSION_ID,
+        "reply": reply,
+    }
 
 
 @app.post("/api/instances")
@@ -372,3 +467,27 @@ async def ws_console(instance_id: str, websocket: WebSocket) -> None:
         pass
     finally:
         pm.unregister_queue(instance_id, queue)
+
+
+@app.websocket("/ws/desktop/events")
+async def ws_desktop_events(websocket: WebSocket) -> None:
+    await websocket.accept()
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    _desktop_event_queues.append(queue)
+    try:
+        await websocket.send_json(
+            {
+                "name": "desktop.connected",
+                "created_at": "",
+                "instance_id": "",
+                "payload": {"session_id": DESKTOP_SESSION_ID},
+            }
+        )
+        while True:
+            event = await queue.get()
+            await websocket.send_json(event)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if queue in _desktop_event_queues:
+            _desktop_event_queues.remove(queue)
