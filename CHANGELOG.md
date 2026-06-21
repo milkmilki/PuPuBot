@@ -9,6 +9,7 @@
 - 新增聊天生命周期钩子：`chat.started`、`chat.reply_created`、`chat.error`，供桌宠 UI 显示 thinking/speaking/error 状态。
 - 新增记忆整理钩子：`memory.review_started`、`memory.review_finished`，供 UI 展示 batch review 整理进度。
 - `InstanceActor` 启停和启动失败路径会发出状态事件，并在失败路径清理 transport、后台任务和日志 sink。
+- 补充 hook 生命周期测试的实例上下文与 memU 隔离，单独运行 `tests.test_hooks` 不再误触真实长记忆索引。
 
 ### 开放群仲裁内嵌化
 

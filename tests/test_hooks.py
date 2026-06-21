@@ -7,7 +7,14 @@ from unittest.mock import patch
 
 from pupu.actor import InstanceActor
 from pupu.hooks import clear_hooks, list_hooks, register_hook
-from pupu.instance_context import InstanceContext, activate_instance_context
+from pupu.instance_context import (
+    InstanceContext,
+    activate_instance_context,
+    activate_instance_context_global,
+    clear_instance_context_global,
+    get_current_instance_context,
+)
+from pupu.logging_utils import close_current_instance_log_sinks
 from pupu.memory import init_db, reset_session, save_message
 from pupu.message_sources import CHAT
 
@@ -129,14 +136,48 @@ class HookLayerTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ChatAndMemoryHookTests(unittest.TestCase):
+    def _make_ctx(self, root: Path, iid: str = "hook-chat") -> InstanceContext:
+        inst = root / "instances" / iid
+        (inst / "data" / "logs").mkdir(parents=True)
+        (inst / "instance.json").write_text(
+            json.dumps(
+                {
+                    "id": iid,
+                    "display_name": "Hook Chat Bot",
+                    "qq_mode": "cli",
+                    "owner_ids": ["111"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (inst / "persona.json").write_text(
+            json.dumps({"name": "Hook Chat Bot"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return InstanceContext.from_instance_dir(inst)
+
     def setUp(self) -> None:
         clear_hooks()
+        self._previous_context = get_current_instance_context()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.ctx = self._make_ctx(Path(self._tmp.name), f"hook-chat-{self._testMethodName}")
+        activate_instance_context_global(self.ctx)
+        init_db()
         self.session_id = f"hook_chat_{self._testMethodName}"
         reset_session(self.session_id)
 
     def tearDown(self) -> None:
-        clear_hooks()
-        reset_session(self.session_id)
+        try:
+            reset_session(self.session_id)
+        finally:
+            clear_hooks()
+            close_current_instance_log_sinks()
+            if self._previous_context is not None:
+                activate_instance_context_global(self._previous_context)
+            else:
+                clear_instance_context_global()
+            self._tmp.cleanup()
 
     def test_chat_emits_started_and_reply_created(self) -> None:
         from pupu.agent import chat
@@ -151,9 +192,10 @@ class ChatAndMemoryHookTests(unittest.TestCase):
             lambda event: seen.append((event.name, dict(event.payload))),
         )
 
-        with patch("pupu.agent.chat_complete", return_value='{"content":"好呀","should_wait":false}'):
-            with patch("pupu.agent._maybe_batch_review", return_value=None):
-                reply = chat("hello", session_id=self.session_id, is_admin=True)
+        with patch("pupu.agent.is_memu_long_term_enabled", return_value=False):
+            with patch("pupu.agent.chat_complete", return_value='{"content":"好呀","should_wait":false}'):
+                with patch("pupu.agent._maybe_batch_review", return_value=None):
+                    reply = chat("hello", session_id=self.session_id, is_admin=True)
 
         self.assertEqual(reply, "好呀")
         self.assertEqual([name for name, _payload in seen], ["chat.started", "chat.reply_created"])
@@ -168,9 +210,10 @@ class ChatAndMemoryHookTests(unittest.TestCase):
         seen = []
         register_hook("chat.error", lambda event: seen.append(dict(event.payload)))
 
-        with patch("pupu.agent.chat_complete", side_effect=RuntimeError("model down")):
-            with self.assertRaises(RuntimeError):
-                chat("hello", session_id=self.session_id, is_admin=True)
+        with patch("pupu.agent.is_memu_long_term_enabled", return_value=False):
+            with patch("pupu.agent.chat_complete", side_effect=RuntimeError("model down")):
+                with self.assertRaises(RuntimeError):
+                    chat("hello", session_id=self.session_id, is_admin=True)
 
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0]["context_session"], self.session_id)
@@ -200,8 +243,10 @@ class ChatAndMemoryHookTests(unittest.TestCase):
           "task_updates": []
         }
         """
-        with patch("pupu.agent.json_task", return_value=raw):
-            _maybe_batch_review(self.session_id)
+        with patch("pupu.agent.is_memu_long_term_enabled", return_value=False):
+            with patch("pupu.agent.find_related_person_facts", return_value=[]):
+                with patch("pupu.agent.json_task", return_value=raw):
+                    _maybe_batch_review(self.session_id)
 
         self.assertEqual([name for name, _payload in seen], ["memory.review_started", "memory.review_finished"])
         self.assertEqual(seen[0][1]["context_session"], self.session_id)
