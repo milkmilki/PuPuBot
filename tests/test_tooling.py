@@ -1,13 +1,14 @@
 import os
 from pathlib import Path
 import unittest
+from tests.helpers import activate_test_instance
 from unittest.mock import patch
 import sys
 import json
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from pupu.memory import (
@@ -326,6 +327,38 @@ class ToolingRegistryTests(unittest.TestCase):
             "mcp__tavily__tavily_search",
             {"query": "second"},
             session_id="test_tooling_registry",
+        )
+
+        self.assertEqual(counter.read_text(encoding="utf-8"), "1")
+
+    def test_external_stdio_mcp_server_is_shared_across_registry_rebuilds(self):
+        fixture = Path(__file__).resolve().parent / "fixtures" / "fake_mcp_server.py"
+        counter = Path(__file__).resolve().parent / "_tmp" / "fake_mcp_shared_count.txt"
+        counter.unlink(missing_ok=True)
+        config = [
+            {
+                "name": "tavily",
+                "command": sys.executable,
+                "args": [str(fixture)],
+                "env": {"FAKE_MCP_COUNTER_PATH": str(counter)},
+                "exposures": ["chat"],
+                "timeout": 10,
+            }
+        ]
+        os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(config)
+        import pupu.tooling.registry as registry
+
+        refresh_registry()
+        first = registry.build_registry()
+        second = registry.build_registry()
+
+        first.execute(
+            "mcp__tavily__tavily_search",
+            {"query": "shared"},
+        )
+        second.execute(
+            "mcp__tavily__tavily_search",
+            {"query": "shared again"},
         )
 
         self.assertEqual(counter.read_text(encoding="utf-8"), "1")

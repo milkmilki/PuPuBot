@@ -7,8 +7,9 @@ from typing import Iterable
 
 from .base import BaseToolServer, ToolContext, ToolSpec, ToolResult
 from .config import load_builtin_server_state
-from .external_mcp import build_external_mcp_servers, shutdown_external_mcp_sessions
+from .external_mcp import build_external_mcp_servers
 from .servers import get_builtin_servers
+from ..shared_runtime import get_shared_tool_runtime
 
 
 class ToolRegistry:
@@ -88,7 +89,20 @@ def build_registry() -> ToolRegistry:
         for server in get_builtin_servers()
         if state.get(server.name, True)
     ]
-    servers.extend(build_external_mcp_servers())
+    servers.extend(
+        get_shared_tool_runtime().get_external_mcp_servers(build_external_mcp_servers)
+    )
+    return ToolRegistry(servers)
+
+
+def build_registry_with_external_servers(external_servers: Iterable[BaseToolServer]) -> ToolRegistry:
+    state = load_builtin_server_state()
+    servers = [
+        server
+        for server in get_builtin_servers()
+        if state.get(server.name, True)
+    ]
+    servers.extend(external_servers)
     return ToolRegistry(servers)
 
 
@@ -104,6 +118,8 @@ def get_registry() -> ToolRegistry:
 
 def refresh_registry() -> ToolRegistry:
     global _registry
-    shutdown_external_mcp_sessions()
-    _registry = build_registry()
+    external_servers = get_shared_tool_runtime().refresh_external_mcp_servers(
+        build_external_mcp_servers
+    )
+    _registry = build_registry_with_external_servers(external_servers)
     return _registry

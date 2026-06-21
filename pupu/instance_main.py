@@ -1,7 +1,7 @@
 """Entry point for a single PuPu instance (subprocess / multi-instance console).
 
-Expects ``PUPU_INSTANCE_DIR`` (or ``--dir``) to point at a directory containing
-``instance.json``, ``persona.json``, ``.env.qq``, and ``data/``.
+Expects ``--dir`` to point at a directory containing ``instance.json``,
+``persona.json``, ``.env.qq``, and ``data/``.
 
 The process working directory is forced to the repository root so NoneBot can
 ``load_plugins("plugins")`` reliably.
@@ -18,6 +18,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from pupu.app_config import apply_app_config_env, ensure_app_config_file
+from pupu.instance_context import InstanceContext, activate_instance_context_global
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,20 +28,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--dir",
         dest="instance_dir",
-        default=os.environ.get("PUPU_INSTANCE_DIR"),
-        help="Instance directory (or set PUPU_INSTANCE_DIR).",
+        required=True,
+        help="Instance directory.",
     )
     return parser.parse_args(argv)
 
 
 def _ensure_instance_env(inst: Path) -> None:
-    os.environ["PUPU_INSTANCE_DIR"] = str(inst)
-    os.environ.setdefault("PUPU_CONFIG_PATH", str(inst / "instance.json"))
-    os.environ.setdefault("PUPU_DB_PATH", str(inst / "data" / "pupu.db"))
-    os.environ["PUPU_MEMU_DB_PATH"] = str(inst / "data" / "memu.db")
-    os.environ.setdefault("PUPU_PERSONA_PATH", str(inst / "persona.json"))
-    (inst / "data").mkdir(parents=True, exist_ok=True)
-    (inst / "data" / "logs").mkdir(parents=True, exist_ok=True)
+    ctx = InstanceContext.from_instance_dir(inst)
+    activate_instance_context_global(ctx)
+    ctx.data_dir.mkdir(parents=True, exist_ok=True)
+    ctx.logs_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _load_instance_dotenv(inst: Path) -> None:
@@ -83,10 +81,10 @@ def _run_qq_bot(config: dict, env_file: Path) -> None:
         driver = nonebot.get_driver()
         driver.register_adapter(OneBotV11Adapter)
         port = _read_ws_port(env_file.parent)
-        print("[仆仆QQ] 模式: NapCat (OneBot v11)")
+        print("[PuPu QQ] mode: NapCat (OneBot v11)")
         print()
-        print("  仆仆已启动，正在等待 NapCat 连接...")
-        print("  请确保 NapCat 已配置反向 WebSocket 地址:")
+        print("  PuPu started, waiting for NapCat connection...")
+        print("  Make sure NapCat reverse WebSocket is configured as:")
         print(f"    ws://127.0.0.1:{port}/onebot/v11/ws")
         print()
 
@@ -111,10 +109,13 @@ def _run_qq_bot(config: dict, env_file: Path) -> None:
 
         driver = nonebot.get_driver()
         driver.register_adapter(QQAdapter)
-        print(f"[仆仆QQ] 模式: QQ 官方机器人 (AppID: {app_id})")
+        print(f"[PuPu QQ] mode: QQ official bot (AppID: {app_id})")
 
     else:
-        print(f"[错误] 未知 qq_mode: {qq_mode!r}（支持 napcat / official / cli）", file=sys.stderr)
+        print(
+            f"[error] unknown qq_mode: {qq_mode!r} (supported: napcat / official / cli)",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     nonebot.load_plugins("plugins")
@@ -125,13 +126,10 @@ def main(argv: list[str] | None = None) -> None:
     ensure_app_config_file()
     apply_app_config_env()
     args = _parse_args(argv)
-    if not args.instance_dir:
-        print("需要 --dir 或环境变量 PUPU_INSTANCE_DIR", file=sys.stderr)
-        sys.exit(2)
 
     inst = Path(args.instance_dir).resolve()
     if not inst.is_dir():
-        print(f"实例目录不存在: {inst}", file=sys.stderr)
+        print(f"Instance directory does not exist: {inst}", file=sys.stderr)
         sys.exit(2)
 
     _ensure_instance_env(inst)
@@ -146,10 +144,10 @@ def main(argv: list[str] | None = None) -> None:
     try:
         preflight_model_providers(require_chat=True)
     except ProviderConfigError as exc:
-        print("[配置错误] 模型提供商还不能使用：", file=sys.stderr)
+        print("[config error] model provider is not usable yet:", file=sys.stderr)
         print(exc, file=sys.stderr)
         print(
-            "请先打开 pupu.yaml，填写 llm.*.api_key。",
+            "Please open pupu.yaml and fill the relevant llm.*.api_key settings.",
             file=sys.stderr,
         )
         sys.exit(2)

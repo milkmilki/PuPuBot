@@ -158,7 +158,6 @@ user:
   owner_ids: ["2468"]
 """
         )
-        os.environ.pop("PUPU_CONFIG_PATH", None)
         import pupu.config as cfg
 
         importlib.reload(cfg)

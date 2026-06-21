@@ -1,9 +1,9 @@
-import os
 from pathlib import Path
 import unittest
+from tests.helpers import activate_test_instance
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_storage_split.db"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 
 from pupu.memory import (
     _get_conn,
@@ -34,7 +34,6 @@ class StorageSplitTests(unittest.TestCase):
         upsert_person_facts(
             {"喜欢": "草莓"},
             default_subject_person_key=subject_key,
-            legacy_session_id=self.identity,
         )
 
         self.assertEqual(get_person_fact_map(subject_key), {"喜欢": "草莓"})
@@ -54,6 +53,58 @@ class StorageSplitTests(unittest.TestCase):
 
         self.assertNotIn("user_facts", table_names)
         self.assertNotIn("self_facts", table_names)
+
+    def test_person_facts_legacy_session_column_is_migrated_away(self):
+        conn = _get_conn()
+        try:
+            conn.execute("DROP TABLE IF EXISTS person_facts")
+            conn.execute(
+                """
+                CREATE TABLE person_facts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subject_person_key TEXT NOT NULL,
+                    object_person_key TEXT NOT NULL DEFAULT '',
+                    scope TEXT NOT NULL DEFAULT 'person',
+                    legacy_session_id TEXT NOT NULL DEFAULT '',
+                    fact_key TEXT NOT NULL,
+                    fact_value TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    source_context_session TEXT NOT NULL DEFAULT '',
+                    source_msg_start_id INTEGER,
+                    source_msg_end_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """INSERT INTO person_facts (
+                       subject_person_key, object_person_key, scope, legacy_session_id,
+                       fact_key, fact_value, confidence, source_context_session,
+                       created_at, updated_at
+                   ) VALUES ('owner', '', 'person', 'owner', '昵称', '小夫', 1.0, '', 't', 't')"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        init_db()
+
+        conn = _get_conn()
+        try:
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(person_facts)").fetchall()
+            }
+            row = conn.execute(
+                "SELECT subject_person_key, fact_key, fact_value FROM person_facts WHERE fact_key = '昵称'"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertNotIn("legacy_session_id", columns)
+        self.assertIsNotNone(row)
+        self.assertEqual(dict(row), {"subject_person_key": "owner", "fact_key": "昵称", "fact_value": "小夫"})
 
     def test_context_messages_do_not_cross_between_contexts(self):
         save_message("user", "from one", "ignored", context_session=self.context_one)

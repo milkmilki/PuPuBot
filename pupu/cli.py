@@ -14,6 +14,11 @@ from .app_config import apply_app_config_env, default_instance_settings, ensure_
 from .backup import maybe_run_daily_backup
 from .command_registry import command_usage, render_help, resolve_command
 from .dialogue_loop import register_sender
+from .instance_context import (
+    InstanceContext,
+    activate_instance_context_global,
+    get_current_instance_context,
+)
 from .sessions import OWNER_SESSION
 from .facts_report import format_facts_report
 from .event_thread_report import format_event_threads_report
@@ -76,16 +81,12 @@ def _parse_tidy_mode(command_arg: str) -> tuple[str | None, str | None]:
 
 
 def _apply_instance_env(instance_dir: Path) -> None:
-    inst = instance_dir.resolve()
-    os.environ["PUPU_INSTANCE_DIR"] = str(inst)
-    os.environ["PUPU_CONFIG_PATH"] = str(inst / "instance.json")
-    os.environ["PUPU_DB_PATH"] = str(inst / "data" / "pupu.db")
-    os.environ["PUPU_MEMU_DB_PATH"] = str(inst / "data" / "memu.db")
-    os.environ["PUPU_PERSONA_PATH"] = str(inst / "persona.json")
-    (inst / "data").mkdir(parents=True, exist_ok=True)
-    (inst / "data" / "logs").mkdir(parents=True, exist_ok=True)
+    ctx = InstanceContext.from_instance_dir(instance_dir)
+    activate_instance_context_global(ctx)
+    ctx.data_dir.mkdir(parents=True, exist_ok=True)
+    ctx.logs_dir.mkdir(parents=True, exist_ok=True)
 
-    env_file = inst / ".env.qq"
+    env_file = ctx.instance_dir / ".env.qq"
     if env_file.is_file():
         from dotenv import load_dotenv
 
@@ -94,11 +95,8 @@ def _apply_instance_env(instance_dir: Path) -> None:
 
 def _configure_cli_instance_interactively() -> str | None:
     """Let direct CLI launches choose a managed instance.
-
-    ``pupu.instance_main --dir`` sets ``PUPU_INSTANCE_DIR`` before importing the
-    CLI, so that path stays non-interactive and already points at one instance.
     """
-    if os.environ.get("PUPU_INSTANCE_DIR"):
+    if get_current_instance_context() is not None:
         return None
 
     from pupu_console import instance_store

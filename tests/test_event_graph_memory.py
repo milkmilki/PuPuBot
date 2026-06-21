@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
 import unittest
+from tests.helpers import activate_test_instance
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
@@ -405,7 +406,6 @@ class EventGraphMemoryTests(unittest.TestCase):
                     "value": "小夫会叫 Alice 老师",
                 },
             ],
-            legacy_session_id=self.session_id,
             known_people=[
                 {
                     "person_key": "qq:123",

@@ -5,15 +5,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .instance_context import get_current_instance_context
+
 
 _TRUE_VALUES = {"1", "true", "yes", "y", "on", "enable", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "n", "off", "disable", "disabled"}
 
 
 def _env_file_path() -> Path | None:
-    inst = os.environ.get("PUPU_INSTANCE_DIR", "").strip()
-    if inst:
-        return Path(inst) / ".env.qq"
+    ctx = get_current_instance_context()
+    if ctx is not None:
+        return ctx.instance_dir / ".env.qq"
     return None
 
 

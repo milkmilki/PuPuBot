@@ -18,7 +18,9 @@ from urllib.parse import quote, unquote
 
 from pydantic import BaseModel
 
+from ..instance_context import require_current_instance_context
 from ..persona.core import get_pupu_name
+from ..shared_runtime import get_shared_memu_runtime
 from ..storage.db import get_conn, get_data_dir
 from ..storage.event_threads import get_recent_event_threads
 from ..storage.facts import get_person_facts
@@ -27,12 +29,10 @@ DEFAULT_TOP_K = 6
 DEFAULT_LOG_PREVIEW_CHARS = 220
 DEFAULT_RECENCY_DECAY_DAYS = 30.0
 DEFAULT_SOURCE_SUMMARY_LIMIT = 80
-_service = None
-_service_error: str | None = None
 _service_lock = threading.Lock()
 _op_lock = threading.Lock()
 _disabled_reasons_logged: set[str] = set()
-_config_logged = False
+_config_logged: set[tuple[Any, ...]] = set()
 _sqlite_backend_patched = False
 
 
@@ -284,10 +284,7 @@ def is_memu_long_term_enabled() -> bool:
 
 
 def _memu_db_path() -> Path:
-    configured = os.environ.get("PUPU_MEMU_DB_PATH", "").strip()
-    if configured:
-        return Path(configured).expanduser().resolve()
-    return Path(get_data_dir()) / "memu.db"
+    return require_current_instance_context().memu_db_path
 
 
 def _sqlite_dsn(path: Path) -> str:
@@ -394,8 +391,8 @@ def _llm_profiles() -> dict[str, dict[str, Any]]:
 
 
 def _log_config_once(reason: str) -> None:
-    global _config_logged
-    if _config_logged:
+    signature = _memu_config_signature()
+    if signature in _config_logged:
         return
     profiles = _llm_profiles()
     default = profiles["default"]
@@ -414,7 +411,7 @@ def _log_config_once(reason: str) -> None:
         f"embed_model={embedding.get('embed_model')} embed_key={'yes' if _configured_embedding_key() else 'no'} "
         f"embed_key_source={_configured_embedding_key_name() or '<none>'}"
     )
-    _config_logged = True
+    _config_logged.add(signature)
 
 
 def _patch_memu_sqlite_backend() -> None:
@@ -838,32 +835,49 @@ def _new_service():
     return service
 
 
+def _memu_config_signature() -> tuple[Any, ...]:
+    profiles = _llm_profiles()
+    default = profiles["default"]
+    embedding = profiles["embedding"]
+    return (
+        str(_memu_db_path()),
+        os.environ.get("PUPU_MEMU_METHOD", "rag").strip() or "rag",
+        _top_k(),
+        _source_summary_limit(),
+        _memu_ranking(),
+        _recency_decay_days(),
+        _enable_reinforcement(),
+        _native_category_summaries(),
+        tuple(sorted(default.items())),
+        tuple(sorted(embedding.items())),
+    )
+
+
 def _get_service():
-    global _service, _service_error
-    if _service is not None:
-        return _service
-    if _service_error is not None:
-        raise RuntimeError(_service_error)
     with _service_lock:
-        if _service is not None:
-            return _service
-        if _service_error is not None:
-            raise RuntimeError(_service_error)
         if not is_memu_long_term_enabled():
             raise RuntimeError("memU long-term memory is disabled")
         if not _configured_embedding_key():
             raise RuntimeError("memU embedding API key is not configured")
         try:
-            _log_config_once("service_init")
-            _log("service init start")
-            _service = _new_service()
-            _service_error = None
-            _log(f"service enabled db={_memu_db_path()}")
-            return _service
+            service = get_shared_memu_runtime().get_service(
+                memu_db_path=_memu_db_path(),
+                config_signature=_memu_config_signature(),
+                enabled=is_memu_long_term_enabled,
+                factory=lambda: _init_shared_memu_service(),
+            )
+            return service
         except Exception as exc:
-            _service_error = str(exc)
             _log(f"service unavailable error={type(exc).__name__}: {_preview(exc, 500)}")
             raise
+
+
+def _init_shared_memu_service():
+    _log_config_once("service_init")
+    _log("service init start")
+    service = _new_service()
+    _log(f"service enabled db={_memu_db_path()}")
+    return service
 
 
 def _run(coro):

@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pupu.logging_utils as logging_utils
+from pupu.instance_context import InstanceContext, activate_instance_context
 
 
 class _FakeDatetime:
@@ -27,12 +28,16 @@ class RuntimeLoggingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            inst = root / "instances" / "logtest"
+            (inst / "data").mkdir(parents=True)
+            (inst / "instance.json").write_text('{"display_name":"Log Test"}', encoding="utf-8")
+            ctx = InstanceContext.from_instance_dir(inst)
             try:
                 logging_utils._initialized = True
                 logging_utils._log_file = None
                 logging_utils._log_path = None
 
-                with patch.object(logging_utils, "_get_project_root", return_value=root):
+                with activate_instance_context(ctx):
                     with patch.object(logging_utils, "datetime", _FakeDatetime):
                         first_sink = logging_utils._ensure_current_log_file()
                         first_sink.write("first\n")
@@ -46,8 +51,8 @@ class RuntimeLoggingTests(unittest.TestCase):
                 self.assertIsNot(first_sink, second_sink)
                 self.assertTrue(first_sink.closed)
                 second_sink.close()
-                self.assertIn("first", (root / "data" / "logs" / "pupu-20260427.log").read_text(encoding="utf-8"))
-                self.assertIn("second", (root / "data" / "logs" / "pupu-20260428.log").read_text(encoding="utf-8"))
+                self.assertIn("first", (inst / "data" / "logs" / "pupu-20260427.log").read_text(encoding="utf-8"))
+                self.assertIn("second", (inst / "data" / "logs" / "pupu-20260428.log").read_text(encoding="utf-8"))
             finally:
                 if logging_utils._log_file is not None and logging_utils._log_file is not old_log_file:
                     try:
@@ -90,7 +95,11 @@ class RuntimeLoggingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            log_dir = root / "data" / "logs"
+            inst = root / "instances" / "logtest"
+            (inst / "data").mkdir(parents=True)
+            (inst / "instance.json").write_text('{"display_name":"Log Test"}', encoding="utf-8")
+            ctx = InstanceContext.from_instance_dir(inst)
+            log_dir = inst / "data" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             for day in range(25, 29):
                 (log_dir / f"pupu-202604{day}.log").write_text(f"log-{day}", encoding="utf-8")
@@ -99,7 +108,7 @@ class RuntimeLoggingTests(unittest.TestCase):
                 logging_utils._log_file = None
                 logging_utils._log_path = None
 
-                with patch.object(logging_utils, "_get_project_root", return_value=root):
+                with activate_instance_context(ctx):
                     with patch.object(logging_utils, "datetime", _FakeDatetime):
                         _FakeDatetime.current = datetime(2026, 4, 29, 0, 0, 1)
                         sink = logging_utils._ensure_current_log_file()

@@ -5,11 +5,19 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from tests.helpers import activate_test_instance
 from unittest.mock import AsyncMock, patch
+from pupu.instance_context import (
+    InstanceContext,
+    activate_instance_context,
+    activate_instance_context_global,
+    clear_instance_context_global,
+    get_current_instance_context,
+)
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
@@ -40,19 +48,20 @@ class TidyCommandTests(unittest.IsolatedAsyncioTestCase):
     def test_cli_instance_selector_applies_selected_instance_env(self):
         keys = (
             "PUPU_REPO_ROOT",
-            "PUPU_INSTANCE_DIR",
-            "PUPU_CONFIG_PATH",
-            "PUPU_DB_PATH",
-            "PUPU_MEMU_DB_PATH",
-            "PUPU_PERSONA_PATH",
         )
         old_values = {key: os.environ.get(key) for key in keys}
         self.addCleanup(self._restore_env, old_values)
+        previous_context = get_current_instance_context()
+        clear_instance_context_global()
+        self.addCleanup(
+            lambda: activate_instance_context_global(previous_context)
+            if previous_context is not None
+            else clear_instance_context_global()
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             os.environ["PUPU_REPO_ROOT"] = str(root)
-            os.environ.pop("PUPU_INSTANCE_DIR", None)
             for instance_id, display in (("b-inst", "Beta"), ("a-inst", "Alpha")):
                 inst = root / "instances" / instance_id
                 (inst / "data").mkdir(parents=True)
@@ -77,21 +86,26 @@ class TidyCommandTests(unittest.IsolatedAsyncioTestCase):
 
             expected = root / "instances" / "b-inst"
             self.assertEqual(selected, "b-inst")
-            self.assertEqual(os.environ["PUPU_INSTANCE_DIR"], str(expected.resolve()))
-            self.assertEqual(os.environ["PUPU_DB_PATH"], str(expected.resolve() / "data" / "pupu.db"))
-            self.assertEqual(os.environ["PUPU_MEMU_DB_PATH"], str(expected.resolve() / "data" / "memu.db"))
-            self.assertEqual(os.environ["PUPU_PERSONA_PATH"], str(expected.resolve() / "persona.json"))
+            ctx = get_current_instance_context()
+            self.assertIsNotNone(ctx)
+            self.assertEqual(ctx.instance_dir, expected.resolve())
+            self.assertEqual(ctx.db_path, expected.resolve() / "data" / "pupu.db")
+            self.assertEqual(ctx.memu_db_path, expected.resolve() / "data" / "memu.db")
+            self.assertEqual(ctx.persona_path, expected.resolve() / "persona.json")
 
-    def test_cli_instance_selector_skips_when_instance_env_exists(self):
-        old_value = os.environ.get("PUPU_INSTANCE_DIR")
-        self.addCleanup(self._restore_env, {"PUPU_INSTANCE_DIR": old_value})
-        os.environ["PUPU_INSTANCE_DIR"] = "already-selected"
+    def test_cli_instance_selector_skips_when_context_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inst = Path(tmp) / "instances" / "selected"
+            inst.mkdir(parents=True)
+            (inst / "data").mkdir()
+            (inst / "instance.json").write_text('{"display_name":"Selected"}', encoding="utf-8")
 
-        with patch.object(cli.console, "input") as mock_input:
-            selected = cli._configure_cli_instance_interactively()
+            with patch.object(cli.console, "input") as mock_input:
+                with activate_instance_context(InstanceContext.from_instance_dir(inst)):
+                    selected = cli._configure_cli_instance_interactively()
 
-        self.assertIsNone(selected)
-        mock_input.assert_not_called()
+            self.assertIsNone(selected)
+            mock_input.assert_not_called()
 
     def test_cli_tidy_accepts_check_apply_rebuild_and_defaults_to_apply(self):
         cases = [

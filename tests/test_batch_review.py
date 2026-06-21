@@ -1,11 +1,12 @@
 import os
 from pathlib import Path
 import unittest
+from tests.helpers import activate_test_instance
 from unittest.mock import patch
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
@@ -394,7 +395,7 @@ class BatchReviewTests(unittest.TestCase):
 {
   "summary": "talked about movies",
   "familiarity_delta": 2,
-  "person_facts": [{"subject": "小夫", "scope": "person", "key": "favorite_genre", "value": "fantasy",},],
+  "fact_updates": [{"action": "create", "subject": "小夫", "scope": "person", "key": "favorite_genre", "value": "fantasy",},],
   "event_updates": [{
     "action": "create_thread",
     "thread_key": "birthday-2026-04-27",
@@ -422,7 +423,6 @@ class BatchReviewTests(unittest.TestCase):
 
         self.assertEqual(parsed["summary"], "talked about movies")
         self.assertEqual(parsed["familiarity_delta"], 2)
-        self.assertEqual(parsed["person_facts"][0]["key"], "favorite_genre")
         self.assertEqual(parsed["fact_updates"][0]["action"], "create")
         self.assertEqual(parsed["fact_updates"][0]["key"], "favorite_genre")
         self.assertEqual(
@@ -436,8 +436,8 @@ class BatchReviewTests(unittest.TestCase):
 {
   "summary": "用户用"永远在一起"表达想做一辈子朋友。",
   "familiarity_delta": 8,
-  "person_facts": [
-    {"subject": "小夫", "scope": "person", "key": "commitment", "value": "用户承诺要做仆仆一辈子的朋友，永远在一起"}
+  "fact_updates": [
+    {"action": "create", "subject": "小夫", "scope": "person", "key": "commitment", "value": "用户承诺要做仆仆一辈子的朋友，永远在一起"}
   ],
   "event_updates": [
     {
@@ -469,10 +469,10 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "整理事实。",
           "familiarity_delta": 0,
-          "person_facts": [
-            {"subject": "小夫", "scope": "person", "key": "爱好", "value": ["画画"]},
-            {"subject": "小夫", "scope": "person", "key": "昵称", "value": "小夫"},
-            {"subject": "璐璐", "scope": "person", "key": "会做饭", "value": true}
+          "fact_updates": [
+            {"action": "create", "subject": "小夫", "scope": "person", "key": "爱好", "value": ["画画"]},
+            {"action": "create", "subject": "小夫", "scope": "person", "key": "昵称", "value": "小夫"},
+            {"action": "create", "subject": "璐璐", "scope": "person", "key": "会做饭", "value": true}
           ],
           "event_updates": [],
           "task_updates": []
@@ -480,19 +480,7 @@ class BatchReviewTests(unittest.TestCase):
 
         parsed = _parse_batch_review_result(raw)
 
-        self.assertEqual(
-            parsed["person_facts"],
-            [
-                {
-                    "subject": "小夫",
-                    "object": "",
-                    "scope": "person",
-                    "key": "昵称",
-                    "value": "小夫",
-                    "confidence": 1.0,
-                }
-            ],
-        )
+        self.assertEqual(len(parsed["fact_updates"]), 1)
         self.assertEqual(parsed["fact_updates"][0]["action"], "create")
         self.assertEqual(parsed["fact_updates"][0]["key"], "昵称")
 
@@ -1384,7 +1372,7 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "群上下文摘要。",
           "familiarity_delta": 2,
-          "person_facts": [{"subject": "__IDENTITY__", "scope": "person", "key": "喜欢", "value": "草莓"}],
+          "fact_updates": [{"action": "create", "subject": "__IDENTITY__", "scope": "person", "key": "喜欢", "value": "草莓"}],
           "event_updates": [],
           "task_updates": []
         }"""
@@ -1440,9 +1428,9 @@ class BatchReviewTests(unittest.TestCase):
         raw = """{
           "summary": "Alice和璐璐聊了事实记录。",
           "familiarity_delta": 0,
-          "person_facts": [
-            {"subject": "Alice", "scope": "person", "key": "喜欢", "value": "草莓", "confidence": 0.9},
-            {"subject": "Alice", "object": "璐璐", "scope": "relationship", "key": "称呼", "value": "Alice会叫璐璐姐姐", "confidence": 0.8}
+          "fact_updates": [
+            {"action": "create", "subject": "Alice", "scope": "person", "key": "喜欢", "value": "草莓", "confidence": 0.9},
+            {"action": "create", "subject": "Alice", "object": "璐璐", "scope": "relationship", "key": "称呼", "value": "Alice会叫璐璐姐姐", "confidence": 0.8}
           ],
           "event_updates": [],
           "task_updates": []
@@ -1486,7 +1474,6 @@ class BatchReviewTests(unittest.TestCase):
         upsert_person_facts(
             [{"subject_person_key": person_key, "scope": "person", "key": "外貌", "value": "AliceUpdate没有头发"}],
             known_people=[{"person_key": person_key, "display_name": display_name}],
-            legacy_session_id=self.session_id,
         )
         existing = get_person_facts(subject_person_keys=[person_key], include_relationships=False)
         fact_id = existing[0]["id"]
@@ -1555,7 +1542,6 @@ class BatchReviewTests(unittest.TestCase):
         upsert_person_facts(
             [{"subject_person_key": person_key, "scope": "person", "key": "外貌", "value": "AliceReject没有头发"}],
             known_people=[{"person_key": person_key, "display_name": display_name}],
-            legacy_session_id=self.session_id,
         )
         existing = get_person_facts(subject_person_keys=[person_key], include_relationships=False)
         fact_id = existing[0]["id"]

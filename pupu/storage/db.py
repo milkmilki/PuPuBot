@@ -2,30 +2,25 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from datetime import datetime
 
-from ..sessions import OWNER_SESSION
-
-DEFAULT_DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-    "data",
-    "pupu.db",
-)
+from ..instance_context import require_current_instance_context
 
 
 def get_db_path() -> str:
-    return os.environ.get("PUPU_DB_PATH", DEFAULT_DB_PATH)
+    return str(require_current_instance_context().db_path)
 
 
 def get_data_dir() -> str:
-    return os.path.dirname(get_db_path())
+    return str(require_current_instance_context().data_dir)
 
 
 def get_conn():
     db_path = get_db_path()
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    from pathlib import Path
+
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -35,6 +30,51 @@ def get_conn():
 def table_columns(conn, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row["name"] for row in rows}
+
+
+def _migrate_person_facts_schema(conn) -> None:
+    columns = table_columns(conn, "person_facts")
+    if "legacy_session_id" not in columns:
+        conn.execute("DROP INDEX IF EXISTS idx_person_facts_legacy_session")
+        return
+
+    conn.execute("DROP INDEX IF EXISTS idx_person_facts_key")
+    conn.execute("DROP INDEX IF EXISTS idx_person_facts_subject")
+    conn.execute("DROP INDEX IF EXISTS idx_person_facts_object")
+    conn.execute("DROP INDEX IF EXISTS idx_person_facts_legacy_session")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS person_facts_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_person_key TEXT NOT NULL,
+            object_person_key TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT 'person',
+            fact_key TEXT NOT NULL,
+            fact_value TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0,
+            source_context_session TEXT NOT NULL DEFAULT '',
+            source_msg_start_id INTEGER,
+            source_msg_end_id INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO person_facts_new (
+            id, subject_person_key, object_person_key, scope, fact_key,
+            fact_value, confidence, source_context_session,
+            source_msg_start_id, source_msg_end_id, created_at, updated_at
+        )
+        SELECT id, subject_person_key, object_person_key, scope, fact_key,
+               fact_value, confidence, source_context_session,
+               source_msg_start_id, source_msg_end_id, created_at, updated_at
+        FROM person_facts
+        """
+    )
+    conn.execute("DROP TABLE person_facts")
+    conn.execute("ALTER TABLE person_facts_new RENAME TO person_facts")
 
 
 def init_db():
@@ -98,7 +138,6 @@ def init_db():
             subject_person_key TEXT NOT NULL,
             object_person_key TEXT NOT NULL DEFAULT '',
             scope TEXT NOT NULL DEFAULT 'person',
-            legacy_session_id TEXT NOT NULL DEFAULT '',
             fact_key TEXT NOT NULL,
             fact_value TEXT NOT NULL,
             confidence REAL NOT NULL DEFAULT 1.0,
@@ -126,12 +165,6 @@ def init_db():
         """
         CREATE INDEX IF NOT EXISTS idx_person_facts_object
         ON person_facts(object_person_key, updated_at)
-    """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_person_facts_legacy_session
-        ON person_facts(legacy_session_id)
     """
     )
     cursor.execute(
@@ -329,11 +362,7 @@ def init_db():
             "ALTER TABLE event_threads ADD COLUMN origin_person_key TEXT NOT NULL DEFAULT ''"
         )
 
-    person_fact_columns = table_columns(conn, "person_facts")
-    if "legacy_session_id" not in person_fact_columns:
-        cursor.execute(
-            "ALTER TABLE person_facts ADD COLUMN legacy_session_id TEXT NOT NULL DEFAULT ''"
-        )
+    _migrate_person_facts_schema(conn)
 
     for old_table in ("important_events", "user_facts", "self_facts"):
         cursor.execute(f"DROP TABLE IF EXISTS {old_table}")
@@ -356,11 +385,11 @@ def init_db():
         for key, value in seed.items():
             cursor.execute(
                 """INSERT OR IGNORE INTO person_facts (
-                       subject_person_key, object_person_key, scope, legacy_session_id,
+                       subject_person_key, object_person_key, scope,
                        fact_key, fact_value, confidence, source_context_session,
                        source_msg_start_id, source_msg_end_id, created_at, updated_at
-                   ) VALUES ('instance', '', 'person', ?, ?, ?, 1.0, '', NULL, NULL, ?, ?)""",
-                (OWNER_SESSION, key, value, now, now),
+                   ) VALUES ('instance', '', 'person', ?, ?, 1.0, '', NULL, NULL, ?, ?)""",
+                (key, value, now, now),
             )
 
     conn.commit()

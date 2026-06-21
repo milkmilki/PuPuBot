@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
 import unittest
+from tests.helpers import activate_test_instance
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
@@ -39,12 +40,10 @@ class FactsReportTests(unittest.TestCase):
         upsert_person_facts(
             {"身份": "读研学生"},
             default_subject_person_key=subject_key,
-            legacy_session_id=self.session_id,
         )
         upsert_person_facts(
             {"自称": "姐姐"},
             default_subject_person_key=INSTANCE_PERSON_KEY,
-            legacy_session_id=self.session_id,
         )
 
         report = format_facts_report(self.session_id)
@@ -73,7 +72,6 @@ class FactsReportTests(unittest.TestCase):
                     "value": "另一个人会叫实例老师",
                 }
             ],
-            legacy_session_id=self.session_id,
         )
 
         facts = get_person_facts(
@@ -125,7 +123,6 @@ class FactsReportTests(unittest.TestCase):
                     "value": "用户会在群里和实例开玩笑",
                 },
             ],
-            legacy_session_id=self.session_id,
         )
 
         facts = get_person_facts(
@@ -145,7 +142,6 @@ class FactsReportTests(unittest.TestCase):
         upsert_person_facts(
             {"外貌": "小夫是光头，没有刘海"},
             default_subject_person_key=subject_key,
-            legacy_session_id=self.session_id,
         )
 
         report = format_facts_report(self.session_id, query="search 刘海")
@@ -158,7 +154,6 @@ class FactsReportTests(unittest.TestCase):
         upsert_person_facts(
             {"外貌": "小夫是光头，没有刘海"},
             default_subject_person_key=subject_key,
-            legacy_session_id=self.session_id,
         )
 
         report = format_facts_report(self.session_id, query="search --debug 刘海")

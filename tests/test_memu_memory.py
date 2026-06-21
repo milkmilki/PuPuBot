@@ -2,11 +2,12 @@ import os
 import json
 from pathlib import Path
 import unittest
+from tests.helpers import activate_test_instance
 from unittest.mock import patch
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
@@ -399,7 +400,6 @@ class MemuMemoryTests(unittest.TestCase):
         upsert_person_facts(
             {"旧事实": "不应该被直接读取"},
             default_subject_person_key=person_from_session(self.session_id),
-            legacy_session_id=self.session_id,
         )
 
         save_summary("summary-one-old", 1, 2, self.session_id)
@@ -523,9 +523,9 @@ class MemuMemoryTests(unittest.TestCase):
         raw = """{
           "summary": "用户和仆仆聊了像素农场联动。",
           "familiarity_delta": 1,
-          "person_facts": [
-            {"subject": "小夫", "scope": "person", "key": "游戏", "value": "想在像素农场里和仆仆互动"},
-            {"subject": "仆仆", "scope": "person", "key": "像素农场身份", "value": "会作为 NPC 出现"}
+          "fact_updates": [
+            {"action": "create", "subject": "小夫", "scope": "person", "key": "游戏", "value": "想在像素农场里和仆仆互动"},
+            {"action": "create", "subject": "仆仆", "scope": "person", "key": "像素农场身份", "value": "会作为 NPC 出现"}
           ],
           "event_updates": [{
             "action": "create_thread",
@@ -574,7 +574,7 @@ class MemuMemoryTests(unittest.TestCase):
         raw = """{
           "summary": "即使 memU 写入失败，review 游标也要保存。",
           "familiarity_delta": 2,
-          "person_facts": [],
+          "fact_updates": [],
           "event_updates": [],
           "task_updates": []
         }"""
@@ -601,7 +601,6 @@ class MemuMemoryTests(unittest.TestCase):
         upsert_person_facts(
             {"游戏": "像素农场"},
             default_subject_person_key=person_from_session(self.session_id),
-            legacy_session_id=self.session_id,
         )
         self.assertIn("游戏: 像素农场", format_facts_report(self.session_id))
 
@@ -919,7 +918,6 @@ class MemuMemoryTests(unittest.TestCase):
         upsert_person_facts(
             {"game": "pixel farm"},
             default_subject_person_key=person_from_session(self.session_id),
-            legacy_session_id=self.session_id,
         )
         upsert_event_threads(
             self.session_id,

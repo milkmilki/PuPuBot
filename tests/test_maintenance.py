@@ -2,12 +2,13 @@ import os
 import sqlite3
 from pathlib import Path
 import unittest
+from tests.helpers import activate_test_instance
 from datetime import datetime
 from unittest.mock import patch
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-os.environ["PUPU_DB_PATH"] = str(TEST_DB_PATH)
+activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
@@ -424,7 +425,7 @@ class MaintenanceTests(unittest.TestCase):
                 "身份": "读研学生",
             },
             default_subject_person_key=owner_key,
-            legacy_session_id=self.session_id,
+            context_session=self.session_id,
         )
         upsert_person_facts(
             {
@@ -433,7 +434,7 @@ class MaintenanceTests(unittest.TestCase):
                 "喜欢的游戏": "喜欢独立游戏",
             },
             default_subject_person_key=INSTANCE_PERSON_KEY,
-            legacy_session_id=self.session_id,
+            context_session=self.session_id,
         )
 
         conn = _get_conn()

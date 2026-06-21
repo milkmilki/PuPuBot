@@ -52,7 +52,6 @@ def _fact_row_to_dict(row) -> dict[str, Any]:
         "subject_person_key": row["subject_person_key"],
         "object_person_key": row["object_person_key"],
         "scope": row["scope"],
-        "legacy_session_id": row["legacy_session_id"],
         "fact_key": row["fact_key"],
         "fact_value": row["fact_value"],
         "confidence": float(row["confidence"] or 0.0),
@@ -144,7 +143,6 @@ def upsert_person_facts(
     facts: list[dict[str, Any]] | dict[str, str],
     *,
     default_subject_person_key: str = OWNER_PERSON_KEY,
-    legacy_session_id: str = "",
     known_people: list[dict[str, Any]] | None = None,
     context_session: str | None = None,
     source_msg_start_id: int | None = None,
@@ -244,18 +242,14 @@ def upsert_person_facts(
 
             conn.execute(
                 """INSERT INTO person_facts (
-                       subject_person_key, object_person_key, scope, legacy_session_id,
+                       subject_person_key, object_person_key, scope,
                        fact_key, fact_value, confidence, source_context_session,
                        source_msg_start_id, source_msg_end_id, created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(subject_person_key, object_person_key, scope, fact_key)
                    DO UPDATE SET
                        fact_value = excluded.fact_value,
                        confidence = excluded.confidence,
-                       legacy_session_id = CASE
-                           WHEN excluded.legacy_session_id != '' THEN excluded.legacy_session_id
-                           ELSE person_facts.legacy_session_id
-                       END,
                        source_context_session = excluded.source_context_session,
                        source_msg_start_id = excluded.source_msg_start_id,
                        source_msg_end_id = excluded.source_msg_end_id,
@@ -264,7 +258,6 @@ def upsert_person_facts(
                     subject_key,
                     object_key,
                     scope,
-                    _text(item.get("legacy_session_id") or legacy_session_id),
                     key,
                     value,
                     _clamp_confidence(item.get("confidence", 1.0)),

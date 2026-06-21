@@ -76,44 +76,10 @@ def _clean_fact_scalar(value) -> str:
     return str(value).strip()
 
 
-def _normalize_person_facts(value) -> list[dict]:
-    if isinstance(value, dict):
-        value = [
-            {"subject": "owner", "scope": "person", "key": key, "value": item}
-            for key, item in value.items()
-        ]
-    if not isinstance(value, list):
-        return []
-    cleaned: list[dict] = []
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-        key = _clean_fact_scalar(item.get("key") or item.get("fact_key"))
-        val = _clean_fact_scalar(item.get("value") or item.get("fact_value"))
-        subject = _clean_fact_scalar(item.get("subject") or item.get("subject_person_key"))
-        obj = _clean_fact_scalar(item.get("object") or item.get("object_person_key"))
-        scope = (_clean_fact_scalar(item.get("scope") or "person").lower() or "person")
-        if not key or not val:
-            continue
-        cleaned.append(
-            {
-                "subject": subject,
-                "object": obj,
-                "scope": scope,
-                "key": key,
-                "value": val,
-                "confidence": item.get("confidence", 1.0),
-            }
-        )
-    return cleaned
-
-
-def _normalize_fact_updates(value, *, legacy_person_facts=None) -> list[dict]:
+def _normalize_fact_updates(value) -> list[dict]:
     raw_items: list[dict] = []
     if isinstance(value, list):
         raw_items.extend(item for item in value if isinstance(item, dict))
-    for item in _normalize_person_facts(legacy_person_facts or []):
-        raw_items.append({"action": "create", **item})
 
     cleaned: list[dict] = []
     for item in raw_items:
@@ -173,25 +139,19 @@ def _normalize_batch_review_result(value) -> dict:
         return {
             "summary": "",
             "familiarity_delta": 0,
-            "person_facts": [],
             "fact_updates": [],
             "event_updates": [],
             "task_updates": [],
         }
 
     event_updates = normalize_review_event_updates(value.get("event_updates", []))
-    legacy_person_facts = _normalize_person_facts(value.get("person_facts", []))
-    fact_updates = _normalize_fact_updates(
-        value.get("fact_updates", []),
-        legacy_person_facts=legacy_person_facts,
-    )
+    fact_updates = _normalize_fact_updates(value.get("fact_updates", []))
 
     return {
         "summary": str(value.get("summary", "")).strip(),
         "familiarity_delta": _normalize_familiarity_delta(
             value.get("familiarity_delta", 0)
         ),
-        "person_facts": legacy_person_facts,
         "fact_updates": fact_updates,
         "event_updates": event_updates,
         "task_updates": normalize_review_task_updates(value.get("task_updates", [])),
@@ -1323,7 +1283,6 @@ def _maybe_batch_review_unlocked(
             result = {
                 "summary": _build_fallback_summary(batch, character_name=character_name),
                 "familiarity_delta": 0,
-                "person_facts": [],
                 "fact_updates": [],
                 "event_updates": [],
                 "task_updates": [],
@@ -1399,7 +1358,6 @@ def _maybe_batch_review_unlocked(
                 created_facts = upsert_person_facts(
                     create_facts,
                     default_subject_person_key=person_from_session(identity_session),
-                    legacy_session_id=identity_session,
                     known_people=fact_known_people,
                     context_session=context_session,
                     source_msg_start_id=batch[0]["id"],

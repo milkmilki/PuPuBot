@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
+
+from ..instance_context import get_current_instance_context
 
 _DEFAULT_CORE_PERSONA = (
     "你叫仆仆，是一个假小子女生。\n\n## 你的性格\n"
@@ -57,19 +58,16 @@ _DEFAULT_NAME = "仆仆"
 
 
 def _persona_file_path() -> Path | None:
-    raw = os.environ.get("PUPU_PERSONA_PATH")
-    if not raw:
-        return None
-    return Path(raw)
+    ctx = get_current_instance_context()
+    if ctx is not None:
+        return ctx.persona_path
+    return None
 
 
 def _instance_config_path() -> Path | None:
-    raw = os.environ.get("PUPU_CONFIG_PATH")
-    if raw:
-        return Path(raw)
-    inst = os.environ.get("PUPU_INSTANCE_DIR")
-    if inst:
-        return Path(inst) / "instance.json"
+    ctx = get_current_instance_context()
+    if ctx is not None:
+        return ctx.config_path
     return None
 
 

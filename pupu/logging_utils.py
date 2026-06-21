@@ -8,6 +8,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from .instance_context import require_current_instance_context
+
 _initialized = False
 _log_file = None
 _log_path = None
@@ -71,16 +73,8 @@ class _TeeStderr:
         return self._original.fileno()
 
 
-def _get_project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
-
-
 def _ensure_log_dir() -> Path:
-    inst = os.environ.get("PUPU_INSTANCE_DIR")
-    if inst:
-        log_dir = Path(inst) / "data" / "logs"
-    else:
-        log_dir = _get_project_root() / "data" / "logs"
+    log_dir = require_current_instance_context().logs_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 

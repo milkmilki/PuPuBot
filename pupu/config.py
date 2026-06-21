@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from .instance_context import get_current_instance_context
 from .app_config import (
     default_owner_ids,
     default_private_allowed_ids,
@@ -24,10 +25,31 @@ DEFAULT_ARBITER_SUBSCRIBE_TIMEOUT_SECONDS = 30.0
 DEFAULT_ARBITER_UNAVAILABLE_PROBE_SECONDS = 60.0
 
 
+def _safe_default_owner_ids() -> list[str]:
+    try:
+        return default_owner_ids()
+    except Exception:
+        return []
+
+
+def _safe_default_private_allowed_ids() -> list[str]:
+    try:
+        return default_private_allowed_ids()
+    except Exception:
+        return []
+
+
+def _safe_default_private_reply_mode() -> str:
+    try:
+        return default_private_reply_mode()
+    except Exception:
+        return "owner_only"
+
+
 def get_config_path() -> Path:
-    override = os.environ.get("PUPU_CONFIG_PATH")
-    if override:
-        return Path(override)
+    ctx = get_current_instance_context()
+    if ctx is not None:
+        return ctx.config_path
     return CONFIG_PATH
 
 
@@ -48,8 +70,16 @@ def load_owner_ids() -> list[str]:
     try:
         config = load_config()
     except Exception:
-        return default_owner_ids() or list(DEFAULT_OWNER_IDS)
-    return [str(value) for value in config.get("owner_ids", default_owner_ids() or DEFAULT_OWNER_IDS)]
+        return _safe_default_owner_ids() or list(DEFAULT_OWNER_IDS)
+    if "owner_ids" in config:
+        raw = config.get("owner_ids")
+    else:
+        raw = _safe_default_owner_ids() or DEFAULT_OWNER_IDS
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [str(value) for value in raw]
 
 
 def load_owner_id_set() -> set[str]:
@@ -60,8 +90,12 @@ def load_private_allowed_ids() -> list[str]:
     try:
         config = load_config()
     except Exception:
-        return default_private_allowed_ids()
-    raw = config.get("private_allowed_ids", default_private_allowed_ids())
+        return _safe_default_private_allowed_ids()
+    raw = (
+        config.get("private_allowed_ids")
+        if "private_allowed_ids" in config
+        else _safe_default_private_allowed_ids()
+    )
     if not isinstance(raw, list):
         return []
     return [str(value).strip() for value in raw if str(value).strip()]
@@ -71,8 +105,13 @@ def load_private_reply_mode() -> str:
     try:
         config = load_config()
     except Exception:
-        return default_private_reply_mode()
-    mode = str(config.get("private_reply_mode", default_private_reply_mode()) or "").strip().lower()
+        return _safe_default_private_reply_mode()
+    raw = (
+        config.get("private_reply_mode")
+        if "private_reply_mode" in config
+        else _safe_default_private_reply_mode()
+    )
+    mode = str(raw or "").strip().lower()
     return mode if mode in {"owner_only", "allowlist", "all"} else "owner_only"
 
 

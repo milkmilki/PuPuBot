@@ -323,16 +323,15 @@ def _sync_person_fact(
     before = conn.total_changes
     conn.execute(
         """INSERT INTO person_facts (
-               subject_person_key, object_person_key, scope, legacy_session_id,
+               subject_person_key, object_person_key, scope,
                fact_key, fact_value, confidence, source_context_session,
                source_msg_start_id, source_msg_end_id, created_at, updated_at
-           ) VALUES (?, '', 'person', ?, ?, ?, 1.0, '', NULL, NULL, ?, ?)
+           ) VALUES (?, '', 'person', ?, ?, 1.0, '', NULL, NULL, ?, ?)
            ON CONFLICT(subject_person_key, object_person_key, scope, fact_key)
            DO UPDATE SET
                fact_value = excluded.fact_value,
-               legacy_session_id = excluded.legacy_session_id,
                updated_at = excluded.updated_at""",
-        (subject_person_key, session_id, key, value, now, now),
+        (subject_person_key, key, value, now, now),
     )
     return max(0, conn.total_changes - before)
 

@@ -34,11 +34,9 @@ def reset_session(session_id: str):
     subject_key = person_from_session(session_id)
     conn.execute(
         """DELETE FROM person_facts
-           WHERE legacy_session_id = ?
-              OR subject_person_key = ?
+           WHERE subject_person_key = ?
               OR object_person_key = ?""",
         (
-            session_id,
             subject_key,
             subject_key,
         ),

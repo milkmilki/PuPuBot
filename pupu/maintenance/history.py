@@ -43,9 +43,9 @@ def _list_all_session_ids(conn) -> list[str]:
         rows = conn.execute(f"SELECT DISTINCT session_id FROM {table}").fetchall()
         session_ids.update(row["session_id"] for row in rows if row["session_id"])
     rows = conn.execute(
-        """SELECT DISTINCT legacy_session_id
+        """SELECT DISTINCT source_context_session AS session_id
            FROM person_facts
-           WHERE legacy_session_id != ''"""
+           WHERE source_context_session != ''"""
     ).fetchall()
-    session_ids.update(row["legacy_session_id"] for row in rows if row["legacy_session_id"])
+    session_ids.update(row["session_id"] for row in rows if row["session_id"])
     return sorted(session_ids)
