@@ -1,4 +1,4 @@
-"""Smoke test the centralized-debounce arbiter without spinning up HTTP.
+"""Smoke test the embedded centralized-debounce arbiter core.
 
 Exercises:
   1. ``observe`` deduplicates ``(group_id, message_id)`` even when multiple

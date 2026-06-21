@@ -1,28 +1,8 @@
-"""Shared group-chat speaker arbitration for multiple PuPu instances.
+"""Shared group-chat speaker arbitration for multiple PuPu actors.
 
-Two protocols are exposed by this module:
-
-NEW (preferred, server-driven debounce):
-    1. Bot instances POST every group message to ``/api/observe`` immediately.
-       The arbitrator deduplicates by ``(group_id, message_id)`` and stores the
-       message in ``group_messages`` plus an upsert into ``group_bots``.
-    2. ``arbiter_server.py`` runs a per-group debounce watchdog. When the group
-       has been quiet for the idle window, it invokes ``run_judge`` to ask
-       the LLM who should speak; the result lands in
-       ``group_decisions`` with a monotonically increasing ``decision_id``.
-    3. Bots long-poll ``/api/await_decision`` (``await_decision_async``) for the
-       next ``decision_id``. All bots in the same group receive byte-identical
-       decisions.
-    4. Admins may ``POST /api/group_silence`` (or ``/silence`` in PuPu) to force
-       ``speaker=none`` for a group until turned off.
-
-LEGACY (kept as a 30-day compatibility window):
-    The old ``arbitrate(payload)`` flow remains: each bot POSTs once, the
-    arbitrator merges concurrent requests into a single ``merge_round`` and
-    runs a single LLM call. A per-group threading lock now wraps the final
-    decision section so even legacy concurrent callers get the same answer.
-
-All persistent state lives in ``instances/_shared/arbiter.db``.
+The process-local :mod:`pupu.arbiter_runtime` observes group messages, debounces
+quiet windows, calls ``run_judge`` and wakes actor waiters directly. Persistent
+state lives in ``instances/_shared/arbiter.db``.
 """
 
 from __future__ import annotations
@@ -34,26 +14,18 @@ import re
 import sys
 import sqlite3
 import threading
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from .paths import instances_dir
 
-_DEFAULT_WAIT_SECONDS = 30.0
 _DECISION_TTL_SECONDS = 300
 
-# Orphan open-merge rows older than this are discarded (seconds, monotonic-based opened_at).
-_OPEN_MERGE_STALE_SEC = float(os.environ.get("PUPU_ARBITER_OPEN_MERGE_STALE_SEC", "300").strip() or "300")
-
-# Per-group threading lock for the decision critical section. Used by both the
-# legacy ``arbitrate`` path and the new ``run_judge`` path so the two protocols
-# can never race on ``recent_speakers`` / decision writes for the same group.
-# NOTE: Process-local only. If ``arbiter_server`` is ever run with multiple
-# uvicorn workers or as multiple OS processes, this needs to be replaced with
-# a SQLite-level advisory lock (e.g. an ``INSERT OR IGNORE`` row in a
-# ``decision_leaders`` table acting as a leader-election token).
+# Per-group threading lock for the decision critical section so two debounce
+# tasks cannot race on ``recent_speakers`` / decision writes for the same group.
+# NOTE: Process-local only. The actor runtime runs one embedded arbiter per
+# console process.
 _GROUP_LOCKS: dict[str, threading.Lock] = {}
 _GROUP_LOCKS_META = threading.Lock()
 _JUDGE_ERROR_LOG_LOCK = threading.Lock()
@@ -80,7 +52,7 @@ _GROUP_EVENTS_META = threading.Lock()
 def _ensure_group_event(group_id: str) -> asyncio.Event:
     """Return (creating if necessary) the asyncio.Event for ``group_id``.
 
-    Must be called from inside the arbiter_server's running event loop.
+    Must be called from inside the embedded arbiter runtime's running event loop.
     """
     loop = asyncio.get_running_loop()
     with _GROUP_EVENTS_META:
@@ -111,16 +83,6 @@ def _signal_group_event(group_id: str) -> None:
         pass
 
 
-def _merge_wait_seconds() -> float:
-    raw = os.environ.get("PUPU_ARBITER_MERGE_WAIT_SECONDS", "").strip()
-    if raw:
-        try:
-            return max(0.05, min(180.0, float(raw)))
-        except ValueError:
-            pass
-    return float(_DEFAULT_WAIT_SECONDS)
-
-
 def _db_path() -> Path:
     root = instances_dir() / "_shared"
     root.mkdir(parents=True, exist_ok=True)
@@ -133,44 +95,6 @@ def _connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=30000")
 
-    # ---- Legacy tables (kept for the deprecation window) -----------------
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS arbitration_requests (
-            group_id TEXT NOT NULL,
-            round_id TEXT NOT NULL,
-            bot_id TEXT NOT NULL,
-            payload TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (group_id, round_id, bot_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS decisions (
-            group_id TEXT NOT NULL,
-            round_id TEXT NOT NULL,
-            speaker TEXT NOT NULL,
-            reason TEXT NOT NULL DEFAULT '',
-            confidence REAL NOT NULL DEFAULT 0,
-            decided_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            PRIMARY KEY (group_id, round_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS arb_open_merge (
-            group_id TEXT PRIMARY KEY,
-            merge_round_id TEXT NOT NULL,
-            opened_at REAL NOT NULL
-        )
-        """
-    )
-
-    # ---- Shared state (used by both protocols) ---------------------------
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS recent_speakers (
@@ -182,7 +106,6 @@ def _connect() -> sqlite3.Connection:
         """
     )
 
-    # ---- New centralized-debounce protocol tables ------------------------
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS group_messages (
@@ -329,7 +252,7 @@ def is_group_arbitration_silenced(group_id: str) -> bool:
 
 
 def set_group_arbitration_silence(group_id: str, enabled: bool) -> dict[str, Any]:
-    """Persist per-group arbitration silence (bots call via arbiter HTTP API)."""
+    """Persist per-group arbitration silence."""
     group_id = str(group_id or "").strip()
     if not group_id:
         return {"ok": False, "error": "missing_group_id"}
@@ -547,143 +470,6 @@ def _shorten_preview(text: str, limit: int = 1200) -> str:
     return text.replace("\r", " ").replace("\n", "↵")
 
 
-# ---------------------------------------------------------------------------
-# Legacy protocol (``/api/group_arbitrate``)
-# ---------------------------------------------------------------------------
-
-
-def _effective_merge_round(conn: sqlite3.Connection, group_id: str) -> str:
-    """Assign one merge round per group until a decision is stored (legacy)."""
-    now = time.monotonic()
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        row = conn.execute(
-            "SELECT merge_round_id, opened_at FROM arb_open_merge WHERE group_id = ?",
-            (group_id,),
-        ).fetchone()
-        if row:
-            mr = str(row["merge_round_id"])
-            opened = float(row["opened_at"])
-            dec = _legacy_load_decision(conn, group_id, mr)
-            if dec is not None:
-                conn.execute("DELETE FROM arb_open_merge WHERE group_id = ?", (group_id,))
-            elif now - opened > _OPEN_MERGE_STALE_SEC:
-                conn.execute(
-                    "DELETE FROM arbitration_requests WHERE group_id = ? AND round_id = ?",
-                    (group_id, mr),
-                )
-                conn.execute("DELETE FROM arb_open_merge WHERE group_id = ?", (group_id,))
-            else:
-                conn.commit()
-                return mr
-        mr = f"merge:{group_id}:{time.time_ns()}"
-        try:
-            conn.execute(
-                "INSERT INTO arb_open_merge (group_id, merge_round_id, opened_at) VALUES (?, ?, ?)",
-                (group_id, mr, now),
-            )
-            conn.commit()
-            return mr
-        except sqlite3.IntegrityError:
-            conn.rollback()
-            conn.execute("BEGIN IMMEDIATE")
-            again = conn.execute(
-                "SELECT merge_round_id FROM arb_open_merge WHERE group_id = ?",
-                (group_id,),
-            ).fetchone()
-            if again:
-                conn.commit()
-                return str(again["merge_round_id"])
-            raise
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
-
-
-def _legacy_load_decision(conn: sqlite3.Connection, group_id: str, round_id: str) -> dict[str, Any] | None:
-    row = conn.execute(
-        """
-        SELECT speaker, reason, confidence, decided_at, expires_at
-        FROM decisions
-        WHERE group_id = ? AND round_id = ?
-        """,
-        (group_id, round_id),
-    ).fetchone()
-    if not row:
-        return None
-    try:
-        if datetime.fromisoformat(row["expires_at"]) < _now():
-            return None
-    except Exception:
-        return None
-    return dict(row)
-
-
-def _legacy_store_request(conn: sqlite3.Connection, group_id: str, round_id: str, bot_id: str, payload: dict[str, Any]) -> None:
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO arbitration_requests (group_id, round_id, bot_id, payload, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            group_id,
-            round_id,
-            bot_id,
-            json.dumps(payload, ensure_ascii=False, sort_keys=True),
-            _iso(_now()),
-        ),
-    )
-    conn.commit()
-
-
-def _legacy_load_requests(conn: sqlite3.Connection, group_id: str, round_id: str) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT payload
-        FROM arbitration_requests
-        WHERE group_id = ? AND round_id = ?
-        ORDER BY bot_id ASC
-        """,
-        (group_id, round_id),
-    ).fetchall()
-    out = []
-    for row in rows:
-        try:
-            value = json.loads(row["payload"])
-        except Exception:
-            continue
-        if isinstance(value, dict):
-            out.append(value)
-    return out
-
-
-def _candidate_map(requests: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-    candidates: dict[str, dict[str, str]] = {}
-    for payload in requests:
-        bot_id = str(payload.get("my_bot_id") or "").strip()
-        if bot_id:
-            candidates[bot_id] = {
-                "bot_id": bot_id,
-                "name": str(payload.get("my_name") or bot_id).strip(),
-                "qq": str(payload.get("my_qq") or "").strip(),
-                "persona_brief": str(payload.get("my_persona_brief") or "").strip(),
-            }
-        peer = payload.get("peer") or {}
-        if isinstance(peer, dict):
-            peer_id = str(peer.get("bot_id") or "").strip()
-            if peer_id and peer_id not in candidates:
-                candidates[peer_id] = {
-                    "bot_id": peer_id,
-                    "name": str(peer.get("name") or peer_id).strip(),
-                    "qq": str(peer.get("qq") or "").strip(),
-                    "persona_brief": str(peer.get("persona_brief") or "").strip(),
-                }
-    return candidates
-
-
 def _explicit_at_speaker(targets: set[str], candidates: dict[str, dict[str, str]]) -> str | None:
     for bot_id, candidate in candidates.items():
         if candidate.get("qq") and candidate["qq"] in targets:
@@ -691,228 +477,8 @@ def _explicit_at_speaker(targets: set[str], candidates: dict[str, dict[str, str]
     return None
 
 
-def _legacy_store_decision(
-    conn: sqlite3.Connection,
-    group_id: str,
-    round_id: str,
-    speaker: str,
-    reason: str,
-    confidence: float,
-    *,
-    audit: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    now = _now()
-    expires = now + timedelta(seconds=_DECISION_TTL_SECONDS)
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO decisions (group_id, round_id, speaker, reason, confidence, decided_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (group_id, round_id, speaker, reason, confidence, _iso(now), _iso(expires)),
-    )
-    conn.execute("DELETE FROM arb_open_merge WHERE group_id = ?", (group_id,))
-    _bump_recent_speaker(conn, group_id, speaker)
-    conn.commit()
-    if audit:
-        _append_audit_record(
-            group_id=group_id,
-            round_id=round_id,
-            speaker=speaker,
-            reason=reason,
-            confidence=confidence,
-            requesting_bot=str(audit.get("requesting_bot") or ""),
-            candidates=str(audit.get("candidates") or ""),
-            source=str(audit.get("source") or "decision"),
-            context_preview=str(audit.get("context_preview") or ""),
-        )
-    return {
-        "speaker": speaker,
-        "reason": reason,
-        "confidence": confidence,
-        "decided_at": _iso(now),
-        "expires_at": _iso(expires),
-    }
-
-
-def _audit_cached_decision(
-    group_id: str,
-    round_id: str,
-    requesting_bot: str,
-    existing: dict[str, Any],
-    payload: dict[str, Any],
-) -> None:
-    if not _audit_enabled():
-        return
-    preview = ""
-    if isinstance(payload, dict):
-        preview = _shorten_preview(str(payload.get("recent_context") or ""))
-    _append_audit_record(
-        group_id=group_id,
-        round_id=round_id,
-        speaker=str(existing.get("speaker") or ""),
-        reason=str(existing.get("reason") or ""),
-        confidence=float(existing.get("confidence") or 0.0),
-        requesting_bot=requesting_bot,
-        candidates="",
-        source="cached_decision",
-        context_preview=preview,
-    )
-
-
-def arbitrate(payload: dict[str, Any]) -> dict[str, Any]:
-    """Legacy single-call arbitration. Kept for ``/api/group_arbitrate``.
-
-    Now wraps the final decision section in ``_group_lock(group_id)`` so two
-    concurrent legacy callers in the same merge round can no longer each fire
-    their own LLM call.
-    """
-    group_id = str(payload.get("group_id") or "").strip()
-    bot_id = str(payload.get("my_bot_id") or "").strip()
-    if not group_id or not bot_id:
-        if _audit_enabled():
-            preview = _shorten_preview(str(payload.get("recent_context") or ""), 800)
-            _append_audit_record(
-                group_id=group_id,
-                round_id=str(payload.get("round_id") or ""),
-                speaker="none",
-                reason="missing_group_or_bot",
-                confidence=0.0,
-                requesting_bot=bot_id,
-                candidates="",
-                source="reject_payload",
-                context_preview=preview,
-            )
-        return {"speaker": "none", "reason": "missing_group_or_bot", "confidence": 0.0}
-
-    min_gap = float(payload.get("min_bot_gap_seconds") or 10)
-    _raw_maxc = payload.get("max_consecutive_bot_turns")
-    try:
-        max_consecutive = int(_raw_maxc) if _raw_maxc is not None else 0
-    except (TypeError, ValueError):
-        max_consecutive = 0
-    max_consecutive = max(0, min(99, max_consecutive))
-
-    conn = _connect()
-    try:
-        merge_round = _effective_merge_round(conn, group_id)
-        existing = _legacy_load_decision(conn, group_id, merge_round)
-        if existing:
-            _audit_cached_decision(group_id, merge_round, bot_id, existing, payload)
-            return existing
-        _legacy_store_request(conn, group_id, merge_round, bot_id, payload)
-    finally:
-        conn.close()
-
-    deadline = time.monotonic() + _merge_wait_seconds()
-    while time.monotonic() < deadline:
-        time.sleep(0.05)
-        conn = _connect()
-        try:
-            existing = _legacy_load_decision(conn, group_id, merge_round)
-            if existing:
-                _audit_cached_decision(group_id, merge_round, bot_id, existing, payload)
-                return existing
-            requests = _legacy_load_requests(conn, group_id, merge_round)
-            if len(_candidate_map(requests)) >= 2:
-                break
-        finally:
-            conn.close()
-
-    # Critical section: ensure exactly one LLM call + one decision write per
-    # merge_round, even when multiple legacy callers race here in parallel.
-    with _group_lock(group_id):
-        conn = _connect()
-        try:
-            existing = _legacy_load_decision(conn, group_id, merge_round)
-            if existing:
-                _audit_cached_decision(group_id, merge_round, bot_id, existing, payload)
-                return existing
-            requests = _legacy_load_requests(conn, group_id, merge_round)
-            candidates = _candidate_map(requests)
-            state = _recent_state(conn, group_id)
-
-            best_context = ""
-            target_set: set[str] = set()
-            for p in requests:
-                c = str(p.get("recent_context") or "")
-                if len(c) > len(best_context):
-                    best_context = c
-                for target in p.get("at_targets") or []:
-                    raw = str(target or "").strip()
-                    if raw:
-                        target_set.add(raw)
-                target_set.update(re.findall(r"@(\d{5,})", c))
-            preview = _shorten_preview(best_context)
-            cand_str = ",".join(sorted(candidates.keys()))
-            base_audit = {"requesting_bot": bot_id, "candidates": cand_str, "context_preview": preview}
-
-            if _group_silence_enabled(conn, group_id):
-                return _legacy_store_decision(
-                    conn,
-                    group_id,
-                    merge_round,
-                    "none",
-                    "silence_command",
-                    1.0,
-                    audit={**base_audit, "source": "silence_command"},
-                )
-
-            explicit = _explicit_at_speaker(target_set, candidates)
-            if explicit:
-                return _legacy_store_decision(
-                    conn,
-                    group_id,
-                    merge_round,
-                    explicit,
-                    "explicit_at",
-                    1.0,
-                    audit={**base_audit, "source": "explicit_at"},
-                )
-
-            if _cooldown_blocks(state, min_gap):
-                return _legacy_store_decision(
-                    conn,
-                    group_id,
-                    merge_round,
-                    "none",
-                    "min_gap",
-                    1.0,
-                    audit={**base_audit, "source": "min_gap"},
-                )
-
-            if max_consecutive > 0 and int(state.get("consecutive_bot_turns") or 0) >= max_consecutive:
-                return _legacy_store_decision(
-                    conn,
-                    group_id,
-                    merge_round,
-                    "none",
-                    "max_consecutive",
-                    1.0,
-                    audit={**base_audit, "source": "max_consecutive"},
-                )
-
-            speaker, reason, confidence = _llm_decide(best_context, candidates, state)
-            if speaker != "none":
-                adjusted = _avoid_low_confidence_repeat(speaker, confidence, candidates, state)
-                if adjusted != speaker:
-                    speaker = adjusted
-                    reason = "avoid_low_confidence_repeat"
-                    confidence = max(confidence, 0.55)
-            return _legacy_store_decision(
-                conn,
-                group_id,
-                merge_round,
-                speaker,
-                reason,
-                confidence,
-                audit={**base_audit, "source": "llm"},
-            )
-        finally:
-            conn.close()
-
-
 # ---------------------------------------------------------------------------
-# New centralized-debounce protocol
+# Current centralized-debounce protocol
 # ---------------------------------------------------------------------------
 
 
@@ -1156,7 +722,7 @@ def _build_recent_context(messages: list[dict[str, Any]]) -> tuple[str, set[str]
 def run_judge(group_id: str, *, source: str = "scheduled") -> dict[str, Any] | None:
     """Run the judge for ``group_id`` exactly once and persist the decision.
 
-    Called from arbiter_server.py's debounce watchdog (via ``asyncio.to_thread``).
+    Called from the embedded debounce runtime (via ``asyncio.to_thread``).
     Returns the new decision dict, or ``None`` if there was nothing to judge
     (no messages observed yet, or no candidate bots registered).
     """
@@ -1280,7 +846,7 @@ async def await_decision_async(group_id: str, since: int, timeout: float) -> dic
     """Long-poll for the next decision with ``decision_id > since``.
 
     Returns the decision dict, or ``None`` on timeout. Safe to call from the
-    arbiter_server's event loop.
+    embedded arbiter runtime's event loop.
     """
     group_id = str(group_id or "").strip()
     if not group_id:

@@ -24,7 +24,18 @@ _ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 # Removed from product; strip if still present in older files.
 _DEPRECATED_INSTANCE_KEYS = frozenset(
-    {"mode", "persona_enabled", "llm", "qq_app_id", "qq_app_secret"}
+    {
+        "mode",
+        "persona_enabled",
+        "llm",
+        "qq_app_id",
+        "qq_app_secret",
+        "arbiter_url",
+        "arbiter_base_url",
+        "arbiter_timeout_seconds",
+        "arbiter_subscribe_timeout_seconds",
+        "arbiter_unavailable_probe_seconds",
+    }
 )
 
 DEFAULT_TOOL_SERVERS: dict[str, dict[str, bool]] = {
@@ -35,7 +46,6 @@ DEFAULT_TOOL_SERVERS: dict[str, dict[str, bool]] = {
     "scheduler": {"enabled": True},
 }
 
-DEFAULT_ARBITER_URL = "http://127.0.0.1:18079/api/group_arbitrate"
 DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 35.0
 
 
@@ -90,9 +100,6 @@ def _normalize_instance_config(cfg: dict[str, Any]) -> None:
     cfg["bot_id"] = str(cfg.get("bot_id") or "").strip()
 
     cfg["proactive_enabled"] = bool(cfg.get("proactive_enabled", True))
-
-    cfg.setdefault("arbiter_url", DEFAULT_ARBITER_URL)
-    cfg["arbiter_url"] = str(cfg.get("arbiter_url") or DEFAULT_ARBITER_URL).strip()
 
     cfg.setdefault("peer", {})
     if not isinstance(cfg["peer"], dict):
@@ -214,8 +221,6 @@ def create_instance(
         "open_groups": [],
         "bot_id": instance_id,
         "proactive_enabled": True,
-        "arbiter_url": defaults.get("arbiter_url") or DEFAULT_ARBITER_URL,
-        "arbiter_base_url": defaults.get("arbiter_base_url"),
         "peer": {
             "bot_id": "",
             "name": "",

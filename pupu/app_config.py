@@ -253,12 +253,6 @@ def apply_app_config_env(
         "llm.codex_cli.no_proxy": "PUPU_CODEX_NO_PROXY",
         "console.host": "PUPU_CONSOLE_HOST",
         "console.port": "PUPU_CONSOLE_PORT",
-        "arbiter.host": "PUPU_ARBITER_HOST",
-        "arbiter.port": "PUPU_ARBITER_PORT",
-        "arbiter.debounce_idle_seconds": "PUPU_ARBITER_DEBOUNCE_IDLE_SEC",
-        "arbiter.await_max_timeout_seconds": "PUPU_ARBITER_AWAIT_MAX_TIMEOUT_SEC",
-        "arbiter.subscribe_timeout_seconds": "PUPU_ARBITER_SUBSCRIBE_TIMEOUT_SEC",
-        "arbiter.timeout_seconds": "PUPU_ARBITER_TIMEOUT",
         "arbiter.audit": "PUPU_ARBITER_AUDIT",
         "memu.enabled": "PUPU_MEMU_ENABLED",
         "memu.api_key": "PUPU_MEMU_API_KEY",
@@ -344,8 +338,6 @@ def default_napcat_settings(config: dict[str, Any] | None = None) -> dict[str, A
 def default_instance_settings(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config if config is not None else load_app_config()
     napcat = default_napcat_settings(cfg)
-    arbiter_host = str(_lookup(cfg, "arbiter.host") or "127.0.0.1").strip() or "127.0.0.1"
-    arbiter_port = _as_int(_lookup(cfg, "arbiter.port"), 18079)
     qq_mode = str(_lookup(cfg, "instance.qq_mode") or "cli").strip().lower() or "cli"
     if qq_mode not in {"cli", "napcat"}:
         qq_mode = "cli"
@@ -356,7 +348,5 @@ def default_instance_settings(config: dict[str, Any] | None = None) -> dict[str,
         "private_reply_mode": default_private_reply_mode(cfg),
         "private_allowed_ids": default_private_allowed_ids(cfg),
         "port": napcat["port"],
-        "arbiter_url": f"http://{arbiter_host}:{arbiter_port}/api/group_arbitrate",
-        "arbiter_base_url": f"http://{arbiter_host}:{arbiter_port}",
         "debounce_seconds_open_group": float(_lookup(cfg, "instance.debounce_seconds_open_group") or 35.0),
     }

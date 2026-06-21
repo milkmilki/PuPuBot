@@ -156,26 +156,24 @@ Facts 的写入前候选召回会优先用 memU 的 `person_fact` card 做语义
 
 ## 开放群对话逻辑
 
-PuPuBot 支持多个实例同时待在同一个开放群里。为了避免两个 bot 抢话，每个实例收到群消息后不会立刻回复，而是先把消息放入本地 buffer，并把观察结果交给共享仲裁服务。仲裁服务按群上下文判断本轮应该由哪个 bot 接话；只有被选中的实例才会合并 buffer 内容并生成回复。
+PuPuBot 支持多个实例同时待在同一个开放群里。为了避免两个 bot 抢话，每个实例收到群消息后不会立刻回复，而是先把消息放入本地 buffer，并把观察结果交给控制台进程内的内嵌仲裁 runtime。仲裁 runtime 按群上下文判断本轮应该由哪个 bot 接话；只有被选中的实例才会合并 buffer 内容并生成回复。
 
 开放群的关键状态：
 
 - `msg_buffers["group_<群号>"]`：当前群里已经收到、但还没有生成回复的一批消息。`/silence on` 会清掉这个 buffer，避免开静默后漏出旧回复。
-- `arbiter_decision_subscriber`：每个开放群一个后台监听任务，负责等待仲裁服务返回新的 speaker 决策。
-- 本地静默：`/silence on` 后实例本地直接停止接话，并停止连接仲裁服务；`/silence off` 后才恢复连接。
-- 仲裁降噪：如果没有开本地静默，但仲裁服务不可用，实例会连续失败 3 次后进入低频探测，不再每条消息刷连接错误；恢复时只打印一次 recovered。
+- `arbiter_decision_subscriber`：每个开放群一个后台监听任务，负责等待内嵌仲裁 runtime 返回新的 speaker 决策。
+- 群静默：`/silence on` 后会清掉该群待回复 buffer，取消该群 subscriber，并把静默状态写入 `instances/_shared/arbiter.db`；`/silence off` 后恢复仲裁和接话。
 
 ```mermaid
 flowchart TD
     A["开放群收到消息"] --> B{"消息以 / 开头？"}
     B -- "是" --> C["交给命令系统<br/>不进入聊天 buffer"]
     B -- "否" --> D{"本群本地 silence on？"}
-    D -- "是" --> E["直接忽略聊天回复路径<br/>不连接仲裁服务"]
+    D -- "是" --> E["直接忽略聊天回复路径"]
     D -- "否" --> F["写入本地 msg buffer<br/>保留 speaker/QQ/person 信息"]
-    F --> G{"仲裁服务可用？"}
-    G -- "可用" --> H["POST /api/observe<br/>上报本轮群消息"]
-    H --> I["arbiter_decision_subscriber<br/>GET /api/await_decision"]
-    I --> J["仲裁服务返回 speaker"]
+    F --> H["内嵌 runtime observe<br/>写入共享 arbiter.db"]
+    H --> I["等待本群安静窗口<br/>run_judge"]
+    I --> J["runtime 唤醒 subscriber<br/>返回 speaker"]
     J --> K{"speaker 是当前实例？"}
     K -- "否" --> L["只记录决策<br/>继续等待"]
     K -- "是" --> M{"发送前仍然允许说话？"}
@@ -185,25 +183,18 @@ flowchart TD
     P --> Q{"发送前二次检查 silence？"}
     Q -- "已静默" --> N
     Q -- "未静默" --> R["发送到群聊"]
-    R --> S["把 bot 自己的回复 observe 回仲裁器<br/>供下一轮判断"]
-    G -- "不可用" --> T["记录失败次数"]
-    T --> U{"连续失败 >= 3？"}
-    U -- "否" --> V["短间隔重试"]
-    U -- "是" --> W["进入 unavailable<br/>每 60 秒低频探测"]
-    W --> X{"探测恢复？"}
-    X -- "否" --> W
-    X -- "是" --> Y["打印 recovered<br/>恢复 observe/subscriber"]
+    R --> S["把 bot 自己的回复 observe 回 runtime<br/>供下一轮判断"]
 ```
 
 `/silence` 的语义是按群生效：
 
 | 命令 | 行为 |
 | --- | --- |
-| `/silence on` | 本群本地静默，清空待回复 buffer，取消该群 subscriber，不再连接仲裁服务，也不会接话。仲裁服务可用时会同步写入远端静默状态；不可用时本地仍立即生效。 |
-| `/silence off` | 关闭本地静默，允许后续群消息重新连接仲裁服务并恢复正常接话。 |
-| `/silence` | 查看本群静默状态。仲裁服务不可用时仍会显示本地状态。 |
+| `/silence on` | 本群静默，清空待回复 buffer，取消该群 subscriber，并持久化为 `speaker=none`。 |
+| `/silence off` | 关闭本群静默，允许后续群消息继续由内嵌 runtime 仲裁并正常接话。 |
+| `/silence` | 查看本群静默状态。 |
 
-本地静默是运行时状态，实例重启后不会自动继承；如果 `/silence on` 时仲裁服务可用，仲裁器自己的 SQLite 状态会持久化并继续返回 `speaker=none`。如果希望仲裁服务关闭时设置的本地静默也跨重启保留，可以把这部分状态持久化到 `instances/_shared`，这目前还不是默认行为。
+静默状态保存在 `instances/_shared/arbiter.db`，重启控制台后仍会继承。
 
 ## 快速开始
 

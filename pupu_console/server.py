@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -13,9 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from pupu.arbiter_runtime import get_shared_arbiter_runtime
 from pupu.app_config import apply_app_config_env, default_instance_settings
+from pupu.shared_runtime import async_shutdown_shared_runtime
 
-from . import arbitrator, instance_store, souls_store
+from . import instance_store, souls_store
 from .paths import instances_dir
 from .process_manager import ProcessManager
 
@@ -28,6 +29,7 @@ async def _lifespan(_: FastAPI):
     pm.set_event_loop(asyncio.get_running_loop())
     yield
     pm.stop_all()
+    await async_shutdown_shared_runtime()
     pm.set_event_loop(None)
 
 
@@ -42,58 +44,17 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
-def _arbiter_http_base() -> str:
-    try:
-        p = instances_dir() / "_shared" / "arbiter_server.json"
-        if p.is_file():
-            j = json.loads(p.read_text(encoding="utf-8"))
-            h = str(j.get("host") or "127.0.0.1").strip() or "127.0.0.1"
-            port = int(j.get("port") or 18079)
-            return f"http://{h}:{port}"
-    except Exception:
-        pass
-    return "http://127.0.0.1:18079"
-
-
 @app.get("/api/arbiter")
 def api_arbiter_get() -> dict[str, Any]:
-    st = pm.arbiter_status()
-    base = _arbiter_http_base()
+    st = get_shared_arbiter_runtime().status()
     return {
-        "running": st.get("running", False),
+        "running": True,
         "pid": st.get("pid"),
-        "exit_code": st.get("exit_code"),
-        "bind": base,
-        "health_url": f"{base}/health",
-        "arbitrate_url": f"{base}/api/group_arbitrate",
-        "audit_log": str(instances_dir() / "_shared" / "arbiter_audit.log"),
-        "console_log": str(instances_dir() / "_shared" / "arbiter_console.log"),
+        "runtime": "embedded",
+        "pending_groups": st.get("pending_groups", []),
+        "audit_log": st.get("audit_log") or str(instances_dir() / "_shared" / "arbiter_audit.log"),
+        "db_path": st.get("db_path") or str(instances_dir() / "_shared" / "arbiter.db"),
     }
-
-
-@app.post("/api/arbiter/start")
-def api_arbiter_start() -> dict[str, Any]:
-    try:
-        pid = pm.start_arbiter()
-    except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    st = pm.arbiter_status()
-    base = _arbiter_http_base()
-    return {"pid": pid, "bind": base, "health_url": f"{base}/health", **st}
-
-
-@app.post("/api/arbiter/stop")
-def api_arbiter_stop() -> dict[str, Any]:
-    pm.stop_arbiter()
-    st = pm.arbiter_status()
-    base = _arbiter_http_base()
-    return {"bind": base, **st}
-
-
-@app.get("/api/arbiter/logs")
-def api_arbiter_logs(tail: int = 200) -> dict[str, str]:
-    text = pm.tail_arbiter_log(n=max(1, min(tail, 5000)))
-    return {"text": text}
 
 
 @app.get("/")
@@ -396,11 +357,6 @@ def api_delete_soul(slug: str) -> dict[str, str]:
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return {"ok": "true"}
-
-
-@app.post("/api/group_arbitrate")
-async def api_group_arbitrate(body: dict[str, Any]) -> dict[str, Any]:
-    return await asyncio.to_thread(arbitrator.arbitrate, body)
 
 
 @app.websocket("/ws/instances/{instance_id}/console")

@@ -4,21 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-import subprocess
-import sys
 import threading
 from collections import defaultdict
-from pathlib import Path
 
 from pupu.actor import InstanceActor
 from pupu.app_config import apply_app_config_env, ensure_app_config_file
 
 from . import instance_store
-from .paths import get_repo_root, instances_dir
-
-
-def _win_no_window_flags() -> int:
-    return getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 
 class ProcessManager:
@@ -26,7 +18,6 @@ class ProcessManager:
         self._lock = threading.Lock()
         self._actors: dict[str, InstanceActor] = {}
         self._actor_tasks: dict[str, asyncio.Future] = {}
-        self._arbiter_proc: subprocess.Popen[str] | None = None
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._queues: dict[str, list[asyncio.Queue[str]]] = defaultdict(list)
 
@@ -60,95 +51,6 @@ class ProcessManager:
         except Exception:
             pass
         self._emit_line(instance_id, text)
-
-    def _arbiter_stdout_reader(self, proc: subprocess.Popen[str], log_path: Path) -> None:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        if proc.stdout is None:
-            return
-        with log_path.open("a", encoding="utf-8", buffering=1) as log_f:
-            for line in iter(proc.stdout.readline, ""):
-                if not line:
-                    break
-                log_f.write(line)
-                log_f.flush()
-        try:
-            proc.stdout.close()
-        except Exception:
-            pass
-
-    def start_arbiter(self) -> int:
-        """Run ``python -m pupu_console.arbiter_server`` (repo root cwd)."""
-        with self._lock:
-            if self._arbiter_proc is not None and self._arbiter_proc.poll() is None:
-                raise RuntimeError("arbiter service is already running")
-            ensure_app_config_file()
-            apply_app_config_env()
-            env = os.environ.copy()
-            env.setdefault("PYTHONIOENCODING", "utf-8")
-            if sys.platform == "win32":
-                env.setdefault("PYTHONUTF8", "1")
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "pupu_console.arbiter_server"],
-                cwd=str(get_repo_root()),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                creationflags=_win_no_window_flags(),
-            )
-            self._arbiter_proc = proc
-            log_path = instances_dir() / "_shared" / "arbiter_console.log"
-            threading.Thread(
-                target=self._arbiter_stdout_reader,
-                args=(proc, log_path),
-                daemon=True,
-            ).start()
-            return proc.pid or 0
-
-    def stop_arbiter(self, *, wait_s: float = 12.0) -> None:
-        with self._lock:
-            proc = self._arbiter_proc
-            self._arbiter_proc = None
-        if proc is None or proc.poll() is not None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=wait_s)
-        except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except OSError:
-                pass
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                if sys.platform == "win32" and proc.pid:
-                    subprocess.run(
-                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                        capture_output=True,
-                        creationflags=_win_no_window_flags(),
-                        timeout=30,
-                    )
-
-    def arbiter_status(self) -> dict[str, object]:
-        with self._lock:
-            proc = self._arbiter_proc
-        if proc is None:
-            return {"running": False, "pid": None}
-        code = proc.poll()
-        if code is None:
-            return {"running": True, "pid": proc.pid}
-        self._arbiter_proc = None
-        return {"running": False, "pid": None, "exit_code": code}
-
-    def tail_arbiter_log(self, n: int = 200) -> str:
-        path = instances_dir() / "_shared" / "arbiter_console.log"
-        if not path.is_file():
-            return ""
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        return "\n".join(lines[-n:])
 
     def start(self, instance_id: str) -> int:
         loop = self._main_loop
@@ -202,7 +104,6 @@ class ProcessManager:
                 pass
 
     def stop_all(self) -> None:
-        self.stop_arbiter()
         with self._lock:
             actor_ids = list(self._actors.keys())
         for iid in actor_ids:

@@ -8,18 +8,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-import httpx
-
 from pupu.agent import _format_turn_timestamp, chat
 from pupu.config import (
-    load_arbiter_base_url,
-    load_arbiter_subscribe_timeout_seconds,
-    load_arbiter_timeout_seconds,
-    load_arbiter_unavailable_probe_seconds,
     load_bot_id,
     load_max_consecutive_bot_turns,
     load_open_group_debounce_seconds,
 )
+from pupu.arbiter_runtime import get_shared_arbiter_runtime
 from pupu.dialogue_loop import cancel_wait_timer, is_followup_eligible, register_sender
 from pupu.instance_context import activate_instance_context
 from pupu.memory import save_message_with_speaker
@@ -47,7 +42,7 @@ def _with_turn_timestamp(text: str) -> str:
     value = str(text or "").strip()
     if not value:
         return value
-    if value.startswith("[时间:") or value.startswith("[鏃堕棿:"):
+    if value.startswith("[时间:"):
         return value
     return f"[时间: {_format_turn_timestamp()}] {value}"
 
@@ -133,10 +128,6 @@ class MessageBuffer:
         self._session_phase: dict[str, str] = {}
         self._arbiter_subscribers: dict[str, asyncio.Task] = {}
         self._arbiter_last_decision_id: dict[str, int] = {}
-        self._arbiter_failure_count: dict[str, int] = {}
-        self._arbiter_unavailable: dict[str, bool] = {}
-        self._arbiter_next_probe_at: dict[str, float] = {}
-        self._local_silenced_groups: set[str] = set()
 
     async def stop(self) -> None:
         tasks = [
@@ -153,30 +144,28 @@ class MessageBuffer:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     def is_group_silenced(self, group_id: str) -> bool:
-        return str(group_id or "").strip() in self._local_silenced_groups
+        group_id = str(group_id or "").strip()
+        if not group_id:
+            return False
+        return get_shared_arbiter_runtime().is_silenced(group_id)
 
     def set_group_silence(self, group_id: str, enabled: bool) -> None:
         group_id = str(group_id or "").strip()
         if not group_id:
             return
         sid = f"group_{group_id}"
+        result = get_shared_arbiter_runtime().set_silence(group_id, enabled)
         if enabled:
-            self._local_silenced_groups.add(group_id)
             task = self._arbiter_subscribers.pop(group_id, None)
             if task and not task.done():
                 task.cancel()
             self._buffers.pop(sid, None)
             self._session_phase.pop(sid, None)
-            self._arbiter_failure_count.pop(group_id, None)
-            self._arbiter_unavailable.pop(group_id, None)
-            self._arbiter_next_probe_at.pop(group_id, None)
-            self._log(f"[pupu][arbiter] local silence on group={group_id}; subscriber stopped")
+            self._log(f"[pupu][arbiter] silence on group={group_id}; subscriber stopped")
         else:
-            self._local_silenced_groups.discard(group_id)
-            self._arbiter_unavailable.pop(group_id, None)
-            self._arbiter_next_probe_at.pop(group_id, None)
-            self._arbiter_failure_count.pop(group_id, None)
-            self._log(f"[pupu][arbiter] local silence off group={group_id}; arbiter reconnect allowed")
+            self._log(f"[pupu][arbiter] silence off group={group_id}; embedded arbiter active")
+        if not result.get("ok"):
+            self._log(f"[pupu][arbiter] silence update failed group={group_id}: {result}")
 
     async def handle(self, message: ActorInboundMessage, *, is_open_group: bool = False) -> None:
         if await self._handle_command(message):
@@ -323,60 +312,17 @@ class MessageBuffer:
         if buf.is_open_group:
             await self._post_self_reply_observe(message, reply)
 
-    def _arbiter_observe_url(self) -> str:
-        return f"{load_arbiter_base_url().rstrip('/')}/api/observe"
-
-    def _arbiter_await_url(self) -> str:
-        return f"{load_arbiter_base_url().rstrip('/')}/api/await_decision"
-
-    def _arbiter_can_probe(self, group_id: str) -> bool:
-        if self.is_group_silenced(group_id):
-            return False
-        if not self._arbiter_unavailable.get(group_id):
-            return True
-        return time.monotonic() >= float(self._arbiter_next_probe_at.get(group_id, 0.0))
-
-    def _mark_arbiter_success(self, group_id: str) -> None:
-        was_unavailable = bool(self._arbiter_unavailable.get(group_id))
-        self._arbiter_failure_count[group_id] = 0
-        self._arbiter_next_probe_at.pop(group_id, None)
-        if was_unavailable:
-            self._arbiter_unavailable[group_id] = False
-            self._log(f"[pupu][arbiter] recovered group={group_id}")
-
-    def _mark_arbiter_failure(self, group_id: str, *, where: str, exc: Exception) -> float:
-        count = int(self._arbiter_failure_count.get(group_id, 0)) + 1
-        self._arbiter_failure_count[group_id] = count
-        probe_seconds = load_arbiter_unavailable_probe_seconds()
-        if count >= 3:
-            self._arbiter_next_probe_at[group_id] = time.monotonic() + probe_seconds
-            if not self._arbiter_unavailable.get(group_id):
-                self._arbiter_unavailable[group_id] = True
-                self._log(
-                    f"[pupu][arbiter] unavailable group={group_id} after={count} "
-                    f"where={where} err={type(exc).__name__}: {exc}; "
-                    f"retry_every={probe_seconds:.0f}s"
-                )
-            return probe_seconds
-        self._log(
-            f"[pupu][arbiter] {where} error group={group_id} "
-            f"attempt={count}/3 err={type(exc).__name__}: {exc}"
-        )
-        return 0.0
-
     async def _post_observe(self, payload: dict) -> dict | None:
         group_id = str(payload.get("group_id") or "")
-        if self.is_group_silenced(group_id) or not self._arbiter_can_probe(group_id):
+        if self.is_group_silenced(group_id):
             return None
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(self._arbiter_observe_url(), json=payload)
-                response.raise_for_status()
-                data = response.json()
-            self._mark_arbiter_success(group_id)
-            return data if isinstance(data, dict) else None
+            return await get_shared_arbiter_runtime().observe(
+                payload,
+                debounce_seconds=load_open_group_debounce_seconds(),
+            )
         except Exception as exc:
-            self._mark_arbiter_failure(group_id, where="observe", exc=exc)
+            self._log(f"[pupu][arbiter] observe error group={group_id} err={type(exc).__name__}: {exc}")
             return None
 
     def _bot_id(self) -> str:
@@ -441,26 +387,18 @@ class MessageBuffer:
 
     async def _arbiter_decision_subscriber(self, group_id: str, sid: str) -> None:
         bot_id = self._bot_id()
-        timeout_sec = load_arbiter_subscribe_timeout_seconds()
-        backoff = 1.0
+        timeout_sec = min(120.0, max(1.0, load_open_group_debounce_seconds()))
         while True:
             if self.is_group_silenced(group_id):
                 return
             try:
                 since = int(self._arbiter_last_decision_id.get(group_id, 0))
-                params = {
-                    "group_id": group_id,
-                    "since": str(since),
-                    "timeout": str(timeout_sec),
-                }
-                async with httpx.AsyncClient(timeout=timeout_sec + 10.0) as client:
-                    response = await client.get(self._arbiter_await_url(), params=params)
-                    response.raise_for_status()
-                    body = response.json()
-                self._mark_arbiter_success(group_id)
-                decision = (body or {}).get("decision")
+                decision = await get_shared_arbiter_runtime().await_decision(
+                    group_id,
+                    since,
+                    timeout=timeout_sec,
+                )
                 if not decision:
-                    backoff = 1.0
                     continue
                 decision_id = int(decision.get("decision_id") or 0)
                 speaker = str(decision.get("speaker") or "none")
@@ -472,7 +410,6 @@ class MessageBuffer:
                     f"speaker={speaker} reason={reason} conf={confidence:.2f}"
                 )
                 self._arbiter_last_decision_id[group_id] = decision_id
-                backoff = 1.0
                 if speaker != bot_id:
                     continue
                 if self._session_phase.get(sid) == "processing":
@@ -484,12 +421,11 @@ class MessageBuffer:
             except asyncio.CancelledError:
                 return
             except Exception as exc:
-                probe_sleep = self._mark_arbiter_failure(group_id, where="subscriber", exc=exc)
+                self._log(f"[pupu][arbiter] subscriber error group={group_id} err={type(exc).__name__}: {exc}")
                 try:
-                    await asyncio.sleep(probe_sleep if probe_sleep > 0 else min(backoff, 15.0))
+                    await asyncio.sleep(5.0)
                 except asyncio.CancelledError:
                     return
-                backoff = 1.0 if probe_sleep > 0 else min(backoff * 2.0, 15.0)
 
     async def act_as_selected_speaker(self, sid: str) -> None:
         buf = self._buffers.get(sid)

@@ -1,10 +1,4 @@
-"""Process-local shared runtimes for tools and memU.
-
-This is the middle step before a future single-process actor runtime: current
-instances still run as independent processes, while tool and memU objects inside
-one process are managed through explicit runtime caches instead of ad-hoc module
-globals.
-"""
+"""Process-local shared runtimes for tools, memU, and open-group arbitration."""
 
 from __future__ import annotations
 
@@ -118,13 +112,37 @@ def get_shared_memu_runtime() -> SharedMemuRuntime:
 
 
 def shutdown_shared_runtime() -> None:
+    try:
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(async_shutdown_shared_runtime())
+            return
+        if loop.is_running():
+            loop.create_task(async_shutdown_shared_runtime())
+        else:
+            loop.run_until_complete(async_shutdown_shared_runtime())
+    except Exception:
+        pass
+
+
+async def async_shutdown_shared_runtime() -> None:
     _TOOL_RUNTIME.shutdown_external_mcp_servers()
     _MEMU_RUNTIME.clear()
+    try:
+        from .arbiter_runtime import close_shared_arbiter_runtime
+
+        await close_shared_arbiter_runtime()
+    except Exception:
+        pass
 
 
 __all__ = [
     "SharedMemuRuntime",
     "SharedToolRuntime",
+    "async_shutdown_shared_runtime",
     "get_shared_memu_runtime",
     "get_shared_tool_runtime",
     "shutdown_shared_runtime",

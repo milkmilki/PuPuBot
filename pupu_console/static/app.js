@@ -4,7 +4,6 @@ const $ = (sel) => document.querySelector(sel);
 
 let selectedId = null;
 let logTimer = null;
-let arbiterTimer = null;
 let ws = null;
 
 async function api(path, opts = {}) {
@@ -38,31 +37,15 @@ async function loadSoulsIntoSelect() {
 async function refreshArbiter() {
   const dot = $("#arbiter-dot");
   const detail = $("#arbiter-detail");
-  const btnS = $("#btn-arbiter-start");
-  const btnP = $("#btn-arbiter-stop");
-  const openL = $("#arbiter-open");
-  if (!dot || !detail || !btnS || !btnP) return;
+  if (!dot || !detail) return;
   try {
     const a = await api("/api/arbiter");
-    const bind = String(a.bind || "").trim();
-    dot.className = "dot " + (a.running ? "on" : "off");
-    if (a.running) {
-      const pidPart = a.pid != null ? `pid=${a.pid} · ` : "";
-      detail.textContent = `运行中 · ${pidPart}${bind || "—"}`;
-      if (openL && bind) {
-        openL.hidden = false;
-        const base = bind.replace(/\/$/, "");
-        openL.href = `${base}/health`;
-      } else if (openL) {
-        openL.hidden = true;
-      }
-    } else {
-      const ex = a.exit_code != null && a.exit_code !== undefined ? ` · 退出码 ${a.exit_code}` : "";
-      detail.textContent = bind ? `未运行${ex} · ${bind}` : `未运行${ex}`;
-      if (openL) openL.hidden = true;
-    }
-    btnS.disabled = !!a.running;
-    btnP.disabled = !a.running;
+    dot.className = "dot on";
+    const pidPart = a.pid != null ? `pid=${a.pid} · ` : "";
+    const pending = Array.isArray(a.pending_groups) && a.pending_groups.length
+      ? ` · 等待群 ${a.pending_groups.join(",")}`
+      : "";
+    detail.textContent = `内置仲裁 · ${pidPart}${a.runtime || "embedded"}${pending}`;
   } catch (e) {
     detail.textContent = "状态获取失败";
     console.warn(e);
@@ -448,23 +431,6 @@ $("#btn-new-cancel").addEventListener("click", () => $("#dlg-new").close());
 
 $("#btn-souls").addEventListener("click", openSoulsDialog);
 
-$("#btn-arbiter-start").addEventListener("click", async () => {
-  try {
-    await api("/api/arbiter/start", { method: "POST" });
-    await refreshArbiter();
-  } catch (e) {
-    alert(String(e.message || e));
-  }
-});
-$("#btn-arbiter-stop").addEventListener("click", async () => {
-  try {
-    await api("/api/arbiter/stop", { method: "POST" });
-    await refreshArbiter();
-  } catch (e) {
-    alert(String(e.message || e));
-  }
-});
-
 $("#form-new").addEventListener("submit", async (e) => {
   e.preventDefault();
   const fd = new FormData($("#form-new"));
@@ -486,8 +452,6 @@ async function init() {
   await loadSoulsIntoSelect();
   await loadInstances();
   await refreshArbiter();
-  if (arbiterTimer) clearInterval(arbiterTimer);
-  arbiterTimer = setInterval(refreshArbiter, 4000);
 }
 
 init().catch((err) => {

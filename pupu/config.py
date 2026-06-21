@@ -17,12 +17,7 @@ CONFIG_PATH = Path(__file__).resolve().parent.parent / "instances" / "_no_instan
 
 # Used when config omits ``owner_ids`` and for new console instances.
 DEFAULT_OWNER_IDS: list[str] = []
-DEFAULT_ARBITER_URL = "http://127.0.0.1:18079/api/group_arbitrate"
-DEFAULT_ARBITER_BASE_URL = "http://127.0.0.1:18079"
-DEFAULT_ARBITER_TIMEOUT_SECONDS = 300.0
 DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 60.0
-DEFAULT_ARBITER_SUBSCRIBE_TIMEOUT_SECONDS = 30.0
-DEFAULT_ARBITER_UNAVAILABLE_PROBE_SECONDS = 60.0
 
 
 def _safe_default_owner_ids() -> list[str]:
@@ -153,87 +148,6 @@ def load_bot_id() -> str:
     except Exception:
         return ""
     return str(config.get("bot_id") or "").strip()
-
-
-def load_arbiter_url() -> str:
-    try:
-        config = load_config()
-    except Exception:
-        return DEFAULT_ARBITER_URL
-    return str(config.get("arbiter_url") or DEFAULT_ARBITER_URL).strip()
-
-
-def load_arbiter_base_url() -> str:
-    """Base URL for the centralized-debounce arbiter (``/api/observe`` etc.).
-
-    Falls back to deriving the base from ``arbiter_url`` so single-config
-    setups keep working without a new key.
-    """
-    try:
-        config = load_config()
-    except Exception:
-        return DEFAULT_ARBITER_BASE_URL
-    raw = str(config.get("arbiter_base_url") or "").strip()
-    if raw:
-        return raw.rstrip("/")
-    legacy = str(config.get("arbiter_url") or DEFAULT_ARBITER_URL).strip()
-    for suffix in ("/api/group_arbitrate", "/api/observe", "/api/await_decision"):
-        if legacy.endswith(suffix):
-            return legacy[: -len(suffix)].rstrip("/")
-    return legacy.rstrip("/") or DEFAULT_ARBITER_BASE_URL
-
-
-def load_arbiter_subscribe_timeout_seconds() -> float:
-    """Long-poll timeout used by the arbiter decision subscriber."""
-    raw_env = os.environ.get("PUPU_ARBITER_SUBSCRIBE_TIMEOUT_SEC", "").strip()
-    if raw_env:
-        try:
-            return max(1.0, min(120.0, float(raw_env)))
-        except ValueError:
-            pass
-    try:
-        config = load_config()
-        raw = config.get("arbiter_subscribe_timeout_seconds")
-        if raw is not None:
-            return max(1.0, min(120.0, float(raw)))
-    except Exception:
-        pass
-    return DEFAULT_ARBITER_SUBSCRIBE_TIMEOUT_SECONDS
-
-
-def load_arbiter_timeout_seconds() -> float:
-    """HTTP client timeout for POST /api/group_arbitrate (arbiter may call LLM; keep generous)."""
-    raw_env = os.environ.get("PUPU_ARBITER_TIMEOUT", "").strip()
-    if raw_env:
-        try:
-            return max(5.0, min(600.0, float(raw_env)))
-        except ValueError:
-            pass
-    try:
-        config = load_config()
-        raw = config.get("arbiter_timeout_seconds")
-        if raw is not None:
-            return max(5.0, min(600.0, float(raw)))
-    except Exception:
-        pass
-    return DEFAULT_ARBITER_TIMEOUT_SECONDS
-
-
-def load_arbiter_unavailable_probe_seconds() -> float:
-    raw_env = os.environ.get("PUPU_ARBITER_UNAVAILABLE_PROBE_SEC", "").strip()
-    if raw_env:
-        try:
-            return max(10.0, min(600.0, float(raw_env)))
-        except ValueError:
-            pass
-    try:
-        config = load_config()
-        raw = config.get("arbiter_unavailable_probe_seconds")
-        if raw is not None:
-            return max(10.0, min(600.0, float(raw)))
-    except Exception:
-        pass
-    return DEFAULT_ARBITER_UNAVAILABLE_PROBE_SECONDS
 
 
 def load_peer_config() -> dict:

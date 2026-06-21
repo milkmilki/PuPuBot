@@ -138,11 +138,11 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
             actor = InstanceActor(ctx, preflight=False)
             captured: list[dict] = []
 
-            async def fake_post_observe(payload: dict) -> dict:
+            async def fake_observe(payload: dict) -> dict:
                 captured.append(payload)
                 return {"ok": True, "latest_decision_id": 0}
 
-            actor.buffer._post_observe = fake_post_observe
+            actor.buffer._post_observe = fake_observe
             actor.buffer._ensure_subscriber = lambda *_args, **_kwargs: None
             with activate_instance_context(ctx):
                 init_db()
@@ -170,11 +170,11 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
             actor.buffer._bot_qq_getter = lambda: "999001"
             captured: list[dict] = []
 
-            async def fake_post_observe(payload: dict) -> dict:
+            async def fake_observe(payload: dict) -> dict:
                 captured.append(payload)
                 return {"ok": True, "latest_decision_id": 0}
 
-            actor.buffer._post_observe = fake_post_observe
+            actor.buffer._post_observe = fake_observe
             actor.buffer._ensure_subscriber = lambda *_args, **_kwargs: None
             with activate_instance_context(ctx):
                 init_db()

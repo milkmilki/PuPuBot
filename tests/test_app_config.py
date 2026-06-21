@@ -17,7 +17,6 @@ class AppConfigTests(unittest.TestCase):
                 "PUPU_DEEPSEEK_API_KEY",
                 "PUPU_DEEPSEEK_BASE_URL",
                 "PUPU_CONSOLE_PORT",
-                "PUPU_ARBITER_DEBOUNCE_IDLE_SEC",
                 "PUPU_MEMU_ENABLED",
                 "PUPU_TTS_ENABLED",
                 "PUPU_CODEX_MCP_SERVERS_JSON",
@@ -50,8 +49,6 @@ llm:
     base_url: https://deepseek.test/anthropic
 console:
   port: 8999
-arbiter:
-  debounce_idle_seconds: 12
 memu:
   enabled: false
 tts:
@@ -80,7 +77,6 @@ mcp:
         self.assertEqual(os.environ["PUPU_DEEPSEEK_API_KEY"], "test-key")
         self.assertEqual(os.environ["PUPU_DEEPSEEK_BASE_URL"], "https://deepseek.test/anthropic")
         self.assertEqual(os.environ["PUPU_CONSOLE_PORT"], "8999")
-        self.assertEqual(os.environ["PUPU_ARBITER_DEBOUNCE_IDLE_SEC"], "12")
         self.assertEqual(os.environ["PUPU_MEMU_ENABLED"], "false")
         self.assertEqual(os.environ["PUPU_TTS_ENABLED"], "true")
         self.assertIn("brave-search", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])

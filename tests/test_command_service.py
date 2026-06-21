@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 import unittest
@@ -11,6 +12,7 @@ activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from pupu.command_service import _format_history
+from pupu.command_service import CommandContext, execute_command
 from pupu.memory import init_db, reset_session, save_message
 from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED, WAIT_FOLLOWUP
 
@@ -38,6 +40,38 @@ class CommandServiceTests(unittest.TestCase):
         self.assertIn("璐璐主动发出: 我主动问一句", text)
         self.assertNotIn("你: [定时任务", text)
         self.assertNotIn("你: [系统触发的追问", text)
+
+    def test_silence_command_uses_embedded_state_callbacks(self):
+        calls = []
+        state = {"900": False}
+
+        def getter(group_id):
+            return state.get(group_id, False)
+
+        def setter(group_id, enabled):
+            calls.append((group_id, enabled))
+            state[group_id] = enabled
+
+        ctx = CommandContext(
+            surface="qq",
+            context_session="group_900",
+            identity_session="owner",
+            is_admin=True,
+            group_id="900",
+        )
+
+        result = asyncio.run(
+            execute_command("/silence on", ctx, silence_getter=getter, silence_setter=setter)
+        )
+        self.assertTrue(result.handled)
+        self.assertIn("已开启", result.text)
+        self.assertNotIn("仲裁服务", result.text)
+        self.assertEqual(calls, [("900", True)])
+
+        status = asyncio.run(
+            execute_command("/silence", ctx, silence_getter=getter, silence_setter=setter)
+        )
+        self.assertIn("已开启", status.text)
 
 
 if __name__ == "__main__":

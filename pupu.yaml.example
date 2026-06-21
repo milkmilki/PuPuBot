@@ -100,12 +100,8 @@ console:
   port: 8770
 
 arbiter:
-  host: 127.0.0.1
-  port: 18079
-  debounce_idle_seconds: 30
-  await_max_timeout_seconds: 60
-  subscribe_timeout_seconds: 30
-  timeout_seconds: 300
+  # Open-group arbitration is embedded in the console actor runtime.
+  # Set false only when you do not want arbiter audit records under instances/_shared.
   audit: true
 
 memu:

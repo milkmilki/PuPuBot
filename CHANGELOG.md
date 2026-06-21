@@ -2,6 +2,15 @@
 
 ## 2026-06-21
 
+### 开放群仲裁内嵌化
+
+- 移除独立的 `pupu_console.arbiter_server` HTTP 服务，开放群仲裁现在内嵌在控制台 actor runtime 中运行。
+- 新增 `pupu.arbiter_runtime`，负责进程内 observe、安静窗口 debounce、`run_judge` 调用和 decision 唤醒。
+- `MessageBuffer` 不再访问 `127.0.0.1:18079`，也不再输出 arbiter 连接失败/低频探测日志。
+- `/silence` 改为直接读写内嵌仲裁状态，静默状态持久化在 `instances/_shared/arbiter.db`，重启后继续生效。
+- Console 顶部仲裁栏改为状态展示，删除外置仲裁服务的启动/停止/健康检查按钮。
+- 新建实例和 `pupu.yaml.example` 不再生成 `arbiter_url`、`arbiter_base_url`、host/port/timeout 等外置服务配置。
+
 ### QQ 通道收口
 
 - 移除 QQ 官方 Bot 适配器路径和旧 NoneBot 插件入口。
