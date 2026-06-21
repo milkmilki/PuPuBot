@@ -47,6 +47,21 @@ DEFAULT_TOOL_SERVERS: dict[str, dict[str, bool]] = {
 }
 
 DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 35.0
+_TRUE_VALUES = {"1", "true", "yes", "y", "on", "enable", "enabled"}
+_FALSE_VALUES = {"0", "false", "no", "n", "off", "disable", "disabled"}
+
+
+def _parse_bool(value: object, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    raw = str(value if value is not None else "").strip().lower()
+    if not raw:
+        return default
+    if raw in _TRUE_VALUES:
+        return True
+    if raw in _FALSE_VALUES:
+        return False
+    return default
 
 
 def validate_instance_id(instance_id: str) -> None:
@@ -99,7 +114,7 @@ def _normalize_instance_config(cfg: dict[str, Any]) -> None:
     cfg.setdefault("bot_id", "")
     cfg["bot_id"] = str(cfg.get("bot_id") or "").strip()
 
-    cfg["proactive_enabled"] = bool(cfg.get("proactive_enabled", True))
+    cfg["proactive_enabled"] = _parse_bool(cfg.get("proactive_enabled", True), True)
 
     cfg.setdefault("peer", {})
     if not isinstance(cfg["peer"], dict):

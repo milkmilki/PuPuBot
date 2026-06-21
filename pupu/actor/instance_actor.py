@@ -18,6 +18,7 @@ from pupu.config import (
     load_owner_id_set,
     load_peer_config,
 )
+from pupu.dialogue_loop import register_sender
 from pupu.hooks import emit_instance_status
 from pupu.instance_context import InstanceContext, activate_instance_context
 from pupu.llm import ProviderConfigError, preflight_model_providers
@@ -242,10 +243,21 @@ class InstanceActor:
     def _start_proactive_loop(self) -> str:
         if any(getattr(task, "_pupu_proactive", False) for task in self._tasks if not task.done()):
             return "主动消息已开启，后台循环正在运行。"
+        loop = asyncio.get_running_loop()
         with activate_instance_context(self.context):
             owner_qq = load_first_numeric_owner_id()
         if owner_qq is None:
             return "主动消息已开启，但没有配置数字 owner QQ，后台循环暂时无法投递。"
+
+        def send_owner_followup(text: str) -> None:
+            async def _send_with_context() -> None:
+                with activate_instance_context(self.context):
+                    await self._send_by_session(OWNER_SESSION, text)
+
+            asyncio.run_coroutine_threadsafe(_send_with_context(), loop)
+
+        with activate_instance_context(self.context):
+            register_sender(OWNER_SESSION, send_owner_followup)
 
         async def send_to_owner(text: str) -> None:
             await self.send_text(

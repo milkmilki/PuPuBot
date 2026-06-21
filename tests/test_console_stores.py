@@ -85,6 +85,16 @@ instance:
         self.assertEqual(cfg["port"], 8123)
         self.assertFalse((Path(self._tmpdir.name) / "instances" / iid / ".env.qq").exists())
 
+    def test_proactive_enabled_normalizes_string_false(self) -> None:
+        iid = instance_store.create_instance("A", qq_mode="cli", port=8099)
+        inst_path = Path(self._tmpdir.name) / "instances" / iid / "instance.json"
+        cfg = json.loads(inst_path.read_text(encoding="utf-8"))
+        cfg["proactive_enabled"] = "false"
+        inst_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+
+        loaded, _ = instance_store.read_instance_files(iid)
+        self.assertFalse(loaded["proactive_enabled"])
+
     def test_apply_soul_keeps_port_and_runtime_fields(self) -> None:
         iid = instance_store.create_instance("B", port=9101, qq_mode="napcat")
         instance_store.merge_update(

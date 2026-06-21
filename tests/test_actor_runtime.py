@@ -7,11 +7,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from pupu import dialogue_loop
 from pupu.actor import InstanceActor
 from pupu.actor.onebot_transport import parse_onebot_message_segments
 from pupu.instance_context import InstanceContext, activate_instance_context
 from pupu.logging_utils import close_all_log_sinks
 from pupu.memory import init_db
+from pupu.sessions import OWNER_SESSION
 from pupu_console import instance_store
 from pupu_console.process_manager import ProcessManager
 
@@ -192,6 +194,72 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(captured[0]["reporter"]["bot_id"], "999001")
             self.assertEqual(captured[0]["reporter"]["qq"], "999001")
+
+    async def test_proactive_owner_followup_sender_delivers_after_timer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a")
+            actor = InstanceActor(ctx, preflight=False)
+            sent: list[tuple[object, str]] = []
+
+            async def fake_proactive_loop(_send_func):
+                await asyncio.sleep(3600)
+
+            async def fake_send_text(target, text: str) -> None:
+                sent.append((target, text))
+
+            actor.send_text = AsyncMock(side_effect=fake_send_text)
+            with activate_instance_context(ctx):
+                init_db()
+                with patch("pupu.actor.instance_actor.proactive_loop", side_effect=fake_proactive_loop):
+                    actor._start_proactive_loop()
+            try:
+                with patch("pupu.agent.chat", return_value="追问一下") as mock_chat:
+                    dialogue_loop._on_timer_fire(OWNER_SESSION)
+                    await asyncio.sleep(0.05)
+
+                self.assertEqual([text for _target, text in sent], ["追问一下"])
+                self.assertEqual(sent[0][0].session_id, OWNER_SESSION)
+                self.assertIn("[系统触发的追问]", mock_chat.call_args.args[0])
+                self.assertEqual(mock_chat.call_args.kwargs["message_source"], "wait_followup")
+            finally:
+                actor._stop_proactive_loop()
+                for task in list(actor._tasks):
+                    task.cancel()
+                if actor._tasks:
+                    await asyncio.gather(*actor._tasks, return_exceptions=True)
+                dialogue_loop.unregister_sender(OWNER_SESSION)
+
+    async def test_actor_start_respects_proactive_enabled_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a")
+            cfg = json.loads(ctx.config_path.read_text(encoding="utf-8"))
+            cfg["proactive_enabled"] = False
+            ctx.config_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+            actor = InstanceActor(ctx, preflight=False)
+
+            with patch("pupu.actor.instance_actor.OneBotTransport.start", new_callable=AsyncMock):
+                with patch("pupu.actor.instance_actor.OneBotTransport.stop", new_callable=AsyncMock):
+                    with patch.object(actor, "_start_proactive_loop", return_value="started") as mock_start:
+                        await actor.start()
+                        await actor.stop()
+
+            mock_start.assert_not_called()
+
+    async def test_actor_start_respects_proactive_enabled_true(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a")
+            cfg = json.loads(ctx.config_path.read_text(encoding="utf-8"))
+            cfg["proactive_enabled"] = True
+            ctx.config_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+            actor = InstanceActor(ctx, preflight=False)
+
+            with patch("pupu.actor.instance_actor.OneBotTransport.start", new_callable=AsyncMock):
+                with patch("pupu.actor.instance_actor.OneBotTransport.stop", new_callable=AsyncMock):
+                    with patch.object(actor, "_start_proactive_loop", return_value="started") as mock_start:
+                        await actor.start()
+                        await actor.stop()
+
+            mock_start.assert_called_once()
 
 
 class OneBotTransportIntegrationTests(unittest.IsolatedAsyncioTestCase):

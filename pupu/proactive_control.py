@@ -13,7 +13,9 @@ _FALSE_VALUES = {"0", "false", "no", "n", "off", "disable", "disabled"}
 
 
 def _parse_bool(value: object, default: bool = True) -> bool:
-    raw = str(value or "").strip().lower()
+    if isinstance(value, bool):
+        return value
+    raw = str(value if value is not None else "").strip().lower()
     if not raw:
         return default
     if raw in _TRUE_VALUES:
