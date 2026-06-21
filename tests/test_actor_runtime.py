@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from pupu import dialogue_loop
 from pupu.actor import InstanceActor
-from pupu.actor.onebot_transport import parse_onebot_message_segments
+from pupu.actor.onebot_transport import OneBotTransport, parse_onebot_message_segments
 from pupu.instance_context import InstanceContext, activate_instance_context
 from pupu.logging_utils import close_all_log_sinks
 from pupu.memory import init_db
@@ -31,6 +31,33 @@ class OneBotParsingTests(unittest.TestCase):
         self.assertEqual(text, "hi @123")
         self.assertEqual(images, ["http://img"])
         self.assertEqual(ats, ["123"])
+
+
+class OneBotTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_fails_when_port_is_already_bound(self) -> None:
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen(1)
+        port = blocker.getsockname()[1]
+        logs: list[str] = []
+
+        async def _handle(_event: dict) -> None:
+            return None
+
+        transport = OneBotTransport(
+            host="127.0.0.1",
+            port=port,
+            on_event=_handle,
+            log=logs.append,
+        )
+        try:
+            with self.assertRaisesRegex(RuntimeError, "already in use"):
+                await transport.start()
+        finally:
+            blocker.close()
+            await transport.stop()
+
+        self.assertFalse(any("reverse WebSocket listening" in line for line in logs))
 
 
 class ActorMessageTests(unittest.IsolatedAsyncioTestCase):

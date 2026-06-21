@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import socket
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -46,6 +47,15 @@ class OneBotTransport:
         self.info = OneBotConnectionInfo()
         self._configure_routes()
 
+    def _assert_bind_available(self) -> None:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind((self.host, self.port))
+        except OSError as exc:
+            raise RuntimeError(f"port {self.port} is already in use") from exc
+        finally:
+            probe.close()
+
     def _configure_routes(self) -> None:
         @self._app.websocket("/onebot/v11/ws")
         async def onebot_ws(websocket: WebSocket) -> None:
@@ -62,6 +72,7 @@ class OneBotTransport:
     async def start(self) -> None:
         if self._server_task is not None and not self._server_task.done():
             return
+        self._assert_bind_available()
         config = uvicorn.Config(
             self._app,
             host=self.host,
@@ -72,6 +83,20 @@ class OneBotTransport:
         )
         self._server = uvicorn.Server(config)
         self._server_task = asyncio.create_task(self._server.serve())
+        for _ in range(100):
+            if self._server.started:
+                break
+            if self._server_task.done():
+                exc = self._server_task.exception()
+                self._server_task = None
+                self._server = None
+                if exc is not None:
+                    raise RuntimeError(f"OneBot transport failed to start: {exc}") from exc
+                raise RuntimeError(f"OneBot transport stopped before binding port {self.port}")
+            await asyncio.sleep(0.05)
+        if not self._server.started:
+            await self.stop()
+            raise RuntimeError(f"OneBot transport timed out while binding port {self.port}")
         self._log(
             "[PuPu Actor] NapCat reverse WebSocket listening at "
             f"ws://127.0.0.1:{self.port}/onebot/v11/ws"

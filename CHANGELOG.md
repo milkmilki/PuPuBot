@@ -52,6 +52,7 @@
 - 删除旧的“一实例一 Python 子进程 + NoneBot 插件”运行时，Console 现在直接在同一 Python 进程内托管多个 `InstanceActor`。
 - 新增 `pupu.actor` 运行时，包含 `InstanceContext`、消息 buffer、NapCat transport、scheduler、proactive 和 maintenance 任务管理。
 - 新增轻量 OneBot v11 reverse WebSocket transport，每个实例继续监听 `ws://127.0.0.1:<port>/onebot/v11/ws`，不再依赖 NoneBot 多开。
+- NapCat OneBot transport 启动时会先检查端口是否可绑定，并等待 uvicorn 确认绑定成功后才打印 listening；端口仍被占用时会同步失败并回滚实例启动状态，避免后台异步抛出 WinError 10048 后 Console 误判启动成功。
 - 新增 actor 通用命令服务，`/help`、`/events`、`/facts`、`/tasks`、`/tidy`、`/recall`、`/debug`、`/silence` 等命令在 CLI 与 NapCat actor 中共用。
 - CLI 切换为 `InstanceActor` 路径，CLI 与 NapCat actor 共用同一套消息处理、记忆写入和 batch review 流程。
 - Scheduler 拆出 transport-neutral sender loop，定时任务通过 actor transport 投递；旧 NoneBot sender loop 已删除。
