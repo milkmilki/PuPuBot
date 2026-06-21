@@ -83,6 +83,14 @@ button.danger { background: var(--danger); border-color: var(--danger); color: #
 .panel { background: var(--panel); border: 1px solid #30363d; border-radius: 0 8px 8px 8px; padding: 1rem; }
 label { display: block; margin-bottom: 0.65rem; }
 label.inline { display: inline-flex; align-items: center; gap: 0.35rem; }
+label.run-mode-label {
+  max-width: 360px;
+  margin-top: 0.65rem;
+}
+label.run-mode-label select {
+  width: 100%;
+  margin-top: 0.3rem;
+}
 textarea { width: 100%; min-height: 140px; }
 textarea.small-textarea { min-height: 74px; }
 .settings-block {

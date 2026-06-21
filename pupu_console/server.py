@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
+import os
 from pathlib import Path
+import subprocess
+import threading
+import time
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from pupu.arbiter_runtime import get_shared_arbiter_runtime
-from pupu.app_config import apply_app_config_env, default_instance_settings
+from pupu.app_config import apply_app_config_env, default_instance_settings, ensure_app_config_file, load_app_config
 from pupu.hooks import HookEvent, register_hook
 from pupu.shared_runtime import async_shutdown_shared_runtime
 
@@ -25,6 +30,7 @@ pm = ProcessManager()
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _DESKTOP_HOOK_NAMES = (
     "instance.status",
+    "desktop.message",
     "chat.started",
     "chat.reply_created",
     "chat.error",
@@ -34,6 +40,150 @@ _DESKTOP_HOOK_NAMES = (
 _desktop_event_queues: list[asyncio.Queue[dict[str, Any]]] = []
 _desktop_event_loop: asyncio.AbstractEventLoop | None = None
 _desktop_hook_unsubscribers: list[Any] = []
+_API_SECRET_FIELDS = {
+    "llm.anthropic.api_key",
+    "llm.deepseek.api_key",
+    "llm.xiaoshuoai.api_key",
+    "memu.api_key",
+    "memu.llm_api_key",
+    "memu.embed_api_key",
+    "mcp.servers.tavily.env.TAVILY_API_KEY",
+}
+_API_VALUE_FIELDS = {
+    "llm.provider",
+    "llm.chat_provider",
+    "llm.judge_provider",
+    "llm.maintenance_provider",
+    "llm.proactive_provider",
+    "llm.anthropic.base_url",
+    "llm.deepseek.base_url",
+    "llm.xiaoshuoai.base_url",
+    "memu.base_url",
+    "memu.llm_base_url",
+    "memu.embed_base_url",
+}
+_API_SETTING_FIELDS = _API_SECRET_FIELDS | _API_VALUE_FIELDS
+_shutdown_lock = threading.Lock()
+_shutdown_scheduled = False
+
+
+def _nested_get(data: dict[str, Any], dotted_key: str) -> Any:
+    cur: Any = data
+    for part in dotted_key.split("."):
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _nested_set(data: dict[str, Any], dotted_key: str, value: Any) -> None:
+    cur = data
+    parts = dotted_key.split(".")
+    for part in parts[:-1]:
+        child = cur.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            cur[part] = child
+        cur = child
+    cur[parts[-1]] = value
+
+
+def _mask_secret(value: Any) -> dict[str, Any]:
+    text = str(value or "").strip()
+    if not text:
+        return {"configured": False, "preview": ""}
+    suffix = text[-4:] if len(text) >= 4 else text
+    return {"configured": True, "preview": f"••••{suffix}"}
+
+
+def _write_app_config(config_path: Path, cfg: dict[str, Any]) -> None:
+    from pupu import app_config
+
+    if app_config.yaml is None:
+        raise RuntimeError("PyYAML is required to write pupu.yaml")
+    config_path.write_text(
+        app_config.yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _is_loopback_request(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    if host in {"localhost", "testclient"}:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _mark_console_shutdown_scheduled() -> bool:
+    global _shutdown_scheduled
+    with _shutdown_lock:
+        if _shutdown_scheduled:
+            return False
+        _shutdown_scheduled = True
+        return True
+
+
+def _shutdown_console_process(delay_seconds: float = 0.35) -> None:
+    time.sleep(delay_seconds)
+    try:
+        pm.stop_all()
+    except Exception:
+        pass
+    os._exit(0)
+
+
+def _netstat_listener_pids(port: int) -> list[int]:
+    if os.name != "nt":
+        return []
+    output = subprocess.run(
+        ["netstat", "-ano"],
+        capture_output=True,
+        text=True,
+        check=False,
+        creationflags=0x08000000,
+    )
+    pids: set[int] = set()
+    port_suffix = f":{int(port)}"
+    for line in output.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        if not parts[1].endswith(port_suffix):
+            continue
+        if parts[3].upper() != "LISTENING":
+            continue
+        try:
+            pids.add(int(parts[4]))
+        except ValueError:
+            continue
+    return sorted(pids)
+
+
+def _clear_external_port_listeners(port: int) -> list[int]:
+    if not (1 <= int(port) <= 65535):
+        return []
+    current_pid = os.getpid()
+    killed: list[int] = []
+    for pid in _netstat_listener_pids(int(port)):
+        if pid == current_pid:
+            continue
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+            creationflags=0x08000000,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"failed to clear stale listener on port {port} pid={pid}: {detail}")
+        killed.append(pid)
+    if killed:
+        time.sleep(0.25)
+    return killed
 
 
 def _desktop_event_from_hook(event: HookEvent) -> dict[str, Any]:
@@ -163,6 +313,65 @@ def api_desktop_status() -> dict[str, Any]:
     }
 
 
+@app.post("/api/desktop/shutdown-console")
+def api_shutdown_desktop_console(request: Request, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="console shutdown is only allowed from localhost")
+    scheduled = _mark_console_shutdown_scheduled()
+    if scheduled:
+        background_tasks.add_task(_shutdown_console_process)
+    return {
+        "ok": True,
+        "scheduled": scheduled,
+        "message": "PuPu Console is shutting down." if scheduled else "PuPu Console shutdown is already scheduled.",
+    }
+
+
+@app.get("/api/desktop/settings/api-keys")
+def api_get_desktop_api_key_settings() -> dict[str, Any]:
+    config_path, _ = ensure_app_config_file()
+    cfg = load_app_config(config_path)
+    values: dict[str, str] = {}
+    secrets: dict[str, dict[str, Any]] = {}
+    for field in sorted(_API_VALUE_FIELDS):
+        raw = _nested_get(cfg, field)
+        values[field] = "" if raw is None else str(raw)
+    for field in sorted(_API_SECRET_FIELDS):
+        secrets[field] = _mask_secret(_nested_get(cfg, field))
+    return {
+        "config_path": str(config_path),
+        "providers": ["deepseek", "anthropic", "xiaoshuoai", "codex_cli"],
+        "values": values,
+        "secrets": secrets,
+    }
+
+
+@app.put("/api/desktop/settings/api-keys")
+def api_put_desktop_api_key_settings(body: dict[str, Any]) -> dict[str, Any]:
+    raw_values = body.get("values")
+    if not isinstance(raw_values, dict):
+        raise HTTPException(status_code=400, detail="expected values object")
+    unknown = sorted(str(key) for key in raw_values if str(key) not in _API_SETTING_FIELDS)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unsupported setting: {unknown[0]}")
+
+    config_path, _ = ensure_app_config_file()
+    cfg = load_app_config(config_path)
+    for key, raw in raw_values.items():
+        field = str(key)
+        value = str(raw or "").strip()
+        if field in _API_SECRET_FIELDS and not value:
+            continue
+        _nested_set(cfg, field, value)
+
+    try:
+        _write_app_config(config_path, cfg)
+        apply_app_config_env(override=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"save settings failed: {e}") from e
+    return api_get_desktop_api_key_settings()
+
+
 @app.post("/api/desktop/chat")
 async def api_desktop_chat(body: dict[str, Any]) -> dict[str, Any]:
     instance_id = str(body.get("instance_id") or "").strip()
@@ -268,18 +477,39 @@ def api_delete_instance(instance_id: str) -> dict[str, str]:
 
 
 @app.post("/api/instances/{instance_id}/start")
-def api_start_instance(instance_id: str) -> dict[str, Any]:
+def api_start_instance(instance_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     try:
         instance_store.instance_dir(instance_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if not instance_store.instance_dir(instance_id).is_dir():
         raise HTTPException(status_code=404, detail="unknown instance")
+    launch_mode = None
+    if isinstance(body, dict) and body.get("qq_mode") is not None:
+        launch_mode = str(body.get("qq_mode") or "").strip().lower()
+        if launch_mode not in {"cli", "napcat", "siri"}:
+            raise HTTPException(status_code=400, detail="qq_mode must be cli, napcat or siri")
+        if pm.status(instance_id).get("running"):
+            raise HTTPException(status_code=409, detail="stop instance before changing launch mode")
+        try:
+            instance_store.merge_update(instance_id, {"qq_mode": launch_mode}, None)
+        except (FileNotFoundError, ValueError) as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+    cleared_port_pids: list[int] = []
+    if not pm.status(instance_id).get("running"):
+        try:
+            cfg, _ = instance_store.read_instance_files(instance_id)
+            port = int(cfg.get("port") or instance_store.read_port(instance_store.instance_dir(instance_id)))
+            cleared_port_pids = _clear_external_port_listeners(port)
+        except RuntimeError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        except Exception:
+            cleared_port_pids = []
     try:
         pid = pm.start(instance_id)
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-    return {"pid": pid, **_instance_summary(instance_id)}
+    return {"pid": pid, "cleared_port_pids": cleared_port_pids, **_instance_summary(instance_id)}
 
 
 @app.post("/api/instances/{instance_id}/stop")

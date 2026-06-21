@@ -32,12 +32,14 @@ class OneBotTransport:
         on_event: InboundHandler,
         log: Callable[[str], None] | None = None,
         access_token: str = "",
+        expected_self_id: str = "",
     ) -> None:
         self.host = host
         self.port = int(port)
         self._on_event = on_event
         self._log = log or (lambda text: None)
         self._access_token = str(access_token or "").strip()
+        self._expected_self_id = str(expected_self_id or "").strip()
         self._app = FastAPI(title=f"PuPu OneBot actor {self.port}")
         self._server: uvicorn.Server | None = None
         self._server_task: asyncio.Task | None = None
@@ -59,6 +61,7 @@ class OneBotTransport:
     def _configure_routes(self) -> None:
         @self._app.websocket("/onebot/v11/ws")
         async def onebot_ws(websocket: WebSocket) -> None:
+            self_id = self._websocket_self_id(websocket)
             if self._access_token:
                 token = websocket.headers.get("authorization", "")
                 token = token.removeprefix("Bearer ").strip()
@@ -66,8 +69,22 @@ class OneBotTransport:
                 if token != self._access_token and query_token != self._access_token:
                     await websocket.close(code=1008)
                     return
+            if self._expected_self_id and self_id != self._expected_self_id:
+                self._log(
+                    "[pupu][actor] NapCat rejected unexpected self_id "
+                    f"expected={self._expected_self_id} actual={self_id or '<missing>'}"
+                )
+                await websocket.close(code=1008)
+                return
             await websocket.accept()
             await self._handle_socket(websocket)
+
+    def _websocket_self_id(self, websocket: WebSocket) -> str:
+        return str(
+            websocket.headers.get("x-self-id")
+            or websocket.query_params.get("self_id")
+            or ""
+        ).strip()
 
     async def start(self) -> None:
         if self._server_task is not None and not self._server_task.done():
@@ -135,11 +152,7 @@ class OneBotTransport:
                 pass
         self._ws = websocket
         self.info.connected = True
-        self.info.self_id = str(
-            websocket.headers.get("x-self-id")
-            or websocket.query_params.get("self_id")
-            or ""
-        ).strip()
+        self.info.self_id = self._websocket_self_id(websocket)
         self._log(
             "[pupu][actor] NapCat connected"
             + (f" self_id={self.info.self_id}" if self.info.self_id else "")

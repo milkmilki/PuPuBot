@@ -135,6 +135,15 @@ async function selectInstance(id) {
     </div>
     <div id="tab-run" class="panel">
       <p>状态: <span id="run-status"></span></p>
+      <label class="run-mode-label">启动模式
+        <select id="run-qqmode">
+          <option value="siri">Siri / 桌宠模式</option>
+          <option value="cli">CLI / 终端模式</option>
+          <option value="napcat">NapCat / QQ 模式</option>
+        </select>
+      </label>
+      <p class="hint">每个实例都会保存自己的启动模式。启动前会清理该实例端口上的旧残留监听，避免上次异常退出后端口占用。Siri 适合桌宠本地聊天；CLI 用于终端；NapCat 需要 QQ 侧连接对应端口。</p>
+      <p class="hint" id="run-mode-msg"></p>
       <div class="row">
         <button type="button" class="primary" id="btn-start">启动</button>
         <button type="button" id="btn-stop">停止</button>
@@ -158,12 +167,15 @@ async function selectInstance(id) {
     <div id="tab-soul" class="panel" style="display:none">
       <label>显示名称 <input id="f-display" value="${escapeHtml(data.display_name || "")}" /></label>
       <label>端口 <input id="f-port" type="number" value="${Number(data.port) || 8081}" /></label>
+      <label>Bot QQ / self_id（可选）<input id="f-bot-id" value="${escapeHtml(data.bot_id || "")}" placeholder="例如 3596356160" /></label>
       <label>QQ 模式
         <select id="f-qqmode">
-          <option value="napcat">napcat</option>
-          <option value="cli">cli</option>
+          <option value="siri">Siri / 桌宠模式</option>
+          <option value="cli">CLI / 终端模式</option>
+          <option value="napcat">NapCat / QQ 模式</option>
         </select>
       </label>
+      <p class="hint">NapCat 模式下建议填写对应 QQ 号。填数字后，连错端口的其它 QQ 会被拒绝，避免两个账号互相抢同一个实例连接。</p>
       <label>owner_ids（逗号分隔）<input id="f-owners" value="${escapeHtml((data.owner_ids || []).join(","))}" /></label>
       <section class="settings-block">
         <h3>私聊白名单</h3>
@@ -196,7 +208,9 @@ async function selectInstance(id) {
       <button type="button" id="btn-capture">另存为预设</button>
     </div>
   `;
-  $("#f-qqmode").value = data.qq_mode || "napcat";
+  const initialMode = data.qq_mode || "napcat";
+  $("#run-qqmode").value = initialMode;
+  $("#f-qqmode").value = initialMode;
   $("#f-private-mode").value = data.private_reply_mode || "owner_only";
 
   const mex = $("#memory-exists");
@@ -217,7 +231,20 @@ async function selectInstance(id) {
   });
 
   $("#btn-start").addEventListener("click", async () => {
-    await api(`/api/instances/${id}/start`, { method: "POST" });
+    const mode = $("#run-qqmode").value;
+    const msg = $("#run-mode-msg");
+    $("#f-qqmode").value = mode;
+    if (msg) msg.textContent = "正在启动，启动前会检查并清理端口残留…";
+    const started = await api(`/api/instances/${id}/start`, {
+      method: "POST",
+      body: JSON.stringify({ qq_mode: mode }),
+    });
+    const cleared = Array.isArray(started.cleared_port_pids) ? started.cleared_port_pids : [];
+    if (msg) {
+      msg.textContent = cleared.length
+        ? `已清理端口残留进程：${cleared.join(", ")}`
+        : "已启动；未发现端口残留。";
+    }
     await refreshRunStatus();
     await loadInstances();
   });
@@ -260,6 +287,26 @@ async function selectInstance(id) {
   });
 
   $("#btn-save-soul").addEventListener("click", () => saveSoulForm(id));
+  $("#run-qqmode").addEventListener("change", async () => {
+    const mode = $("#run-qqmode").value;
+    const msg = $("#run-mode-msg");
+    $("#f-qqmode").value = mode;
+    if (msg) msg.textContent = "正在保存启动模式…";
+    try {
+      await api(`/api/instances/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ instance: { qq_mode: mode } }),
+      });
+      if (msg) msg.textContent = "启动模式已保存。";
+      await loadInstances();
+    } catch (e) {
+      if (msg) msg.textContent = "保存失败: " + e.message;
+      await refreshRunStatus();
+    }
+  });
+  $("#f-qqmode").addEventListener("change", () => {
+    $("#run-qqmode").value = $("#f-qqmode").value;
+  });
 
   const soulSel = $("#apply-soul-slug");
   const souls = await api("/api/souls");
@@ -345,6 +392,14 @@ async function refreshRunStatus() {
   const st = await api(`/api/instances/${selectedId}`);
   const el = $("#run-status");
   if (el) el.textContent = st.running ? `运行中 pid=${st.pid}` : "未运行";
+  const runMode = $("#run-qqmode");
+  if (runMode) {
+    runMode.value = st.qq_mode || "napcat";
+    runMode.disabled = !!st.running;
+    runMode.title = st.running ? "请先停止实例后再切换启动模式" : "";
+  }
+  const soulMode = $("#f-qqmode");
+  if (soulMode) soulMode.value = st.qq_mode || "napcat";
   const mp = $("#memory-path");
   if (mp && st.memory_path) mp.textContent = st.memory_path;
   const mex = $("#memory-exists");
@@ -373,6 +428,7 @@ async function saveSoulForm(id) {
     display_name: $("#f-display").value.trim(),
     port: Number($("#f-port").value),
     qq_mode: $("#f-qqmode").value,
+    bot_id: $("#f-bot-id").value.trim(),
     owner_ids,
     private_reply_mode: $("#f-private-mode").value,
     private_allowed_ids,
@@ -436,7 +492,7 @@ $("#form-new").addEventListener("submit", async (e) => {
   const fd = new FormData($("#form-new"));
   const body = {
     display_name: fd.get("display_name") || "仆仆",
-    qq_mode: fd.get("qq_mode") || "napcat",
+    qq_mode: fd.get("qq_mode") || "siri",
   };
   const port = fd.get("port");
   if (port) body.port = Number(port);

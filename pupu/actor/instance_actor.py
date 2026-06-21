@@ -144,6 +144,7 @@ class InstanceActor:
                         host=str(settings["host"]),
                         port=int(settings["port"]),
                         access_token=str(settings.get("access_token") or ""),
+                        expected_self_id=str(settings.get("expected_self_id") or ""),
                         on_event=self._handle_onebot_event_with_context,
                         log=self._log,
                     )
@@ -217,6 +218,8 @@ class InstanceActor:
                 settings["port"] = int(cfg["port"])
             except Exception:
                 pass
+        bot_id = str(cfg.get("bot_id") or "").strip()
+        settings["expected_self_id"] = bot_id if bot_id.isdigit() else ""
         return settings
 
     def _read_instance_config(self) -> dict:

@@ -486,6 +486,34 @@ class OneBotTransportIntegrationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await actor.stop()
 
+    async def test_actor_onebot_rejects_unexpected_self_id(self) -> None:
+        try:
+            import websockets
+        except Exception:  # pragma: no cover - optional dependency in minimal envs
+            self.skipTest("websockets not installed")
+
+        port = self._free_port()
+        ctx = self._make_ctx("actor-onebot-guard", port=port)
+        config = json.loads(ctx.config_path.read_text(encoding="utf-8"))
+        config["bot_id"] = "999001"
+        ctx.config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+        actor = InstanceActor(ctx, preflight=False, start_background_tasks=False)
+        logs: list[str] = []
+        actor._emit_log = logs.append
+
+        await actor.start()
+        try:
+            uri = f"ws://127.0.0.1:{port}/onebot/v11/ws?self_id=888002"
+            with self.assertRaises(Exception):
+                async with websockets.connect(uri, additional_headers={"x-self-id": "888002"}) as ws:
+                    await ws.recv()
+
+            self.assertIsNotNone(actor.transport)
+            self.assertFalse(actor.transport.info.connected)
+            self.assertTrue(any("unexpected self_id" in line for line in logs))
+        finally:
+            await actor.stop()
+
 
 class ProcessManagerActorModeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
