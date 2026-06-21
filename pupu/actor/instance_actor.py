@@ -128,7 +128,7 @@ class InstanceActor:
         with activate_instance_context(self.context):
             await emit_instance_status("starting")
             try:
-                apply_app_config_env()
+                apply_app_config_env(refresh_tools=False)
                 self.context.data_dir.mkdir(parents=True, exist_ok=True)
                 self.context.logs_dir.mkdir(parents=True, exist_ok=True)
                 setup_runtime_logging()
@@ -156,13 +156,13 @@ class InstanceActor:
                     raise RuntimeError(
                         f"actor runtime only supports napcat/cli for now, got {self.context.qq_mode!r}"
                     )
+                self._started = True
+                await emit_instance_status("running")
                 if self._start_background_tasks:
                     self._create_task(self._run_callable_with_context(self._scheduler_loop))
                     self._create_task(self._run_callable_with_context(self._maintenance_loop))
                     if is_proactive_enabled():
                         self._start_proactive_loop()
-                self._started = True
-                await emit_instance_status("running")
             except Exception as exc:
                 await emit_instance_status(
                     "failed",

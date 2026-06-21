@@ -121,6 +121,19 @@ class DesktopApiTests(unittest.TestCase):
 
         self.assertEqual(seen, ["chat.started"])
 
+    def test_multiple_napcat_instances_require_numeric_bot_id(self) -> None:
+        first = instance_store.create_instance("A", qq_mode="napcat", port=18151)
+        instance_store.create_instance("B", qq_mode="napcat", port=18152)
+
+        with self.client:
+            response = self.client.post(
+                f"/api/instances/{first}/start",
+                json={"qq_mode": "napcat"},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("Bot QQ / self_id", response.json()["detail"])
+
 
 class DesktopProcessManagerTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

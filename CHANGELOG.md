@@ -54,6 +54,12 @@
 - 新增轻量 OneBot v11 reverse WebSocket transport，每个实例继续监听 `ws://127.0.0.1:<port>/onebot/v11/ws`，不再依赖 NoneBot 多开。
 - NapCat OneBot transport 启动时会先检查端口是否可绑定，并等待 uvicorn 确认绑定成功后才打印 listening；端口仍被占用时会同步失败并回滚实例启动状态，避免后台异步抛出 WinError 10048 后 Console 误判启动成功。
 - NapCat 实例支持用数字 `bot_id` 约束允许连接的 QQ `self_id`；Console 实例设置页新增 Bot QQ/self_id 输入框，避免两个 NapCat 账号配错到同一端口后反复互踢连接。
+- Console 查询实例状态时会保留正在启动中的 actor，不再把 `_started` 尚未置位但已绑定 OneBot 端口的实例误删为“未运行”，避免同进程旧监听泄漏后启动卡在端口清理阶段。
+- OneBot transport 停止时会先等待 uvicorn 正常退出并释放监听端口，超时才取消任务，避免 Console 显示实例已停止但端口仍被同进程占用。
+- 多 NapCat 实例启动前会要求配置数字 Bot QQ/self_id；端口仍是连接隔离的基础，self_id 校验只用于在 NapCat 端连错 URL 或旧连接未断干净时拒绝错误账号。
+- `InstanceActor.start()` 会先完成传输层监听、标记 running 并返回，再启动 scheduler、maintenance、proactive 等后台任务，避免后台任务或外部 MCP 初始化拖慢 Console 的“运行”请求。
+- Console 启动实例时只应用配置环境变量，不再刷新 MCP 工具定义；工具刷新保留在 Console 启动和设置保存路径，避免 Tavily 等外部 MCP 初始化超时拖慢每次实例启动。
+- `启动仆仆控制台.bat` 会先检测 `http://127.0.0.1:8770/api/instances`，已有 Console 时直接打开页面，不再重复拉起第二个 Console；首次启动会等待健康检查成功，失败时提示查看 launcher 日志。
 - 新增 actor 通用命令服务，`/help`、`/events`、`/facts`、`/tasks`、`/tidy`、`/recall`、`/debug`、`/silence` 等命令在 CLI 与 NapCat actor 中共用。
 - CLI 切换为 `InstanceActor` 路径，CLI 与 NapCat actor 共用同一套消息处理、记忆写入和 batch review 流程。
 - Scheduler 拆出 transport-neutral sender loop，定时任务通过 actor transport 投递；旧 NoneBot sender loop 已删除。

@@ -74,7 +74,7 @@ class ProcessManager:
                     raise RuntimeError(f"port {my_port} already used by running instance {other_id}")
 
             ensure_app_config_file()
-            apply_app_config_env()
+            apply_app_config_env(refresh_tools=False)
             actor = InstanceActor.from_instance_dir(
                 inst_dir,
                 emit_log=lambda text, iid=instance_id: self._emit_actor_line(iid, text),
@@ -114,9 +114,12 @@ class ProcessManager:
     def status(self, instance_id: str) -> dict[str, object]:
         with self._lock:
             actor = self._actors.get(instance_id)
+            future = self._actor_tasks.get(instance_id)
         if actor is not None:
             if actor.running:
                 return {"running": True, "pid": os.getpid(), "runtime": "actor"}
+            if future is not None and not future.done():
+                return {"running": True, "pid": os.getpid(), "runtime": "actor", "state": "starting"}
             with self._lock:
                 self._actors.pop(instance_id, None)
                 self._actor_tasks.pop(instance_id, None)

@@ -289,6 +289,31 @@ def _instance_summary(instance_id: str) -> dict[str, Any]:
     }
 
 
+def _validate_napcat_self_id_binding(instance_id: str, cfg: dict[str, Any]) -> None:
+    if str(cfg.get("qq_mode") or "").strip().lower() != "napcat":
+        return
+    bot_id = str(cfg.get("bot_id") or "").strip()
+    if bot_id.isdigit():
+        return
+
+    napcat_count = 0
+    for iid in instance_store.list_instance_ids():
+        try:
+            other_cfg, _ = instance_store.read_instance_files(iid)
+        except Exception:
+            continue
+        if str(other_cfg.get("qq_mode") or "").strip().lower() == "napcat":
+            napcat_count += 1
+    if napcat_count <= 1:
+        return
+
+    display = str(cfg.get("display_name") or instance_id).strip()
+    raise RuntimeError(
+        f"检测到多个 NapCat 实例，启动 {display} 前必须在灵魂设置里填写数字 Bot QQ / self_id，"
+        "用于防止 NapCat 连错端口时串号"
+    )
+
+
 @app.get("/api/instances")
 def api_list_instances() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
@@ -499,6 +524,7 @@ def api_start_instance(instance_id: str, body: dict[str, Any] | None = None) -> 
     if not pm.status(instance_id).get("running"):
         try:
             cfg, _ = instance_store.read_instance_files(instance_id)
+            _validate_napcat_self_id_binding(instance_id, cfg)
             port = int(cfg.get("port") or instance_store.read_port(instance_store.instance_dir(instance_id)))
             cleared_port_pids = _clear_external_port_listeners(port)
         except RuntimeError as e:

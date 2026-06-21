@@ -133,14 +133,22 @@ class OneBotTransport:
         if self._server is not None:
             self._server.should_exit = True
         if self._server_task is not None:
-            self._server_task.cancel()
             try:
-                await self._server_task
+                await asyncio.wait_for(self._server_task, timeout=3.0)
+            except asyncio.TimeoutError:
+                self._server_task.cancel()
+                try:
+                    await self._server_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
             except asyncio.CancelledError:
                 pass
             except Exception:
                 pass
             self._server_task = None
+        self._server = None
         self.info.connected = False
 
     async def _handle_socket(self, websocket: WebSocket) -> None:

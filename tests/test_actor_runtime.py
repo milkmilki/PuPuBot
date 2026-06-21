@@ -1,8 +1,10 @@
 import asyncio
+from concurrent.futures import Future
 import json
 import os
 import socket
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -34,6 +36,29 @@ class OneBotParsingTests(unittest.TestCase):
 
 
 class OneBotTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stop_releases_bound_port(self) -> None:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+
+        async def _handle(_event: dict) -> None:
+            return None
+
+        transport = OneBotTransport(
+            host="127.0.0.1",
+            port=port,
+            on_event=_handle,
+        )
+        await transport.start()
+        await transport.stop()
+
+        rebound = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            rebound.bind(("127.0.0.1", port))
+        finally:
+            rebound.close()
+
     async def test_start_fails_when_port_is_already_bound(self) -> None:
         blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         blocker.bind(("127.0.0.1", 0))
@@ -296,6 +321,32 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
 
             mock_start.assert_called_once()
 
+    async def test_actor_start_returns_before_background_tasks_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a", qq_mode="cli")
+            cfg = json.loads(ctx.config_path.read_text(encoding="utf-8"))
+            cfg["proactive_enabled"] = False
+            ctx.config_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+            actor = InstanceActor(ctx, preflight=False)
+
+            async def blocking_background_loop() -> None:
+                time.sleep(0.5)
+
+            actor._scheduler_loop = blocking_background_loop  # type: ignore[method-assign]
+            actor._maintenance_loop = blocking_background_loop  # type: ignore[method-assign]
+
+            started_at = time.perf_counter()
+            await actor.start()
+            elapsed = time.perf_counter() - started_at
+
+            for task in list(actor._tasks):
+                task.cancel()
+            if actor._tasks:
+                await asyncio.gather(*actor._tasks, return_exceptions=True)
+            await actor.stop()
+
+            self.assertLess(elapsed, 2.0)
+
     async def test_cli_actor_start_respects_proactive_enabled_true(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ctx = self._make_ctx(Path(tmp), "actor-a", qq_mode="cli", owner_ids=[])
@@ -542,6 +593,22 @@ class ProcessManagerActorModeTests(unittest.IsolatedAsyncioTestCase):
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+    async def test_status_preserves_actor_while_start_future_pending(self) -> None:
+        iid = instance_store.create_instance("Starting", qq_mode="napcat", port=18109)
+        pm = ProcessManager()
+        actor = InstanceActor.from_instance_dir(instance_store.instance_dir(iid), preflight=False)
+        future: Future[None] = Future()
+
+        pm._actors[iid] = actor
+        pm._actor_tasks[iid] = future
+
+        status = pm.status(iid)
+
+        self.assertTrue(status["running"])
+        self.assertEqual(status.get("state"), "starting")
+        self.assertIs(pm._actors.get(iid), actor)
+        future.cancel()
 
     async def test_actor_mode_does_not_popen(self) -> None:
         iid = instance_store.create_instance("A", qq_mode="cli", port=18101)

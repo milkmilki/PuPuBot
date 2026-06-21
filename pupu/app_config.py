@@ -203,6 +203,7 @@ def apply_app_config_env(
     override: bool = False,
     path: str | Path | None = None,
     ensure_file: bool = False,
+    refresh_tools: bool = True,
 ) -> dict[str, Any]:
     """Load ``pupu.yaml`` and map supported keys to environment variables.
 
@@ -300,12 +301,13 @@ def apply_app_config_env(
     elif override:
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
-    try:
-        from .tools import refresh_tool_definitions
+    if refresh_tools:
+        try:
+            from .tools import refresh_tool_definitions
 
-        refresh_tool_definitions()
-    except Exception as exc:
-        print(f"[pupu][mcp] refresh tools skipped: {exc}")
+            refresh_tool_definitions()
+        except Exception as exc:
+            print(f"[pupu][mcp] refresh tools skipped: {exc}")
     return cfg
 
 

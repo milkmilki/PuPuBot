@@ -37,5 +37,29 @@ if errorlevel 1 (
 echo [2/2] Starting console...
 echo Default URL: http://127.0.0.1:8770/
 echo.
-start "PuPu Console" cmd /k ""%PY%" -m pupu_console"
-exit /b
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8770/api/instances' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 (
+    echo [INFO] Console is already running.
+    start "" "http://127.0.0.1:8770/"
+    exit /b 0
+)
+
+if not exist "logs\launcher" mkdir "logs\launcher"
+start "PuPu Console" cmd /k ""%PY%" -m pupu_console 1>>"logs\launcher\console.log" 2>>&1"
+
+echo [INFO] Waiting for console to become ready...
+for /l %%i in (1,1,30) do (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:8770/api/instances' -UseBasicParsing -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+    if not errorlevel 1 (
+        echo [OK] Console is ready.
+        start "" "http://127.0.0.1:8770/"
+        exit /b 0
+    )
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 1" >nul 2>&1
+)
+
+echo [ERROR] Console did not become ready in time.
+echo See logs\launcher\console.log for details.
+pause
+exit /b 1

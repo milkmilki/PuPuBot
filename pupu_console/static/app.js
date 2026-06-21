@@ -167,7 +167,7 @@ async function selectInstance(id) {
     <div id="tab-soul" class="panel" style="display:none">
       <label>显示名称 <input id="f-display" value="${escapeHtml(data.display_name || "")}" /></label>
       <label>端口 <input id="f-port" type="number" value="${Number(data.port) || 8081}" /></label>
-      <label>Bot QQ / self_id（可选）<input id="f-bot-id" value="${escapeHtml(data.bot_id || "")}" placeholder="例如 3596356160" /></label>
+      <label>Bot QQ / self_id（多 NapCat 实例必填，用于防串号）<input id="f-bot-id" value="${escapeHtml(data.bot_id || "")}" placeholder="例如 3596356160" /></label>
       <label>QQ 模式
         <select id="f-qqmode">
           <option value="siri">Siri / 桌宠模式</option>
@@ -234,16 +234,20 @@ async function selectInstance(id) {
     const mode = $("#run-qqmode").value;
     const msg = $("#run-mode-msg");
     $("#f-qqmode").value = mode;
-    if (msg) msg.textContent = "正在启动，启动前会检查并清理端口残留…";
-    const started = await api(`/api/instances/${id}/start`, {
-      method: "POST",
-      body: JSON.stringify({ qq_mode: mode }),
-    });
-    const cleared = Array.isArray(started.cleared_port_pids) ? started.cleared_port_pids : [];
-    if (msg) {
-      msg.textContent = cleared.length
-        ? `已清理端口残留进程：${cleared.join(", ")}`
-        : "已启动；未发现端口残留。";
+    if (msg) msg.textContent = "正在启动：先检查端口残留，然后初始化实例运行时…";
+    try {
+      const started = await api(`/api/instances/${id}/start`, {
+        method: "POST",
+        body: JSON.stringify({ qq_mode: mode }),
+      });
+      const cleared = Array.isArray(started.cleared_port_pids) ? started.cleared_port_pids : [];
+      if (msg) {
+        msg.textContent = cleared.length
+          ? `已清理端口残留进程：${cleared.join(", ")}`
+          : "已启动；未发现端口残留。";
+      }
+    } catch (e) {
+      if (msg) msg.textContent = "启动失败: " + e.message;
     }
     await refreshRunStatus();
     await loadInstances();
