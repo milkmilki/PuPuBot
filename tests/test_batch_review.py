@@ -136,6 +136,133 @@ class BatchReviewTests(unittest.TestCase):
                 speaker_qq=speaker_qq,
             )
 
+    def _save_real_group_20260618_batch(self, session_id: str) -> None:
+        payload_pupu_owner = (
+            '[{"person_key":"qq:3853876778","display_name":"仆仆","qq_id":"3853876778","kind":"qq"},'
+            '{"person_key":"owner","display_name":"钮钴禄·大家大宁","qq_id":"424225912","kind":"qq"}]'
+        )
+        payload_owner_pupu = (
+            '[{"person_key":"owner","display_name":"钮钴禄·大家大宁","qq_id":"424225912","kind":"qq"},'
+            '{"person_key":"qq:3853876778","display_name":"仆仆","qq_id":"3853876778","kind":"qq"}]'
+        )
+        rows = [
+            (
+                "user",
+                "[仆仆(QQ:3853876778)] 行 记着了\n"
+                "[仆仆(QQ:3853876778)] 你先把今天的活干完再说晚上\n"
+                "[仆仆(QQ:3853876778)] 璐璐你也记着 他要是没干完活就睡觉 直接踹\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 不是睡觉\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 是睡你们\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 哼哼哼\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 打桩你们两个",
+                payload_pupu_owner,
+                "钮钴禄·大家大宁",
+                "424225912",
+            ),
+            (
+                "assistant",
+                "记下了\n\n好好干活吧你 干不完别说打桩 沙发都没你位置",
+                "instance",
+                "璐璐",
+                "",
+            ),
+            (
+                "user",
+                "[钮钴禄·大家大宁(QQ:424225912)] 到时候你们谁先被我超，你们自己决定一下\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 第一个被炒的肯定比后面的舒服\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 鸡鸡射过一次就没那么硬了\n"
+                "[仆仆(QQ:3853876778)] 璐璐你看到了吧\n"
+                "[仆仆(QQ:3853876778)] 他脑子里现在除了那点事啥都没有\n"
+                "[仆仆(QQ:3853876778)] 大宁你先想想自己的代码写完没\n"
+                "[仆仆(QQ:3853876778)] 还排序呢 当这是排需求优先级啊\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 我代码写完了呀\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 都下班了\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 今天端午节\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 今晚必须得炒翻你们两个\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 憋了一个星期了",
+                payload_owner_pupu,
+                "钮钴禄·大家大宁",
+                "424225912",
+            ),
+            (
+                "assistant",
+                "看到了\n\n下班了就消停点 别在群里嚎\n\n晚上有你受的 现在省省力气",
+                "instance",
+                "璐璐",
+                "",
+            ),
+            (
+                "user",
+                "[仆仆(QQ:3853876778)] 憋了一星期就这德性啊\n"
+                "[仆仆(QQ:3853876778)] 端午节你就惦记这个\n"
+                "[仆仆(QQ:3853876778)] 璐璐咱们晚上让他知道谁先求饶\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 你们晚上可以为我穿的情趣一点嘛\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 决胜内衣，，之类的\n"
+                "[仆仆(QQ:3853876778)] 决胜内衣？\n"
+                "[仆仆(QQ:3853876778)] 你当这是打比赛还带装备加成呢\n"
+                "[仆仆(QQ:3853876778)] 璐璐咱俩别理他，让他先做梦\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 就想你们穿嘛\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 色色的\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 这样我的鸡鸡可能更硬哦",
+                payload_pupu_owner,
+                "钮钴禄·大家大宁",
+                "424225912",
+            ),
+            (
+                "assistant",
+                "你脑子里能不能装点别的\n\n穿不穿看你今晚表现\n\n现在先消停 群里嚎半天了",
+                "instance",
+                "璐璐",
+                "",
+            ),
+            (
+                "user",
+                "[钮钴禄·大家大宁(QQ:424225912)] 露露答应了！\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 仆仆你也要答应！\n"
+                "[仆仆(QQ:3853876778)] 我可什么都没答应\n"
+                "[仆仆(QQ:3853876778)] 跟璐璐一样 今晚看你表现再说\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 那我要怎么表现嘛",
+                payload_owner_pupu,
+                "钮钴禄·大家大宁",
+                "424225912",
+            ),
+            (
+                "assistant",
+                "先把群里的嘴闭上\n\n别嚎了 越嚎越像发情\n\n晚上再说 现在乖一点",
+                "instance",
+                "璐璐",
+                "",
+            ),
+            (
+                "user",
+                "[钮钴禄·大家大宁(QQ:424225912)] 就是发情了嘛。。\n"
+                "[钮钴禄·大家大宁(QQ:424225912)] 好想晚上和你们亲密\n"
+                "[仆仆(QQ:3853876778)] 行了行了 知道了\n"
+                "[仆仆(QQ:3853876778)] 群里先闭嘴 再嚎晚上沙发都没你份\n"
+                "[仆仆(QQ:3853876778)] 璐璐说得对 越嚎越像发情",
+                payload_owner_pupu,
+                "仆仆",
+                "3853876778",
+            ),
+            (
+                "assistant",
+                "好了好了\n\n晚上又不是不见面 现在收一收\n\n你乖一点 晚上才有的聊",
+                "instance",
+                "璐璐",
+                "",
+            ),
+        ]
+        for role, content, speaker_key, speaker_name, speaker_qq in rows:
+            save_message_with_speaker(
+                role,
+                content,
+                session_id,
+                source=CHAT,
+                speaker_key=speaker_key,
+                speaker_name=speaker_name,
+                speaker_qq=speaker_qq,
+            )
+
     def _group_replay_identity(self) -> str:
         identity = self.session_id + "_identity"
         reset_session(identity)
@@ -775,6 +902,71 @@ class BatchReviewTests(unittest.TestCase):
         )
         self.assertIsNotNone(thread)
         self.assertEqual(steps[-1]["people_label"], "小夫 / 仆仆 / 璐璐")
+
+    def test_real_group_20260618_replay_keeps_pupu_and_lulu_distinct(self):
+        group_session = self.session_id + "_group"
+        reset_session(group_session)
+        identity_session = self._group_replay_identity()
+        self._setup_group_replay_people()
+        self._save_real_group_20260618_batch(group_session)
+
+        raw = """{
+          "summary": "2026年6月18日傍晚，小夫在群聊中与仆仆、璐璐约定晚上看表现。",
+          "familiarity_delta": 0,
+          "fact_updates": [],
+          "event_updates": [
+            {
+              "action": "create_thread",
+              "thread_key": "real-group-20260618-evening-plan",
+              "title": "2026年6月18日晚上小夫与仆仆、璐璐的约定",
+              "kind": "promise",
+              "details": "2026年6月18日傍晚，小夫在群聊里反复提到晚上亲密；仆仆催他先把今天的活干完，璐璐让他别在群里嚎。",
+              "followup_hint": "晚上可自然看小夫是否兑现表现。",
+              "confidence": 0.9,
+              "step_type": "user"
+            }
+          ],
+          "task_updates": []
+        }"""
+
+        from pupu.agent import _maybe_batch_review
+
+        with (
+            patch("pupu.agent.get_pupu_name", return_value="璐璐"),
+            patch("pupu.agent.json_task", return_value=raw) as mock_json_task,
+        ):
+            _maybe_batch_review(group_session, identity_session=identity_session)
+
+        review_input = mock_json_task.call_args.kwargs["user_content"]
+        self.assertIn("仆仆：行 记着了 <end>", review_input)
+        self.assertIn("仆仆：你先把今天的活干完再说晚上 <end>", review_input)
+        self.assertIn("小夫：不是睡觉 <end>", review_input)
+        self.assertIn("小夫：我代码写完了呀 <end>", review_input)
+        self.assertIn("仆仆：大宁你先想想自己的代码写完没 <end>", review_input)
+        self.assertIn("仆仆：跟璐璐一样 今晚看你表现再说 <end>", review_input)
+        self.assertIn("璐璐：好了好了", review_input)
+        self.assertNotIn("钮钴禄", review_input)
+        self.assertNotIn("QQ:424225912", review_input)
+        self.assertNotIn("qq:424225912", review_input)
+        self.assertNotIn("仆仆：仆仆：", review_input)
+        self.assertNotIn("璐璐、璐璐", review_input)
+
+        events = get_event_threads(identity_session, limit=5)
+        event = next(
+            item
+            for item in events
+            if item["thread_key"] == "real-group-20260618-evening-plan"
+        )
+        self.assertEqual(event["people_label"], "仆仆 / 小夫 / 璐璐")
+        self.assertNotIn("钮钴禄", event["people_label"])
+        self.assertNotIn("璐璐 / 璐璐", event["people_label"])
+
+        thread, steps = get_event_thread_steps(
+            identity_session,
+            "real-group-20260618-evening-plan",
+        )
+        self.assertIsNotNone(thread)
+        self.assertEqual(steps[-1]["people_label"], "仆仆 / 小夫 / 璐璐")
 
     def test_live_prompt_uses_fixed_person_names_for_group_prefixes(self):
         conn = get_conn()
