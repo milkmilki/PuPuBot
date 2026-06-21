@@ -47,7 +47,7 @@ from .memory import (
 )
 from .memory_index import is_memu_long_term_enabled, recall_memories, sync_review_memory
 from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
-from .message_sources import CHAT
+from .message_sources import CHAT, is_internal_message_source, message_source_label
 from .persona import build_batch_review_prompt, build_system_prompt, get_pupu_name
 from .review_followups import (
     apply_review_task_updates,
@@ -802,6 +802,11 @@ def _format_message_content_for_prompt(
     if not content:
         return ""
     turn_timestamp, content = _split_leading_turn_timestamp(content)
+    source = item.get("source")
+    if is_internal_message_source(source):
+        speaker = message_source_label(item.get("role"), source, character_name)
+        prefix = f"{turn_timestamp} " if turn_timestamp else ""
+        return f"{prefix}{speaker}：{content}"
     if bare_assistant and str(item.get("role") or "") == "assistant":
         speaker = _review_speaker_name_for_message(item, known_names, character_name)
         return _strip_leading_speaker_prefix(content, [speaker])
@@ -1001,6 +1006,7 @@ def chat(
         {
             "role": "user",
             "content": display_text,
+            "source": message_source,
             "speaker_key": speaker_key,
             "speaker_name": speaker_name,
             "speaker_qq": speaker_qq,

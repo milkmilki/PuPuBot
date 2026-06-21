@@ -42,7 +42,7 @@ from pupu.memory import (
 from pupu.storage import get_conn, upsert_person
 from pupu.persona import build_batch_review_prompt
 
-from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED
+from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED, WAIT_FOLLOWUP
 
 
 class BatchReviewTests(unittest.TestCase):
@@ -1147,6 +1147,38 @@ class BatchReviewTests(unittest.TestCase):
         )
 
         self.assertEqual(messages[0]["content"], "璐璐：真睡了？")
+
+    def test_live_chat_history_labels_internal_sources(self):
+        history = [
+            {
+                "role": "user",
+                "content": "[时间: 2026-06-21 周日 09:00] [定时任务「喝水」]\n提醒小夫喝水",
+                "source": SCHEDULED,
+            },
+            {
+                "role": "user",
+                "content": "[时间: 2026-06-21 周日 09:10] [系统触发的追问]\n自然跟进一句",
+                "source": WAIT_FOLLOWUP,
+            },
+            {
+                "role": "assistant",
+                "content": "我主动问一句",
+                "source": PROACTIVE,
+            },
+        ]
+
+        messages = _format_chat_history_for_prompt(
+            history,
+            character_name="璐璐",
+            people=[],
+        )
+
+        text = "\n".join(item["content"] for item in messages)
+        self.assertIn("[时间: 2026-06-21 周日 09:00] 系统触发的定时任务：", text)
+        self.assertIn("[时间: 2026-06-21 周日 09:10] 系统触发的追问（璐璐）：", text)
+        self.assertIn("璐璐主动发出：我主动问一句", text)
+        self.assertNotIn("用户：[定时任务", text)
+        self.assertNotIn("用户：[系统触发的追问", text)
 
     def test_prefixed_group_lines_strip_duplicate_speaker_prefixes(self):
         payload = (

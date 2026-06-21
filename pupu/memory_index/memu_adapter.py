@@ -19,6 +19,7 @@ from urllib.parse import quote, unquote
 from pydantic import BaseModel
 
 from ..instance_context import require_current_instance_context
+from ..message_sources import is_internal_message_source, message_source_label
 from ..persona.core import get_pupu_name
 from ..shared_runtime import get_shared_memu_runtime
 from ..storage.db import get_conn, get_data_dir
@@ -70,6 +71,11 @@ def _format_history_for_recall(
     for item in (history or [])[-limit:]:
         content = _replace_default_character_name(item.get("content") or "", name).strip()
         if not content:
+            continue
+        if is_internal_message_source(item.get("source")):
+            lines.append(
+                f"{message_source_label(item.get('role'), item.get('source'), name)}: {content}"
+            )
             continue
         if _has_speaker_label(content):
             lines.append(content)

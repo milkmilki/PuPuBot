@@ -18,6 +18,8 @@ from .memory_index import (
     format_memu_recall_report,
     run_memu_maintenance,
 )
+from .message_sources import message_source_label
+from .persona import get_pupu_name
 from .proactive_control import is_proactive_enabled, set_proactive_enabled
 from .sessions import OWNER_SESSION
 from .tools import manage_scheduled_task
@@ -56,14 +58,21 @@ def _parse_tidy_mode(command_arg: str) -> tuple[str | None, str | None]:
     return None, TIDY_USAGE
 
 
-def _format_history(session_id: str, *, assistant_name: str = "PuPu") -> str:
+def _format_history(session_id: str, *, assistant_name: str = "") -> str:
+    assistant_name = str(assistant_name or get_pupu_name() or "PuPu")
     messages = get_recent_messages(20, session_id)
     if not messages:
         return "还没有聊天记录。"
     lines = []
     for message in messages:
         role = str(message.get("role") or "")
-        prefix = "你" if role == "user" else assistant_name
+        prefix = message_source_label(
+            role,
+            message.get("source"),
+            assistant_name,
+            user_label="你",
+            assistant_label=assistant_name,
+        )
         content = str(message.get("content") or "")
         lines.append(f"{prefix}: {content[:120]}")
     return "\n".join(lines)
@@ -283,4 +292,3 @@ async def execute_command(
         return CommandResult(True, "已关闭：本群恢复连接仲裁服务并正常接话。" + sync_note)
 
     return CommandResult(False)
-

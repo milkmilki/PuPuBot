@@ -34,6 +34,7 @@ from .memory_index import (
     format_memu_recall_report,
     run_memu_maintenance,
 )
+from .message_sources import message_source_label
 from .proactive_control import is_proactive_enabled, set_proactive_enabled
 from .tools import manage_scheduled_task
 
@@ -206,10 +207,17 @@ def handle_command(cmd: str) -> bool:
             console.print("[dim]还没有聊天记录。[/dim]")
         else:
             for m in messages:
-                if m["role"] == "user":
-                    console.print(f"[bold green]你:[/bold green] {m['content']}")
-                else:
-                    console.print(f"[bold cyan]仆仆:[/bold cyan] {m['content']}")
+                label = message_source_label(
+                    m.get("role"),
+                    m.get("source"),
+                    get_current_instance_context().display_name if get_current_instance_context() else "仆仆",
+                    user_label="你",
+                    assistant_label=(
+                        get_current_instance_context().display_name if get_current_instance_context() else "仆仆"
+                    ),
+                )
+                style = "bold green" if label == "你" else "bold cyan"
+                console.print(f"[{style}]{label}:[/{style}] {m['content']}")
         return False
     elif spec.command_id == "tasks":
         console.print(manage_scheduled_task(OWNER_SESSION, {"action": "list"}))

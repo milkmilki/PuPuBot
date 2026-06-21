@@ -26,6 +26,7 @@ from pupu.scheduler import (
     _latest_message_is_user,
     _run_due_tasks_with_sender,
 )
+from pupu.message_sources import SCHEDULED
 from pupu.sessions import OWNER_SESSION
 
 
@@ -94,10 +95,13 @@ class SchedulerSendTests(unittest.IsolatedAsyncioTestCase):
 
         with patch("pupu.scheduler.get_due_scheduled_tasks", return_value=[task]):
             with patch("pupu.scheduler.finalize_scheduled_task", return_value=True) as mock_finalize:
-                with patch("pupu.agent.chat", return_value="reply"):
+                with patch("pupu.agent.chat", return_value="reply") as mock_chat:
                     await _run_due_tasks_with_sender(sender)
 
         self.assertEqual(sent, [(OWNER_SESSION, "reply")])
+        self.assertEqual(mock_chat.call_args.args[5], SCHEDULED)
+        self.assertEqual(mock_chat.call_args.kwargs["context_session"], OWNER_SESSION)
+        self.assertEqual(mock_chat.call_args.kwargs["identity_session"], OWNER_SESSION)
         mock_finalize.assert_called_once()
 
 

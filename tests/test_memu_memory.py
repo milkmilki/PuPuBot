@@ -278,6 +278,21 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertIn("用户: 我想画画", text)
         self.assertIn("璐璐: 我想买二手屏", text)
 
+    def test_recall_history_labels_internal_sources(self):
+        text = _format_history_for_recall(
+            [
+                {"role": "user", "content": "[定时任务「喝水」]\n提醒一下", "source": SCHEDULED},
+                {"role": "user", "content": "[系统触发的追问]\n自然跟进", "source": WAIT_FOLLOWUP},
+                {"role": "assistant", "content": "我主动问一句", "source": PROACTIVE},
+            ],
+            character_name="璐璐",
+        )
+
+        self.assertIn("系统触发的定时任务: [定时任务「喝水」]", text)
+        self.assertIn("系统触发的追问（璐璐）: [系统触发的追问]", text)
+        self.assertIn("璐璐主动发出: 我主动问一句", text)
+        self.assertNotIn("用户: [定时任务", text)
+
     def test_recall_history_keeps_preformatted_group_speaker_names(self):
         text = _format_history_for_recall(
             [

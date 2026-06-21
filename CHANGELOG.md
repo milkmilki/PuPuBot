@@ -33,6 +33,7 @@
 ### 修复
 
 - 修复 proactive 最近上下文丢失 `message.source` 的问题；定时任务、wait-followup 追问、实例主动消息现在会分别标成系统触发或实例主动发出，不再被模型误当成用户亲口发言。
+- 聊天 prompt、memU recall history 和 `/history` 展示统一使用 `message.source` 标注内部消息；定时任务触发记录不会再显示成用户发言。
 - 清理 wait-followup 追问提示中的真实问号乱码，系统触发追问会明确告诉模型“这不是用户发言”。
 - 修复 actor CLI 当前路径里的显示文案乱码，并改为使用当前实例名显示回复和思考状态。
 - 修复旧实例库中 `person_facts` 存在重复行时，启动阶段创建唯一索引失败，导致 NapCat 看似一直停在等待连接的问题。
