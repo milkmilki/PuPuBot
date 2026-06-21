@@ -311,13 +311,13 @@ def main():
         raise RuntimeError("CLI instance context was not selected")
 
     async def _run_actor_cli() -> None:
-        actor = InstanceActor(ctx, preflight=False)
-        await actor.start()
-
         def _send(text: str) -> None:
             console.print(f"[bold cyan]{ctx.display_name}:[/bold cyan] ", end="")
             console.print(Markdown(str(text)))
             console.print()
+
+        actor = InstanceActor(ctx, preflight=False, cli_send=_send)
+        await actor.start()
 
         try:
             while True:

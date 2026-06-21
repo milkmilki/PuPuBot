@@ -59,11 +59,13 @@ class InstanceActor:
         context: InstanceContext,
         *,
         emit_log: Callable[[str], None] | None = None,
+        cli_send: Callable[[str], None] | None = None,
         preflight: bool = True,
         start_background_tasks: bool = True,
     ) -> None:
         self.context = context
         self._emit_log = emit_log or (lambda text: None)
+        self._cli_send = cli_send
         self._preflight = bool(preflight)
         self._start_background_tasks = bool(start_background_tasks)
         self._transport: OneBotTransport | None = None
@@ -84,12 +86,14 @@ class InstanceActor:
         instance_dir: str | Path,
         *,
         emit_log: Callable[[str], None] | None = None,
+        cli_send: Callable[[str], None] | None = None,
         preflight: bool = True,
         start_background_tasks: bool = True,
     ) -> "InstanceActor":
         return cls(
             InstanceContext.from_instance_dir(instance_dir),
             emit_log=emit_log,
+            cli_send=cli_send,
             preflight=preflight,
             start_background_tasks=start_background_tasks,
         )
@@ -154,7 +158,7 @@ class InstanceActor:
                 if self._start_background_tasks:
                     self._create_task(self._run_callable_with_context(self._scheduler_loop))
                     self._create_task(self._run_callable_with_context(self._maintenance_loop))
-                    if self.context.qq_mode == "napcat" and is_proactive_enabled():
+                    if is_proactive_enabled():
                         self._start_proactive_loop()
                 self._started = True
                 await emit_instance_status("running")
@@ -244,9 +248,12 @@ class InstanceActor:
         if any(getattr(task, "_pupu_proactive", False) for task in self._tasks if not task.done()):
             return "主动消息已开启，后台循环正在运行。"
         loop = asyncio.get_running_loop()
-        with activate_instance_context(self.context):
-            owner_qq = load_first_numeric_owner_id()
-        if owner_qq is None:
+        if self.context.qq_mode != "cli":
+            with activate_instance_context(self.context):
+                owner_qq = load_first_numeric_owner_id()
+        else:
+            owner_qq = None
+        if self.context.qq_mode != "cli" and owner_qq is None:
             return "主动消息已开启，但没有配置数字 owner QQ，后台循环暂时无法投递。"
 
         def send_owner_followup(text: str) -> None:
@@ -260,10 +267,7 @@ class InstanceActor:
             register_sender(OWNER_SESSION, send_owner_followup)
 
         async def send_to_owner(text: str) -> None:
-            await self.send_text(
-                ActorOutboundTarget(session_id=OWNER_SESSION, user_id=str(owner_qq)),
-                text,
-            )
+            await self._send_by_session(OWNER_SESSION, text)
 
         task = self._create_task(self._run_with_context(proactive_loop(send_to_owner)))
         setattr(task, "_pupu_proactive", True)
@@ -277,6 +281,9 @@ class InstanceActor:
 
     async def _send_by_session(self, session_id: str, text: str) -> None:
         sid = str(session_id or "")
+        if self.context.qq_mode == "cli":
+            await self.send_text(ActorOutboundTarget(session_id=sid), text)
+            return
         if sid == OWNER_SESSION:
             owner_qq = load_first_numeric_owner_id()
             if owner_qq is None:
@@ -299,7 +306,11 @@ class InstanceActor:
 
     async def send_text(self, target: ActorOutboundTarget, text: str) -> None:
         if self.context.qq_mode == "cli":
-            self._emit_log(str(text).rstrip() + "\n")
+            line = str(text).rstrip()
+            if self._cli_send is not None:
+                self._cli_send(line)
+            else:
+                self._emit_log(line + "\n")
             return
         if self._transport is None:
             raise RuntimeError("OneBot transport is not running")

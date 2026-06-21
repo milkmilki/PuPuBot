@@ -2,6 +2,13 @@
 
 ## 2026-06-21
 
+### Proactive 与 CLI
+
+- CLI 实例现在与 NapCat 实例一样会在 `proactive_enabled=true` 时启动 proactive loop，不再只在 QQ/NapCat 通道自动运行。
+- CLI proactive 不再要求配置数字 owner QQ；主动消息、scheduled sender 和 wait-followup 追问会通过 CLI 输出回调打印到当前终端。
+- `InstanceActor` 支持注入 `cli_send` 投递函数，CLI 入口用同一 actor runtime 接收普通回复、主动消息和延迟追问。
+- 补充 actor 回归测试，覆盖 CLI proactive 自动启动、无 owner QQ 投递、主动消息投递和 proactive should-wait 追问投递。
+
 ### 钩子层
 
 - 新增 `pupu.hooks` 进程内钩子层，支持注册同步或 async hook，并隔离 hook 异常，避免观察逻辑影响 bot 主流程。

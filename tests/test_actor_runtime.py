@@ -37,7 +37,15 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self) -> None:
         close_all_log_sinks()
 
-    def _make_ctx(self, root: Path, iid: str, *, port: int = 18081) -> InstanceContext:
+    def _make_ctx(
+        self,
+        root: Path,
+        iid: str,
+        *,
+        port: int = 18081,
+        qq_mode: str = "napcat",
+        owner_ids: list[str] | None = None,
+    ) -> InstanceContext:
         inst = root / "instances" / iid
         (inst / "data" / "logs").mkdir(parents=True)
         (inst / "instance.json").write_text(
@@ -45,9 +53,9 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "id": iid,
                     "display_name": iid,
-                    "qq_mode": "napcat",
+                    "qq_mode": qq_mode,
                     "port": port,
-                    "owner_ids": ["111"],
+                    "owner_ids": ["111"] if owner_ids is None else owner_ids,
                     "private_reply_mode": "all",
                     "open_groups": ["900"],
                     "bot_id": iid,
@@ -260,6 +268,73 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
                         await actor.stop()
 
             mock_start.assert_called_once()
+
+    async def test_cli_actor_start_respects_proactive_enabled_true(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a", qq_mode="cli", owner_ids=[])
+            cfg = json.loads(ctx.config_path.read_text(encoding="utf-8"))
+            cfg["proactive_enabled"] = True
+            ctx.config_path.write_text(json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+            actor = InstanceActor(ctx, preflight=False)
+
+            with patch.object(actor, "_start_proactive_loop", return_value="started") as mock_start:
+                await actor.start()
+                await actor.stop()
+
+            mock_start.assert_called_once()
+
+    async def test_cli_proactive_does_not_require_owner_qq_and_prints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a", qq_mode="cli", owner_ids=[])
+            delivered: list[str] = []
+            actor = InstanceActor(ctx, preflight=False, cli_send=delivered.append)
+
+            async def fake_proactive_loop(send_func):
+                await send_func("主动问一句")
+                await asyncio.sleep(3600)
+
+            with activate_instance_context(ctx):
+                init_db()
+                with patch("pupu.actor.instance_actor.proactive_loop", side_effect=fake_proactive_loop):
+                    result = actor._start_proactive_loop()
+                    await asyncio.sleep(0.05)
+            try:
+                self.assertEqual(result, "主动消息已开启，后台循环已启动。")
+                self.assertEqual(delivered, ["主动问一句"])
+            finally:
+                actor._stop_proactive_loop()
+                for task in list(actor._tasks):
+                    task.cancel()
+                if actor._tasks:
+                    await asyncio.gather(*actor._tasks, return_exceptions=True)
+                dialogue_loop.unregister_sender(OWNER_SESSION)
+
+    async def test_cli_proactive_followup_sender_prints_after_timer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a", qq_mode="cli", owner_ids=[])
+            delivered: list[str] = []
+            actor = InstanceActor(ctx, preflight=False, cli_send=delivered.append)
+
+            async def fake_proactive_loop(_send_func):
+                await asyncio.sleep(3600)
+
+            with activate_instance_context(ctx):
+                init_db()
+                with patch("pupu.actor.instance_actor.proactive_loop", side_effect=fake_proactive_loop):
+                    actor._start_proactive_loop()
+            try:
+                with patch("pupu.agent.chat", return_value="追问一下"):
+                    dialogue_loop._on_timer_fire(OWNER_SESSION)
+                    await asyncio.sleep(0.05)
+
+                self.assertEqual(delivered, ["追问一下"])
+            finally:
+                actor._stop_proactive_loop()
+                for task in list(actor._tasks):
+                    task.cancel()
+                if actor._tasks:
+                    await asyncio.gather(*actor._tasks, return_exceptions=True)
+                dialogue_loop.unregister_sender(OWNER_SESSION)
 
 
 class OneBotTransportIntegrationTests(unittest.IsolatedAsyncioTestCase):
