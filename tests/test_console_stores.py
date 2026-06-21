@@ -51,6 +51,7 @@ class ConsoleStoresTests(unittest.TestCase):
         self.assertIn("/api/group_arbitrate", cfg["arbiter_url"])
         self.assertEqual(cfg["peer"], {"bot_id": "", "name": "", "qq": "", "persona_brief": ""})
         self.assertGreaterEqual(cfg["debounce_seconds_open_group"], 5.0)
+        self.assertTrue(cfg["proactive_enabled"])
         self.assertIn("core_persona", persona)
         port = instance_store.read_port(Path(self._tmpdir.name) / "instances" / iid)
         self.assertEqual(port, 8099)
@@ -68,8 +69,6 @@ napcat:
 instance:
   display_name: YAML Bot
   qq_mode: napcat
-  qq_app_id: app-yaml
-  qq_app_secret: secret-yaml
 """,
             encoding="utf-8",
         )
@@ -80,20 +79,16 @@ instance:
         self.assertEqual(cfg["display_name"], "YAML Bot")
         self.assertEqual(cfg["owner_ids"], ["12345"])
         self.assertEqual(cfg["private_reply_mode"], "owner_only")
-        self.assertEqual(cfg["qq_app_id"], "app-yaml")
-        self.assertEqual(cfg["qq_app_secret"], "secret-yaml")
-        env_text = (Path(self._tmpdir.name) / "instances" / iid / ".env.qq").read_text(encoding="utf-8")
-        self.assertIn("PORT=8123", env_text)
-        self.assertIn("HOST=127.0.0.1", env_text)
-        self.assertIn('COMMAND_START=["!"]', env_text)
+        self.assertNotIn("qq_app_id", cfg)
+        self.assertNotIn("qq_app_secret", cfg)
+        self.assertEqual(cfg["port"], 8123)
+        self.assertFalse((Path(self._tmpdir.name) / "instances" / iid / ".env.qq").exists())
 
-    def test_apply_soul_keeps_port_and_qq_fields(self) -> None:
-        iid = instance_store.create_instance("B", port=9101, qq_mode="official")
+    def test_apply_soul_keeps_port_and_runtime_fields(self) -> None:
+        iid = instance_store.create_instance("B", port=9101, qq_mode="napcat")
         instance_store.merge_update(
             iid,
             {
-                "qq_app_id": "app1",
-                "qq_app_secret": "sec1",
                 "owner_ids": ["1", "2"],
             },
             None,
@@ -121,9 +116,9 @@ instance:
         souls_store.apply_to_instance("s1", iid)
         cfg, persona = instance_store.read_instance_files(iid)
         self.assertEqual(cfg["port"], 9101)
-        self.assertEqual(cfg["qq_mode"], "official")
-        self.assertEqual(cfg["qq_app_id"], "app1")
-        self.assertEqual(cfg["qq_app_secret"], "sec1")
+        self.assertEqual(cfg["qq_mode"], "napcat")
+        self.assertNotIn("qq_app_id", cfg)
+        self.assertNotIn("qq_app_secret", cfg)
         self.assertEqual(cfg["owner_ids"], ["1", "2"])
         self.assertFalse(cfg["tool_servers"]["web"]["enabled"])
         self.assertEqual(persona["name"], "魂")
@@ -148,12 +143,22 @@ instance:
     def test_deprecated_instance_keys_scrubbed_on_write(self) -> None:
         iid = instance_store.create_instance("Z", port=9400)
         instance_store.merge_update(
-            iid, {"mode": "play", "persona_enabled": True, "llm": {"p": 1}}, None
+            iid,
+            {
+                "mode": "play",
+                "persona_enabled": True,
+                "llm": {"p": 1},
+                "qq_app_id": "old-app",
+                "qq_app_secret": "old-secret",
+            },
+            None,
         )
         cfg, _ = instance_store.read_instance_files(iid)
         self.assertNotIn("mode", cfg)
         self.assertNotIn("persona_enabled", cfg)
         self.assertNotIn("llm", cfg)
+        self.assertNotIn("qq_app_id", cfg)
+        self.assertNotIn("qq_app_secret", cfg)
 
     def test_replace_memory_db_creates_target(self) -> None:
         iid = instance_store.create_instance("M1", port=9300)

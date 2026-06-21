@@ -1009,6 +1009,15 @@ def observe(payload: dict[str, Any]) -> dict[str, Any]:
             ),
         )
         if reporter_bot_id:
+            reporter_qq = str(reporter.get("qq") or "").strip()
+            if reporter_qq:
+                conn.execute(
+                    """
+                    DELETE FROM group_bots
+                    WHERE group_id = ? AND qq = ? AND bot_id != ?
+                    """,
+                    (group_id, reporter_qq, reporter_bot_id),
+                )
             min_gap = reporter.get("min_bot_gap_seconds")
             try:
                 min_gap_val = float(min_gap) if min_gap is not None else 10.0
@@ -1036,7 +1045,7 @@ def observe(payload: dict[str, Any]) -> dict[str, Any]:
                 (
                     group_id,
                     reporter_bot_id,
-                    str(reporter.get("qq") or "").strip(),
+                    reporter_qq,
                     str(reporter.get("name") or reporter_bot_id).strip(),
                     str(reporter.get("persona_brief") or "").strip(),
                     max(0.0, min(600.0, min_gap_val)),

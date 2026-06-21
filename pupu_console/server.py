@@ -119,6 +119,7 @@ def _instance_summary(instance_id: str) -> dict[str, Any]:
         "qq_mode": cfg.get("qq_mode", "napcat"),
         "running": st["running"],
         "pid": st.get("pid"),
+        "runtime": st.get("runtime"),
     }
 
 
@@ -168,6 +169,7 @@ def api_get_instance(instance_id: str) -> dict[str, Any]:
     cfg["persona"] = persona
     cfg["running"] = st["running"]
     cfg["pid"] = st.get("pid")
+    cfg["runtime"] = st.get("runtime")
     mp = instance_store.memory_db_path(instance_id)
     memu_path = instance_store.memu_db_path(instance_id)
     cfg["memory_path"] = str(mp)

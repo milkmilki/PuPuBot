@@ -100,5 +100,34 @@ class ArbitratorTests(unittest.TestCase):
         self.assertNotIn("钮钴禄", context)
 
 
+    def test_observe_replaces_stale_bot_id_for_same_qq(self):
+        old = {
+            "group_id": "100",
+            "message_id": "old",
+            "text": "old",
+            "reporter": {"bot_id": "old-instance", "qq": "111", "name": "old"},
+        }
+        new = {
+            "group_id": "100",
+            "message_id": "new",
+            "text": "new",
+            "reporter": {"bot_id": "111", "qq": "111", "name": "new"},
+        }
+
+        self.assertTrue(arbitrator.observe(old)["ok"])
+        self.assertTrue(arbitrator.observe(new)["ok"])
+
+        conn = arbitrator._connect()
+        try:
+            rows = conn.execute(
+                "SELECT bot_id FROM group_bots WHERE group_id = ? AND qq = ? ORDER BY bot_id",
+                ("100", "111"),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual([row["bot_id"] for row in rows], ["111"])
+
+
 if __name__ == "__main__":
     unittest.main()

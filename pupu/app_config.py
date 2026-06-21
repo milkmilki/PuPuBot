@@ -341,17 +341,17 @@ def default_napcat_settings(config: dict[str, Any] | None = None) -> dict[str, A
         "access_token": str(_lookup(cfg, "napcat.access_token") or "").strip(),
     }
 
-
 def default_instance_settings(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config if config is not None else load_app_config()
     napcat = default_napcat_settings(cfg)
     arbiter_host = str(_lookup(cfg, "arbiter.host") or "127.0.0.1").strip() or "127.0.0.1"
     arbiter_port = _as_int(_lookup(cfg, "arbiter.port"), 18079)
+    qq_mode = str(_lookup(cfg, "instance.qq_mode") or "cli").strip().lower() or "cli"
+    if qq_mode not in {"cli", "napcat"}:
+        qq_mode = "cli"
     return {
         "display_name": str(_lookup(cfg, "instance.display_name") or "仆仆").strip() or "仆仆",
-        "qq_mode": str(_lookup(cfg, "instance.qq_mode") or "cli").strip().lower() or "cli",
-        "qq_app_id": str(_lookup(cfg, "instance.qq_app_id") or "").strip(),
-        "qq_app_secret": str(_lookup(cfg, "instance.qq_app_secret") or "").strip(),
+        "qq_mode": qq_mode,
         "owner_ids": default_owner_ids(cfg),
         "private_reply_mode": default_private_reply_mode(cfg),
         "private_allowed_ids": default_private_allowed_ids(cfg),
@@ -360,23 +360,3 @@ def default_instance_settings(config: dict[str, Any] | None = None) -> dict[str,
         "arbiter_base_url": f"http://{arbiter_host}:{arbiter_port}",
         "debounce_seconds_open_group": float(_lookup(cfg, "instance.debounce_seconds_open_group") or 35.0),
     }
-
-
-def format_env_qq(*, port: int | None = None, host: str | None = None) -> str:
-    settings = default_napcat_settings()
-    use_host = str(host or settings["host"]).strip() or "0.0.0.0"
-    use_port = int(port if port is not None else settings["port"])
-    lines = [
-        f"HOST={use_host}",
-        f"PORT={use_port}",
-        f"COMMAND_START={json.dumps(settings['command_start'], ensure_ascii=False)}",
-        f"COMMAND_SEP={json.dumps(settings['command_sep'], ensure_ascii=False)}",
-    ]
-    token = str(settings.get("access_token") or "").strip()
-    if token:
-        lines.append(f"ONEBOT_ACCESS_TOKEN={token}")
-    return "\n".join(lines) + "\n"
-
-
-def write_env_qq_file(inst_dir: Path, *, port: int | None = None, host: str | None = None) -> None:
-    (inst_dir / ".env.qq").write_text(format_env_qq(port=port, host=host), encoding="utf-8")

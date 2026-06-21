@@ -62,7 +62,6 @@ from .people import (
     person_from_message_sender,
     person_from_session,
     qq_person_key,
-    qqofficial_person_key,
     resolve_person_for_prompt,
     upsert_person,
 )
@@ -153,7 +152,6 @@ __all__ = [
     "person_from_message_sender",
     "person_from_session",
     "qq_person_key",
-    "qqofficial_person_key",
     "resolve_person_for_prompt",
     "upsert_person",
     "group_person_facts_for_display",

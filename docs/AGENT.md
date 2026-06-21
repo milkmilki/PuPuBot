@@ -1,166 +1,161 @@
 # Agent Quick Reference
 
-Fast-lookup guide for AI agents working on this codebase. Read this before exploring files.
+Fast lookup guide for AI agents working on this codebase. Read this before exploring files.
 
 **Locale:** Code comments, prompts, and user-facing strings are often Chinese; this doc is English for agent handoff.
 
 ## Architecture Overview
 
-```
+```text
 User (QQ / Terminal)
-        │
-        ▼
-┌──────────────────┐        start.py selects/creates an instance
-│  start.py        │──────────────────────────────────┐
-│  Windows .bat    │                                  │
-└──────────────────┘                                  │
-                                                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  CLI: pupu/cli.py  │  QQ: plugins/pupu_plugin.py                 │
-│  → pupu.agent.chat │  → plugins/pupu_support/buffering.py       │
-│                    │     (debounce → asyncio.to_thread(chat))    │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-                                ▼
-                     ┌──────────────────────┐
-                     │  pupu/agent.py       │
-                     │  chat(user, sid, …)  │
-                     └───┬──────────────┬───┘
-                         │              │
-         ┌───────────────┘              └────────────────┐
-         ▼                                               ▼
-  pupu/followup.py                          pupu/dialogue_loop.py
-  (JSON output protocol + parse)            (180s wait timer + sender registry)
-  pupu/persona/ (build_system_prompt)       pupu/followup_manager.py (Timer)
-  pupu/memory.py → pupu/storage/*           plugins register senders (QQ/CLI)
-  pupu/tooling/* (tools)
+        |
+        v
+start.py / PuPu Console
+        |
+        v
+InstanceActor per instance
+  - CLI transport
+  - NapCat OneBot v11 reverse WebSocket transport
+  - MessageBuffer
+  - scheduler / proactive / maintenance tasks
+        |
+        v
+pupu.agent.chat()
+  - SQLite memory
+  - memU semantic cache
+  - MCP/tools
+  - batch review
 ```
 
-## Key Files and What They Do
+PuPu is now instance-first and actor-only for runtime instances. There is no root-level default bot, no NoneBot plugin path, and no one-instance-one-Python-subprocess runtime. The console can host multiple `InstanceActor` objects in one Python process. The group arbiter remains a separate FastAPI service started by the console.
+
+## Key Files
 
 | Path | Purpose |
 |------|---------|
-| [start.py](../start.py) | Instance-first launcher: select/create `instances/<id>`, then start CLI or QQ for that instance. No root-level default bot. |
-| [pupu/instance_main.py](../pupu/instance_main.py) | Subprocess entry for one instance; loads `pupu.yaml`, then reads `instance.json` + generated per-instance `.env.qq` / DB / persona |
-| [pupu/agent.py](../pupu/agent.py) | **`chat()`** — save user msg, build prompt, `chat_complete` + tools, `_parse_dialogue_output`, save assistant; start-of-turn **`cancel_wait_timer`**; end **`schedule_wait_timer`** if `should_wait`; **`message_source`** (`chat`, `scheduled`, `wait_followup`, …); batch review when `source == chat` |
-| [pupu/followup.py](../pupu/followup.py) | **`DIALOGUE_OUTPUT_PROTOCOL`** (sole spec for chat JSON output); **`WAIT_DELAY_SECONDS = 180`**; **`_parse_dialogue_output`** → `(content, should_wait)` with JSON repair / heuristics |
-| [pupu/message_sources.py](../pupu/message_sources.py) | Single source for persisted **`message_source`** / `source` strings: **`CHAT`**, **`SCHEDULED`**, **`PROACTIVE`**, **`WAIT_FOLLOWUP`** (agent still exports **`REVIEW_SOURCE = CHAT`**) |
-| [pupu/sessions.py](../pupu/sessions.py) | **`OWNER_SESSION`** — canonical owner session id (`"owner"`) for CLI, NapCat owner mapping, proactive, scheduler, seed data |
-| [pupu/dialogue_loop.py](../pupu/dialogue_loop.py) | **`schedule_wait_timer` / `cancel_wait_timer` / `has_wait_timer`**; **`register_sender(sid, fn)`** — sync `fn(text)` delivers assistant text when timer fires; **`_on_timer_fire`** calls `chat(..., message_source=WAIT_FOLLOWUP)` then sender |
-| [pupu/followup_manager.py](../pupu/followup_manager.py) | Per-session `threading.Timer` + worker queue (used by `dialogue_loop`) |
-| [pupu/proactive.py](../pupu/proactive.py) | Idle proactive messages; generation uses **`system + DIALOGUE_OUTPUT_PROTOCOL`**, parses output; **`schedule_wait_timer(OWNER_SESSION)`** if `should_wait`; cancels pending wait timer before generating |
-| [pupu/review_followups.py](../pupu/review_followups.py) | Batch review outputs: summaries, familiarity delta, person-scoped facts, event thread updates, scheduled task updates |
-| [pupu/scheduler.py](../pupu/scheduler.py) | Due **DB** `scheduled_tasks` → synthetic user message → `chat(..., message_source="scheduled")` → send via OneBot / CLI print; **`_is_wait_followup_task`** filters legacy `wait_followup*` DB rows (real wait is in-memory now) |
-| [pupu/cli.py](../pupu/cli.py) | Terminal REPL; imports **`OWNER_SESSION`** from [`sessions.py`](../pupu/sessions.py); **`register_sender(OWNER_SESSION, ...)`** so timer follow-ups print in-terminal |
-| [plugins/pupu_plugin.py](../plugins/pupu_plugin.py) | NoneBot plugin load entry |
-| [plugins/pupu_support/buffering.py](../plugins/pupu_support/buffering.py) | Debounced QQ messages; **every** inbound message **`cancel_wait_timer(sid)`**; for eligible sessions **`register_sender`** (private OneBot delivery via `run_coroutine_threadsafe`). **Open-group** sessions push every message to `/api/observe` and react to decisions via `arbiter_decision_subscriber`; private/owner sessions still use the local `debounce_flush`. |
-| [pupu_console/arbitrator.py](../pupu_console/arbitrator.py) | Group speaker arbitration. `observe()` records each group message (deduped on `(group_id, message_id)`) and upserts the reporter into `group_bots`. `run_judge()` runs **once per debounce flush** under a per-group threading lock and writes to `group_decisions`. `await_decision_async()` is the long-poll backing `/api/await_decision` (uses `asyncio.Event`). Legacy `arbitrate()` (`/api/group_arbitrate`) kept for the deprecation window with the same per-group lock. |
-| [pupu_console/arbiter_server.py](../pupu_console/arbiter_server.py) | FastAPI app for the arbiter. Routes: `POST /api/observe`, `GET /api/await_decision`, `POST /api/group_arbitrate` (legacy), `GET /health`. Owns the per-group idle debounce watchdog; judging only fires after the group has been quiet. |
-| [plugins/pupu_support/onebot_handlers.py](../plugins/pupu_support/onebot_handlers.py) | OneBot v11 private/group; on connect **`register_owner_wait_followup_sender`** so proactive/timer can reach owner without a recent user turn |
-| [pupu/memory.py](../pupu/memory.py) | Facade re-exporting [pupu/storage/*](../pupu/storage/) (messages, familiarity, facts, summaries, event threads, scheduled tasks, people indexes, …) |
-| [pupu/persona/](../pupu/persona/) | **`build_system_prompt`** (persona + memory + scheduler tool rules only; **no** duplicate JSON format block — that lives in `followup.DIALOGUE_OUTPUT_PROTOCOL`) |
+| [start.py](../start.py) | Instance-first launcher: select/create an instance, then enter CLI or start NapCat QQ for that instance. |
+| [pupu/actor/instance_actor.py](../pupu/actor/instance_actor.py) | Per-instance actor: owns context, transport, message buffer, scheduler, proactive and maintenance loops. |
+| [pupu/actor/onebot_transport.py](../pupu/actor/onebot_transport.py) | Lightweight OneBot v11 reverse WebSocket server used by NapCat. |
+| [pupu/actor/message_buffer.py](../pupu/actor/message_buffer.py) | Per-actor debounce, command interception, wait-followup sender registration, and open-group arbiter integration. |
+| [pupu/command_service.py](../pupu/command_service.py) | Surface-agnostic command router used by CLI and NapCat actor. |
+| [pupu/cli.py](../pupu/cli.py) | Terminal REPL backed by `InstanceActor`; uses `owner` as the session. |
+| [pupu/agent.py](../pupu/agent.py) | `chat()` saves input, builds prompt, runs model/tool loop, saves output, schedules wait-followup, and triggers batch review. |
+| [pupu/followup.py](../pupu/followup.py) | Dialogue JSON output protocol and parser. |
+| [pupu/dialogue_loop.py](../pupu/dialogue_loop.py) | Wait-followup timers and sender registry. |
+| [pupu/scheduler.py](../pupu/scheduler.py) | Due DB `scheduled_tasks` -> synthetic user message -> `chat(..., message_source="scheduled")` -> transport-neutral sender. |
+| [pupu/proactive.py](../pupu/proactive.py) | Idle proactive message loop; actor supplies the owner sender. |
+| [pupu/review_followups.py](../pupu/review_followups.py) | Batch review output parsing and persistence for summaries, person facts, event threads and tasks. |
+| [pupu/storage/](../pupu/storage/) | SQLite schema and storage functions. SQLite is the fact source of truth. |
+| [pupu/memory_index/](../pupu/memory_index/) | memU adapter and cache reconciliation. memU is a semantic cache over SQLite cards. |
+| [pupu_console/process_manager.py](../pupu_console/process_manager.py) | Actor supervisor for the console; starts/stops instance actors in the console process. Also starts the external arbiter service. |
+| [pupu_console/arbitrator.py](../pupu_console/arbitrator.py) | Open-group speaker arbitration. |
+| [pupu_console/server.py](../pupu_console/server.py) | FastAPI console API. |
 
-## Dialogue output protocol (every normal model turn)
+## Dialogue Output Protocol
 
-The chat system prompt ends with **`DIALOGUE_OUTPUT_PROTOCOL`** ([followup.py](../pupu/followup.py)): the model must return **only** JSON `{"content": "...", "should_wait": true|false}`.
+Normal chat turns end the system prompt with `DIALOGUE_OUTPUT_PROTOCOL`:
 
-- **`content`**: text shown to the user.
-- **`should_wait`**: if `true` and the session is **eligible**, [`dialogue_loop.schedule_wait_timer`](../pupu/dialogue_loop.py) starts a **180s** in-memory timer. If the user does not start a new `chat()` turn in time, **`_on_timer_fire`** runs another `chat()` with a synthetic system reminder and `message_source="wait_followup"`, then pushes **`content`** through the registered **sender**.
+```json
+{"content": "...", "should_wait": true}
+```
 
-**Eligibility:** only **`owner`** and **`private_<digits>`** (OneBot private QQ id). **Group / channel / c2c_* sessions** still parse JSON but **do not** start the wait timer (avoids awkward group pings).
+- `content`: text sent to the user.
+- `should_wait`: if true and the session is eligible, `dialogue_loop.schedule_wait_timer()` starts a 180s in-memory timer.
 
-**Cancellation:** `chat()` **always** calls `cancel_wait_timer(session_id)` at the **start** of a turn (covers CLI and scheduled/wait_followup turns). QQ **`buffer_message`** also cancels on every inbound user message before debounce.
+Eligible sessions are `owner` and `private_<QQ>`. Group sessions never start wait-followup timers.
 
-**Unlimited follow-up chains:** each wait_followup reply may again set `should_wait=true` and schedule another 180s (no cap in code).
+## One Chat Turn
 
-## Data Flow: One Chat Turn (simplified)
+1. CLI or NapCat transport creates an `ActorInboundMessage`.
+2. `MessageBuffer` handles commands first. Any message beginning with `/` is never sent to the chat model.
+3. Non-command private messages are debounced locally. Open-group messages go through the arbiter flow.
+4. `chat()` saves the user message to SQLite with speaker metadata.
+5. Prompt building loads recent messages, summaries, person facts, event threads and memU recall cards.
+6. Model/tool loop runs.
+7. Parsed assistant text is saved and sent through the active transport.
+8. If enough chat messages accumulated, batch review writes summaries, person facts, event threads and scheduled task updates.
 
-1. Ingress builds **`session_id`** (see table below) → **`chat(text, session_id, …)`**.
-2. **`cancel_wait_timer(session_id)`**.
-3. User message saved to SQLite (`messages`), with optional **`source=message_source`**.
-4. Recent history (**`CHAT_HISTORY_LIMIT = 30`**), familiarity, person-scoped facts, summaries, and event threads loaded; **`build_system_prompt`** + **`DIALOGUE_OUTPUT_PROTOCOL`**.
-5. Model + tool loop via **`chat_complete`**.
-6. **`_parse_dialogue_output`** → `final_text`, `should_wait`; assistant message saved.
-7. If **`should_wait`**: **`schedule_wait_timer`** (if eligible); batch review may run when **`message_source == REVIEW_SOURCE`** (`"chat"`).
-8. Return **`final_text`** to caller (CLI prints; QQ sends segments).
+## Session Mapping
 
-**Batch review** (not per-message judge calls): after enough **`chat`** messages, **`_maybe_batch_review`** runs a structured review (summary, familiarity delta, `person_facts`, event_updates, task_updates). Long-term facts are written only to `person_facts`. Tunable: **`REVIEW_INTERVAL`** in [agent.py](../pupu/agent.py).
+| Source | `context_session` | `identity_session` | Wait eligible |
+|--------|-------------------|--------------------|---------------|
+| CLI | `owner` | `owner` | Yes |
+| NapCat private owner | `owner` | `owner` | Yes |
+| NapCat private other QQ | `private_<QQ>` | `private_<QQ>` | Yes |
+| NapCat group | `group_<group_id>` | `owner` or `private_<QQ>` by speaker | No |
 
-## Session ID Mapping
+`context_session` is where conversation history lives. `identity_session` is who the speaker is. In groups, the context is shared while each speaker keeps their own facts and familiarity identity.
 
-| Source | `session_id` | Wait timer eligible? |
-|--------|----------------|----------------------|
-| OneBot private, configured owner | `owner` | Yes |
-| OneBot private, other QQ | `private_{qq}` (digits) | Yes |
-| OneBot group | `group_{group_id}` | No |
-| QQ Official channel | `channel_{id}` | No |
-| QQ Official C2C | `c2c_{openid}` | No (not `private_*`) |
-| QQ Official group @ | `qqgroup_{group_openid}` | No |
-| Terminal CLI | `owner` ([cli.py](../pupu/cli.py)) | Yes |
+## Instance Runtime
 
-## Database (SQLite: `instances/<id>/data/pupu.db`)
+Every runtime action must happen under an `InstanceContext`.
 
-High-signal tables (not exhaustive):
+Each instance directory contains:
 
-- **`messages`** — conversation; columns include role, content, session_id, timestamps / sources as implemented in storage.
-- **`familiarity`**, **`events`** — score 0–100 and relationship events.
-- **`person_facts`** — primary long-term facts. Person facts use `subject_person_key`; relationship facts also set `object_person_key` and are only recalled when the current participant set contains both sides.
-- **`summaries`** — batch-review compression.
-- **`event_threads`**, **`event_steps`** — event-line memory. Threads hold the current event state; steps hold state transitions and causes.
-- **`people`**, **`event_people`** — stable person identities and event participants.
-- **`scheduled_tasks`** — user/assistant scheduled reminders; legacy rows titled `wait_followup*` are ignored by the scheduler loop; **live** wait-followup uses **memory timers** only.
+- `instance.json`: display name, `qq_mode`, NapCat port, owner IDs, open groups, peer bot info, proactive flag, tool settings.
+- `persona.json`: persona/soul data.
+- `data/pupu.db`: SQLite source of truth.
+- `data/memu.db`: memU semantic cache.
+- `data/logs/`: per-instance logs.
 
-## Session model
+NapCat configuration uses the port in `instance.json`:
 
-Runtime code separates the old single `session_id` concept into two meanings while keeping the SQLite schema unchanged:
+```text
+ws://127.0.0.1:<port>/onebot/v11/ws
+```
 
-- **Context session** — where the conversation happens. `messages`, `summaries`, pending review cursors, and scheduled-task delivery use this. Private chats use `owner` / `private_<QQ>`; groups use `group_<群号>`.
-- **Identity session** - who the speaker is. `familiarity`, legacy familiarity `events`, and event threads use this. Owner maps to `owner`; other users map to `private_<QQ>`. Long-term facts are resolved through `person_from_session(identity_session)` and stored in `person_facts`.
+No `.env.qq` file is generated for new instances.
 
-In normal private chat these two values are identical. In open groups, `context_session=group_<群号>` and `identity_session=owner|private_<QQ>`, so group context stays shared while each person keeps their own score and facts.
+## Memory Model
 
-## Familiarity (overview)
+SQLite is authoritative:
 
-Score **0–100** with tiered persona text in **`pupu/persona/`** (see `FAMILIARITY_PROMPTS` / `builder.py`). Proactive messaging respects **`PROACTIVE_THRESHOLD`** in [proactive.py](../pupu/proactive.py) / [familiarity.py](../pupu/familiarity.py).
+- `messages`: conversation turns.
+- `summaries`: batch review summaries.
+- `person_facts`: person and relationship facts.
+- `event_threads` / `event_steps`: event-chain memory.
+- `people` / `event_people`: stable people and event participants.
+- `scheduled_tasks`: scheduled reminders.
 
-## Environment & run
+memU is a semantic cache. SQLite facts/events/summaries are rendered as natural-language cards and synced into memU for embedding recall. Tidy reconciles cache/source drift; it should not delete SQLite source rows.
 
-- Venv: **`ForFun/`** (Windows: `ForFun\Scripts\python.exe`; `启动仆仆.bat` and `启动仆仆控制台.bat` are double-click wrappers).
-- Global config: **`pupu.yaml`** — provider keys, owner QQ ids, NapCat port, Console / arbiter ports, memU, web search, and TTS settings. `pupu.app_config.apply_app_config_env()` maps YAML keys into the `PUPU_*` environment variables consumed by runtime modules.
-- QQ runtime file: **`instances/<id>/.env.qq`** — generated from `pupu.yaml` for NoneBot host/port; NapCat reverse WS to `ws://127.0.0.1:<port>/onebot/v11/ws`.
+## Open Groups
 
-## Instances
+Open groups are configured in `instance.json.open_groups`. In those groups:
 
-Every PuPu runtime uses an instance. Several PuPu processes can run in parallel. Each instance = **own subprocess**, SQLite DB, `instance.json`, `persona.json`, and generated `.env.qq`.
+1. Every actor observes the group message.
+2. Each actor posts observation data to the arbiter service.
+3. The arbiter waits for group idle, selects one speaker or `none`, then exposes the decision through long-poll.
+4. Only the selected actor replies.
 
-| Path | Role |
-|------|------|
-| [pupu/instance_main.py](../pupu/instance_main.py) | `python -m pupu.instance_main --dir <dir>` — sets `PUPU_INSTANCE_DIR`, `PUPU_CONFIG_PATH`, `PUPU_DB_PATH`, `PUPU_PERSONA_PATH`; **cwd** = repo root so `plugins/` loads; `qq_mode` in `instance.json`: `napcat` \| `official` \| `cli`. |
-| [pupu_console/](../pupu_console/) | Web UI: `python -m pupu_console` — CRUD `instances/`, CRUD `souls/` presets, start/stop, logs / WS console, **memory path + SQLite import** (replace `instances/<id>/data/pupu.db` when stopped). APIs: `GET /api/instances/{id}/memory_path`, `POST /api/instances/{id}/import_memory` (multipart file). |
-| `instances/<id>/` | Runtime files for one bot; chat memory DB: `instances/<id>/data/pupu.db` (also exposed as `memory_path` on `GET /api/instances/{id}`). |
-| `souls/<slug>.json` | Preset soul (persona + `tool_servers` only at instance level). **Apply** does not change `port`, `qq_app_id`, `qq_app_secret`, or `owner_ids`. |
+`/silence on` locally stops the actor from observing/reconnecting to arbiter for that group. `/silence off` allows observing again.
 
-**Memory import (覆盖):** Validates SQLite header + `messages` table; if `pupu.db` already exists, copies to `pupu.db.bak.<timestamp>.<token>` before replace. Import only when the subprocess is stopped (UI/API return 409 if `running`).
-
-**Per-process env:** `PUPU_DB_PATH`, `PUPU_CONFIG_PATH`, `PUPU_PERSONA_PATH` (see [pupu/config.py](../pupu/config.py), [pupu/persona/core.py](../pupu/persona/core.py), [pupu/storage/db.py](../pupu/storage/db.py)); `PUPU_INSTANCE_DIR` sends logs to that instance’s `data/logs/` ([logging_utils.py](../pupu/logging_utils.py)). Tests may set `PUPU_REPO_ROOT` for [pupu_console/paths.py](../pupu_console/paths.py).
-
-Shared prompt modules (`FAMILIARITY_PROMPTS`, proactive, batch review) stay in code unless you extend per-instance loading.
-
-## Common modification patterns
+## Common Tasks
 
 | Goal | Where |
-|------|--------|
-| Change wait duration | `WAIT_DELAY_SECONDS` in [followup.py](../pupu/followup.py) (and timer uses it via [dialogue_loop.py](../pupu/dialogue_loop.py)) |
-| Change who gets wait timers | `is_followup_eligible()` in [dialogue_loop.py](../pupu/dialogue_loop.py) |
-| Change follow-up synthetic prompt | `_on_timer_fire()` in [dialogue_loop.py](../pupu/dialogue_loop.py) |
-| QQ: ensure owner receives timer sends without prior message | `register_owner_wait_followup_sender` in [onebot_handlers.py](../plugins/pupu_support/onebot_handlers.py) |
-| Dialogue JSON rules / parsing | [followup.py](../pupu/followup.py) |
-| Batch review behavior | [agent.py](../pupu/agent.py) `_maybe_batch_review*`, [review_followups.py](../pupu/review_followups.py) |
-| New tool server | `pupu/tooling/servers/*`, register in `__init__.py`; enable in instance `instance.json` → `tool_servers` |
-| Persona tone | `pupu/persona/*.py` |
-| Import / replace instance SQLite memory | Web console “运行” tab or `POST /api/instances/{id}/import_memory`; logic in [instance_store.py](../pupu_console/instance_store.py) (`replace_memory_db`) |
+|------|-------|
+| Change wait duration | `WAIT_DELAY_SECONDS` in [pupu/followup.py](../pupu/followup.py) |
+| Change command behavior | [pupu/command_service.py](../pupu/command_service.py) and [pupu/command_registry.py](../pupu/command_registry.py) |
+| Change NapCat transport | [pupu/actor/onebot_transport.py](../pupu/actor/onebot_transport.py) |
+| Change message debounce / arbiter integration | [pupu/actor/message_buffer.py](../pupu/actor/message_buffer.py) |
+| Change batch review | [pupu/agent.py](../pupu/agent.py), [pupu/review_followups.py](../pupu/review_followups.py), [pupu/persona/review_prompt.py](../pupu/persona/review_prompt.py) |
+| Change memory schema | [pupu/storage/](../pupu/storage/) |
+| Change console start/stop behavior | [pupu_console/process_manager.py](../pupu_console/process_manager.py) |
 
-## Related docs
+## Verification
+
+Use the bundled environment:
+
+```powershell
+.\ForFun\Scripts\python.exe -m unittest discover tests
+.\ForFun\Scripts\python.exe -m compileall -q pupu pupu_console tests
+git diff --check
+```
+
+Do not run bare `unittest discover`; workspace root may contain unrelated files.
+
+## Related Docs
 
 - Chinese product overview: [README.md](../README.md)
-- QQ troubleshooting: [docs/QQ_BOT_TROUBLESHOOTING.md](QQ_BOT_TROUBLESHOOTING.md)
+- NapCat troubleshooting: [docs/QQ_BOT_TROUBLESHOOTING.md](QQ_BOT_TROUBLESHOOTING.md)
+- Tavily MCP setup: [docs/TAVILY_MCP.md](TAVILY_MCP.md)

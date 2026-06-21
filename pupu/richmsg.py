@@ -133,32 +133,3 @@ def parse_onebot_message(message) -> tuple[str, list[str]]:
 
     text = "".join(text_parts).strip()
     return text, image_urls
-
-
-def parse_qq_official_message(message, attachments=None) -> tuple[str, list[str]]:
-    """Parse QQ Official adapter message into (text, image_urls).
-
-    Stickers are silently ignored. Real images collected as URLs.
-    """
-    text_parts = []
-    image_urls = []
-
-    for seg in message:
-        if seg.type == "text":
-            text_parts.append(seg.data.get("text", ""))
-        elif seg.type == "emoji":
-            text_parts.append(face_id_to_text(seg.data.get("id", "")))
-        elif seg.type == "image":
-            if _is_sticker(seg):
-                continue
-            url = seg.data.get("url", "")
-            if url:
-                image_urls.append(url)
-
-    if attachments and not image_urls:
-        for att in attachments:
-            if att.content_type and att.content_type.startswith("image") and att.url:
-                image_urls.append(att.url)
-
-    text = "".join(text_parts).strip()
-    return text, image_urls

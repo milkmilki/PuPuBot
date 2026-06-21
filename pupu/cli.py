@@ -1,5 +1,6 @@
 """Terminal chat interface with command handling and periodic scheduler tick."""
 
+import asyncio
 import os
 import threading
 import time
@@ -9,7 +10,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from .agent import chat
+from .actor import InstanceActor
 from .app_config import apply_app_config_env, default_instance_settings, ensure_app_config_file
 from .backup import maybe_run_daily_backup
 from .command_registry import command_usage, render_help, resolve_command
@@ -85,12 +86,6 @@ def _apply_instance_env(instance_dir: Path) -> None:
     activate_instance_context_global(ctx)
     ctx.data_dir.mkdir(parents=True, exist_ok=True)
     ctx.logs_dir.mkdir(parents=True, exist_ok=True)
-
-    env_file = ctx.instance_dir / ".env.qq"
-    if env_file.is_file():
-        from dotenv import load_dotenv
-
-        load_dotenv(env_file, override=True)
 
 
 def _configure_cli_instance_interactively() -> str | None:
@@ -303,6 +298,45 @@ def main():
         console.print("请先打开 [bold]pupu.yaml[/bold]，填写 llm.*.api_key。")
         return
     print_banner()
+    ctx = get_current_instance_context()
+    if ctx is None:
+        raise RuntimeError("CLI instance context was not selected")
+
+    async def _run_actor_cli() -> None:
+        actor = InstanceActor(ctx, preflight=False)
+        await actor.start()
+
+        def _send(text: str) -> None:
+            console.print(f"[bold cyan]浠嗕粏:[/bold cyan] ", end="")
+            console.print(Markdown(str(text)))
+            console.print()
+
+        try:
+            while True:
+                try:
+                    user_input = await asyncio.to_thread(
+                        lambda: console.input("[bold green]浣? [/bold green]").strip()
+                    )
+                except (KeyboardInterrupt, EOFError):
+                    console.print("\n[dim]鍐嶈銆俒/dim]")
+                    break
+
+                if not user_input:
+                    continue
+
+                with console.status("[cyan]浠嗕粏姝ｅ湪鎯?..[/cyan]"):
+                    try:
+                        should_exit = await actor.handle_cli_text(user_input, _send)
+                    except Exception as e:
+                        console.print(f"[red]鍑洪敊浜? {e}[/red]")
+                        continue
+                if should_exit:
+                    break
+        finally:
+            await actor.stop()
+
+    asyncio.run(_run_actor_cli())
+    return
 
     def _cli_followup_sender(text: str):
         console.print()

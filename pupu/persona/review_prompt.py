@@ -43,7 +43,7 @@ _SUBJECT_RULES_TEMPLATE = """
 - “我/我的/自己”指当前这一行冒号前的人物；“你/你的”通常指这句话指向的对方，请结合上下文改写成具体人物名。
 - summary、facts、event_updates、task_updates 的 title/summary/followup_hint/instruction 里不要直接使用“我、你、我们、对方、她、他”等模糊主语。
 - 所有输出主语都必须改写为输入里出现的具体人物名，不要泛化成“用户”“实例”“双方”。例如“小夫：我想买二手屏”要写成“小夫想买二手屏”；“{character_name}：我想买二手屏”要写成“{character_name}想买二手屏”。
-- 不要输出 QQ 号、person_key、qq:xxx、qqofficial:xxx 这类底层身份标识。
+- 不要输出 QQ 号、person_key、qq:xxx 这类底层身份标识。
 - 不要把{character_name}写成“仆仆”，除非当前实例名本来就是仆仆。"""
 
 _ABSOLUTE_TIME_RULES = """

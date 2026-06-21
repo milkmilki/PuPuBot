@@ -16,7 +16,6 @@ from pupu.app_config import (
     default_instance_settings,
     default_owner_ids,
     default_napcat_settings,
-    write_env_qq_file,
 )
 
 from .paths import instances_dir
@@ -24,7 +23,9 @@ from .paths import instances_dir
 _ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 # Removed from product; strip if still present in older files.
-_DEPRECATED_INSTANCE_KEYS = frozenset({"mode", "persona_enabled", "llm"})
+_DEPRECATED_INSTANCE_KEYS = frozenset(
+    {"mode", "persona_enabled", "llm", "qq_app_id", "qq_app_secret"}
+)
 
 DEFAULT_TOOL_SERVERS: dict[str, dict[str, bool]] = {
     "web": {"enabled": True},
@@ -60,6 +61,9 @@ def _scrub_deprecated_instance_keys(cfg: dict[str, Any]) -> None:
 
 def _normalize_instance_config(cfg: dict[str, Any]) -> None:
     _scrub_deprecated_instance_keys(cfg)
+    qq_mode = str(cfg.get("qq_mode") or "napcat").strip().lower()
+    cfg["qq_mode"] = qq_mode if qq_mode in {"cli", "napcat"} else "napcat"
+
     cfg.setdefault("private_reply_mode", "owner_only")
     mode = str(cfg.get("private_reply_mode") or "owner_only").strip().lower()
     cfg["private_reply_mode"] = mode if mode in {"owner_only", "allowlist", "all"} else "owner_only"
@@ -85,6 +89,8 @@ def _normalize_instance_config(cfg: dict[str, Any]) -> None:
     cfg.setdefault("bot_id", "")
     cfg["bot_id"] = str(cfg.get("bot_id") or "").strip()
 
+    cfg["proactive_enabled"] = bool(cfg.get("proactive_enabled", True))
+
     cfg.setdefault("arbiter_url", DEFAULT_ARBITER_URL)
     cfg["arbiter_url"] = str(cfg.get("arbiter_url") or DEFAULT_ARBITER_URL).strip()
 
@@ -107,19 +113,14 @@ def _normalize_instance_config(cfg: dict[str, Any]) -> None:
 
 
 def read_port(inst_dir: Path) -> int:
-    env_path = inst_dir / ".env.qq"
-    if not env_path.is_file():
-        return int(default_napcat_settings()["port"])
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line.startswith("PORT="):
-            raw = line.split("=", 1)[1].strip().strip('"').strip("'")
-            return int(raw)
+    cfg_path = Path(inst_dir) / "instance.json"
+    if cfg_path.is_file():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+            return int(cfg.get("port") or default_napcat_settings()["port"])
+        except Exception:
+            pass
     return int(default_napcat_settings()["port"])
-
-
-def write_env_qq(inst_dir: Path, port: int, host: str | None = None) -> None:
-    write_env_qq_file(inst_dir, port=port, host=host)
 
 
 def list_instance_ids() -> list[str]:
@@ -177,8 +178,6 @@ def write_instance_files(
     inst_dir.mkdir(parents=True, exist_ok=True)
     (inst_dir / "data").mkdir(parents=True, exist_ok=True)
     (inst_dir / "data" / "logs").mkdir(parents=True, exist_ok=True)
-    if sync_port and "port" in cfg:
-        write_env_qq(inst_dir, int(cfg["port"]))
     _normalize_instance_config(cfg)
     (inst_dir / "instance.json").write_text(
         json.dumps(cfg, ensure_ascii=False, indent=2),
@@ -209,13 +208,12 @@ def create_instance(
         "display_name": display_name or defaults["display_name"],
         "port": use_port,
         "qq_mode": qq_mode or defaults["qq_mode"],
-        "qq_app_id": defaults["qq_app_id"],
-        "qq_app_secret": defaults["qq_app_secret"],
         "owner_ids": default_owner_ids(),
         "private_reply_mode": defaults.get("private_reply_mode", "owner_only"),
         "private_allowed_ids": list(defaults.get("private_allowed_ids") or []),
         "open_groups": [],
         "bot_id": instance_id,
+        "proactive_enabled": True,
         "arbiter_url": defaults.get("arbiter_url") or DEFAULT_ARBITER_URL,
         "arbiter_base_url": defaults.get("arbiter_base_url"),
         "peer": {

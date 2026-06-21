@@ -43,19 +43,12 @@ def qq_person_key(user_id: object) -> str:
     return f"qq:{raw}" if raw else ""
 
 
-def qqofficial_person_key(user_id: object) -> str:
-    raw = _text(user_id)
-    return f"qqofficial:{raw}" if raw else ""
-
-
 def person_from_session(session_id: str) -> str:
     sid = _text(session_id)
     if sid == OWNER_SESSION:
         return OWNER_PERSON_KEY
     if sid.startswith("private_"):
         return qq_person_key(sid.removeprefix("private_"))
-    if sid.startswith("c2c_"):
-        return qqofficial_person_key(sid.removeprefix("c2c_"))
     return normalize_person_key(sid)
 
 
@@ -107,7 +100,7 @@ def _merge_aliases(*values: object) -> str:
 
 
 def _is_fixed_external_person(key: str) -> bool:
-    return key.startswith("qq:") or key.startswith("qqofficial:")
+    return key.startswith("qq:")
 
 
 def _canonical_kind_for_key(key: str, fallback: str = "") -> str:
@@ -117,8 +110,6 @@ def _canonical_kind_for_key(key: str, fallback: str = "") -> str:
         return "instance"
     if key.startswith("qq:"):
         return "qq"
-    if key.startswith("qqofficial:"):
-        return "qqofficial"
     return _text(fallback)
 
 

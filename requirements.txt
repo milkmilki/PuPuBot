@@ -12,6 +12,3 @@ memu-py>=1.5.1,<1.6; python_version < "3.14"
 fastapi
 python-multipart
 uvicorn[standard]
-nonebot2[fastapi]
-nonebot-adapter-onebot
-nonebot-adapter-qq

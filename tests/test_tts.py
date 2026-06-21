@@ -1,11 +1,7 @@
-import asyncio
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 
-from plugins.pupu_support import state
-from plugins.pupu_support.common import send_segments
 from pupu.tts import (
     TTSConfig,
     get_tts_status,
@@ -13,18 +9,6 @@ from pupu.tts import (
     synthesize_reply_to_file,
     unregister_tts_provider,
 )
-
-
-async def _no_sleep(_seconds):
-    return None
-
-
-class FakeBot:
-    def __init__(self):
-        self.messages = []
-
-    async def send(self, event, message):
-        self.messages.append(message)
 
 
 class TTSTests(unittest.TestCase):
@@ -51,12 +35,12 @@ class TTSTests(unittest.TestCase):
             config = self._config(tmp)
 
             def provider(text: str, cfg: TTSConfig):
-                self.assertEqual(text, "你好。姐姐在。")
+                self.assertEqual(text, "hello。sister is here。")
                 self.assertEqual(cfg.voice, "pupu")
                 return b"RIFFaudio", "wav"
 
             register_tts_provider("mock", provider)
-            path = synthesize_reply_to_file("你好\n姐姐在", config)
+            path = synthesize_reply_to_file("hello\nsister is here", config)
 
             self.assertIsNotNone(path)
             self.assertEqual(path.read_bytes(), b"RIFFaudio")
@@ -69,10 +53,10 @@ class TTSTests(unittest.TestCase):
             missing = self._config(tmp, enabled=True, provider="")
             unavailable = self._config(tmp, enabled=True, provider="not_installed")
 
-            self.assertIsNone(synthesize_reply_to_file("你好", disabled))
-            self.assertIsNone(synthesize_reply_to_file("你好呀", too_long))
-            self.assertIsNone(synthesize_reply_to_file("你好", missing))
-            self.assertIsNone(synthesize_reply_to_file("你好", unavailable))
+            self.assertIsNone(synthesize_reply_to_file("hi", disabled))
+            self.assertIsNone(synthesize_reply_to_file("hello", too_long))
+            self.assertIsNone(synthesize_reply_to_file("hi", missing))
+            self.assertIsNone(synthesize_reply_to_file("hi", unavailable))
 
     def test_status_reports_provider_readiness(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -100,49 +84,7 @@ class TTSTests(unittest.TestCase):
                 raise RuntimeError("offline")
 
             register_tts_provider("mock", provider)
-            self.assertIsNone(synthesize_reply_to_file("你好", config))
-
-
-class TTSOneBotSendTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        self._previous_tts_reply_enabled = state.tts_reply_enabled
-        state.tts_reply_enabled = False
-
-    async def asyncTearDown(self):
-        state.tts_reply_enabled = self._previous_tts_reply_enabled
-
-    async def test_send_segments_appends_voice_after_text(self):
-        state.tts_reply_enabled = True
-        bot = FakeBot()
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            audio = Path(raw_tmp) / "voice.wav"
-            audio.write_bytes(b"voice")
-            with patch("plugins.pupu_support.common._is_onebot_v11_bot", return_value=True):
-                with patch("plugins.pupu_support.common.synthesize_reply_to_file", return_value=audio):
-                    with patch("plugins.pupu_support.common.asyncio.sleep", _no_sleep):
-                        await send_segments(bot, object(), ["第一句", "第二句"])
-
-        self.assertEqual(bot.messages[0], "第一句")
-        self.assertEqual(bot.messages[1], "第二句")
-        self.assertEqual(getattr(bot.messages[2], "type", ""), "record")
-
-    async def test_send_segments_skips_voice_when_switch_off(self):
-        bot = FakeBot()
-        with patch("plugins.pupu_support.common._is_onebot_v11_bot", return_value=True):
-            with patch("plugins.pupu_support.common.synthesize_reply_to_file") as mock_tts:
-                await send_segments(bot, object(), ["只发文字"])
-
-        self.assertEqual(bot.messages, ["只发文字"])
-        mock_tts.assert_not_called()
-
-    async def test_send_segments_keeps_text_when_tts_unavailable(self):
-        state.tts_reply_enabled = True
-        bot = FakeBot()
-        with patch("plugins.pupu_support.common._is_onebot_v11_bot", return_value=True):
-            with patch("plugins.pupu_support.common.synthesize_reply_to_file", return_value=None):
-                await send_segments(bot, object(), ["只发文字"])
-
-        self.assertEqual(bot.messages, ["只发文字"])
+            self.assertIsNone(synthesize_reply_to_file("hi", config))
 
 
 if __name__ == "__main__":

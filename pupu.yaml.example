@@ -84,10 +84,8 @@ user:
 
 instance:
   display_name: 仆仆
-  # cli | napcat | official
+  # cli | napcat
   qq_mode: cli
-  qq_app_id: ""
-  qq_app_secret: ""
   debounce_seconds_open_group: 35
 
 napcat:

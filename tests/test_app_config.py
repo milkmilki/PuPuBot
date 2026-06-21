@@ -119,7 +119,7 @@ mcp:
             self.assertEqual(second_path, path)
             self.assertEqual(path.read_text(encoding="utf-8"), "custom: true\n")
 
-    def test_default_instance_and_env_qq_use_yaml(self) -> None:
+    def test_default_instance_settings_use_yaml(self) -> None:
         self._write_yaml(
             """
 user:
@@ -127,8 +127,6 @@ user:
 instance:
   display_name: Lulu
   qq_mode: napcat
-  qq_app_id: app-id
-  qq_app_secret: app-secret
 napcat:
   host: 127.0.0.1
   port: 8123
@@ -141,15 +139,8 @@ napcat:
         defaults = app_config.default_instance_settings()
         self.assertEqual(defaults["display_name"], "Lulu")
         self.assertEqual(defaults["qq_mode"], "napcat")
-        self.assertEqual(defaults["qq_app_id"], "app-id")
-        self.assertEqual(defaults["qq_app_secret"], "app-secret")
         self.assertEqual(defaults["owner_ids"], ["12345", "67890"])
         self.assertEqual(defaults["port"], 8123)
-
-        env_text = app_config.format_env_qq()
-        self.assertIn("HOST=127.0.0.1", env_text)
-        self.assertIn("PORT=8123", env_text)
-        self.assertIn('COMMAND_START=["!", "/"]', env_text)
 
     def test_config_owner_defaults_fall_back_to_yaml(self) -> None:
         self._write_yaml(

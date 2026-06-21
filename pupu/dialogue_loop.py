@@ -1,4 +1,4 @@
-"""In-memory wait-followup: should_wait=true schedules a timer and delivers a nudge via chat()."""
+"""In-memory wait-followup timers with per-instance context capture."""
 
 from __future__ import annotations
 
@@ -7,10 +7,16 @@ from typing import Callable
 
 from .followup import WAIT_DELAY_SECONDS
 from .followup_manager import cancel_timer, create_timer, has_timer
+from .instance_context import (
+    InstanceContext,
+    activate_instance_context,
+    get_current_instance_context,
+)
 from .message_sources import WAIT_FOLLOWUP
 from .sessions import OWNER_SESSION
 
 _senders: dict[str, Callable[[str], None]] = {}
+_sender_contexts: dict[str, InstanceContext | None] = {}
 _senders_lock = threading.Lock()
 
 
@@ -25,13 +31,17 @@ def is_followup_eligible(session_id: str) -> bool:
 
 
 def register_sender(session_id: str, sender: Callable[[str], None]) -> None:
+    key = str(session_id)
     with _senders_lock:
-        _senders[str(session_id)] = sender
+        _senders[key] = sender
+        _sender_contexts[key] = get_current_instance_context()
 
 
 def unregister_sender(session_id: str) -> None:
+    key = str(session_id)
     with _senders_lock:
-        _senders.pop(str(session_id), None)
+        _senders.pop(key, None)
+        _sender_contexts.pop(key, None)
 
 
 def schedule_wait_timer(session_id: str) -> None:
@@ -48,13 +58,13 @@ def has_wait_timer(session_id: str) -> bool:
     return has_timer(session_id)
 
 
-def _on_timer_fire(session_id: str) -> None:
+def _deliver_followup(session_id: str, sender: Callable[[str], None] | None) -> None:
     from .agent import chat
 
     synthetic = (
-        "[系统提醒] 你刚才那句还没收到对方回复，自然地追问/补一句即可，不要黏人。"
+        "[????] ????????????????????????????????"
     )
-    hint = "这是 wait_followup 触发的追问，不要重复你刚才说过的话。"
+    hint = "?? wait_followup ??????????????????"
     text = chat(
         synthetic,
         session_id,
@@ -63,9 +73,6 @@ def _on_timer_fire(session_id: str) -> None:
         reply_speed_hint=hint,
         message_source=WAIT_FOLLOWUP,
     )
-    sender = None
-    with _senders_lock:
-        sender = _senders.get(str(session_id))
     if sender and text and str(text).strip():
         try:
             sender(str(text).strip())
@@ -74,3 +81,15 @@ def _on_timer_fire(session_id: str) -> None:
                 print(f"[pupu.dialogue_loop] sender failed: session={session_id} err={e}")
             except Exception:
                 pass
+
+
+def _on_timer_fire(session_id: str) -> None:
+    key = str(session_id)
+    with _senders_lock:
+        sender = _senders.get(key)
+        ctx = _sender_contexts.get(key)
+    if ctx is None:
+        _deliver_followup(session_id, sender)
+        return
+    with activate_instance_context(ctx):
+        _deliver_followup(session_id, sender)

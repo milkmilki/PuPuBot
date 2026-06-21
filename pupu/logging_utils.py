@@ -8,11 +8,13 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from .instance_context import require_current_instance_context
+from .app_config import get_repo_root
+from .instance_context import get_current_instance_context
 
 _initialized = False
 _log_file = None
 _log_path = None
+_log_files: dict[Path, object] = {}
 _print_lock = threading.Lock()
 _original_print = builtins.print
 _original_stderr = sys.stderr
@@ -74,7 +76,11 @@ class _TeeStderr:
 
 
 def _ensure_log_dir() -> Path:
-    log_dir = require_current_instance_context().logs_dir
+    ctx = get_current_instance_context()
+    if ctx is not None:
+        log_dir = ctx.logs_dir
+    else:
+        log_dir = get_repo_root() / "instances" / "_shared" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 
@@ -131,19 +137,24 @@ def _ensure_current_log_file():
 
     target_path = _build_log_path()
     with _print_lock:
-        if _log_file is not None and _log_path == target_path:
-            return _log_file
+        existing = _log_files.get(target_path)
+        if existing is not None and not getattr(existing, "closed", False):
+            _log_path = target_path
+            _log_file = existing
+            return existing
 
-        old_file = _log_file
         old_path = _log_path
+        for path, file in list(_log_files.items()):
+            if path.parent == target_path.parent and path != target_path:
+                try:
+                    file.flush()
+                    file.close()
+                except Exception:
+                    pass
+                _log_files.pop(path, None)
         _log_path = target_path
         _log_file = _log_path.open("a", encoding="utf-8", buffering=1)
-        if old_file is not None:
-            try:
-                old_file.flush()
-                old_file.close()
-            except Exception:
-                pass
+        _log_files[target_path] = _log_file
         if old_path is not None and old_path != _log_path:
             _log_file.write(f"[pupu] logging rotated to {_log_path}\n")
             _log_file.flush()
@@ -187,6 +198,47 @@ def get_log_file_path() -> str | None:
     return str(_log_path) if _log_path is not None else None
 
 
+def close_current_instance_log_sinks() -> None:
+    """Close cached log files for the active instance context, if any."""
+    global _log_file, _log_path
+    ctx = get_current_instance_context()
+    if ctx is None:
+        return
+    target_dir = ctx.logs_dir.resolve()
+    with _print_lock:
+        for path, file in list(_log_files.items()):
+            try:
+                same_dir = path.parent.resolve() == target_dir
+            except Exception:
+                same_dir = False
+            if not same_dir:
+                continue
+            try:
+                file.flush()
+                file.close()
+            except Exception:
+                pass
+            _log_files.pop(path, None)
+            if _log_path is not None and path == _log_path:
+                _log_path = None
+                _log_file = None
+
+
+def close_all_log_sinks() -> None:
+    """Close every cached runtime log sink."""
+    global _log_file, _log_path
+    with _print_lock:
+        for path, file in list(_log_files.items()):
+            try:
+                file.flush()
+                file.close()
+            except Exception:
+                pass
+            _log_files.pop(path, None)
+        _log_file = None
+        _log_path = None
+
+
 def setup_runtime_logging() -> str:
     global _initialized, _log_file, _log_path
     if _initialized:
@@ -194,18 +246,13 @@ def setup_runtime_logging() -> str:
 
     _log_path = _build_log_path()
     _log_file = _log_path.open("a", encoding="utf-8", buffering=1)
+    _log_files[_log_path] = _log_file
     prune_old_logs(log_dir=_log_path.parent)
     builtins.print = _patched_print
     sys.stderr = _TeeStderr(_original_stderr, _get_sink)
 
     def _close_log_file():
-        global _log_file
-        if _log_file is not None:
-            try:
-                _log_file.flush()
-                _log_file.close()
-            finally:
-                _log_file = None
+        close_all_log_sinks()
 
     atexit.register(_close_log_file)
     _initialized = True

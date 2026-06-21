@@ -1,14 +1,19 @@
 import os
+from dataclasses import replace
 from pathlib import Path
 import unittest
+from unittest.mock import AsyncMock, call, patch
+
 from tests.helpers import activate_test_instance
-from unittest.mock import patch
+
 
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
-activate_test_instance(TEST_DB_PATH)
+TEST_CONTEXT = activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
+from pupu.actor import InstanceActor
+from pupu.actor.types import ActorOutboundTarget
 from pupu.memory import (
     create_scheduled_task,
     get_due_scheduled_tasks,
@@ -16,7 +21,11 @@ from pupu.memory import (
     list_scheduled_tasks,
     reset_session,
 )
-from pupu.scheduler import _is_wait_followup_task, _latest_message_is_user, _onebot_send
+from pupu.scheduler import (
+    _is_wait_followup_task,
+    _latest_message_is_user,
+    _run_due_tasks_with_sender,
+)
 from pupu.sessions import OWNER_SESSION
 
 
@@ -24,42 +33,72 @@ async def _no_sleep(_seconds):
     return None
 
 
-class FakeBot:
-    def __init__(self):
-        self.private_messages = []
-        self.group_messages = []
-
-    async def send_private_msg(self, *, user_id: int, message: str):
-        self.private_messages.append((user_id, message))
-
-    async def send_group_msg(self, *, group_id: int, message: str):
-        self.group_messages.append((group_id, message))
-
-
 class SchedulerSendTests(unittest.IsolatedAsyncioTestCase):
-    async def test_scheduled_owner_send_splits_lines_and_logs(self):
-        bot = FakeBot()
-        with patch("pupu.scheduler._load_first_numeric_owner_qq", return_value=123):
-            with patch("pupu.scheduler.asyncio.sleep", _no_sleep):
-                with patch("builtins.print") as mock_print:
-                    await _onebot_send(bot, OWNER_SESSION, "第一句\n第二句\n\n第三句")
+    def _actor_with_fake_transport(self) -> InstanceActor:
+        actor = InstanceActor(TEST_CONTEXT, preflight=False)
+        actor.context = replace(actor.context, qq_mode="napcat")
+        actor._transport = type(
+            "FakeTransport",
+            (),
+            {
+                "send_private_text": AsyncMock(),
+                "send_group_text": AsyncMock(),
+            },
+        )()
+        return actor
+
+    async def test_actor_private_send_splits_lines(self):
+        actor = self._actor_with_fake_transport()
+        with patch("pupu.actor.instance_actor.asyncio.sleep", _no_sleep):
+            await actor.send_text(
+                ActorOutboundTarget(session_id=OWNER_SESSION, user_id="123"),
+                "第一句\n第二句\n\n第三句",
+            )
 
         self.assertEqual(
-            bot.private_messages,
-            [(123, "第一句"), (123, "第二句"), (123, "第三句")],
+            actor._transport.send_private_text.await_args_list,
+            [call("123", "第一句"), call("123", "第二句"), call("123", "第三句")],
         )
-        printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
-        self.assertIn(">>> 发送 | 私聊 | 123 | 第一句", printed)
 
-    async def test_scheduled_group_send_splits_lines_and_logs(self):
-        bot = FakeBot()
-        with patch("pupu.scheduler.asyncio.sleep", _no_sleep):
-            with patch("builtins.print") as mock_print:
-                await _onebot_send(bot, "group_456", "第一句\n第二句")
+    async def test_actor_group_send_splits_lines_and_prefixes_at_once(self):
+        actor = self._actor_with_fake_transport()
+        with patch("pupu.actor.instance_actor.asyncio.sleep", _no_sleep):
+            await actor.send_text(
+                ActorOutboundTarget(
+                    session_id="group_456",
+                    group_id="456",
+                    reply_at_user_id="123",
+                ),
+                "第一句\n第二句",
+            )
 
-        self.assertEqual(bot.group_messages, [(456, "第一句"), (456, "第二句")])
-        printed = "\n".join(str(call.args[0]) for call in mock_print.call_args_list)
-        self.assertIn(">>> 发送 | 群456 | 456 | 第一句", printed)
+        self.assertEqual(
+            actor._transport.send_group_text.await_args_list,
+            [call("456", "[CQ:at,qq=123] 第一句"), call("456", "第二句")],
+        )
+
+    async def test_sender_scheduler_tick_uses_transport_neutral_sender(self):
+        task = {
+            "id": 99,
+            "session_id": OWNER_SESSION,
+            "title": "near due",
+            "instruction": "say hi",
+            "run_at": "2026-05-01T09:00:00",
+            "repeat_kind": "once",
+            "interval_seconds": None,
+        }
+        sent = []
+
+        async def sender(session_id, text):
+            sent.append((session_id, text))
+
+        with patch("pupu.scheduler.get_due_scheduled_tasks", return_value=[task]):
+            with patch("pupu.scheduler.finalize_scheduled_task", return_value=True) as mock_finalize:
+                with patch("pupu.agent.chat", return_value="reply"):
+                    await _run_due_tasks_with_sender(sender)
+
+        self.assertEqual(sent, [(OWNER_SESSION, "reply")])
+        mock_finalize.assert_called_once()
 
 
 class SchedulerGuardTests(unittest.TestCase):

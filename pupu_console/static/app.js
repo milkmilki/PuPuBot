@@ -178,12 +178,9 @@ async function selectInstance(id) {
       <label>QQ 模式
         <select id="f-qqmode">
           <option value="napcat">napcat</option>
-          <option value="official">official</option>
           <option value="cli">cli</option>
         </select>
       </label>
-      <label>qq_app_id <input id="f-appid" value="${escapeHtml(data.qq_app_id || "")}" /></label>
-      <label>qq_app_secret <input id="f-secret" type="password" value="${escapeHtml(data.qq_app_secret || "")}" /></label>
       <label>owner_ids（逗号分隔）<input id="f-owners" value="${escapeHtml((data.owner_ids || []).join(","))}" /></label>
       <section class="settings-block">
         <h3>私聊白名单</h3>
@@ -393,8 +390,6 @@ async function saveSoulForm(id) {
     display_name: $("#f-display").value.trim(),
     port: Number($("#f-port").value),
     qq_mode: $("#f-qqmode").value,
-    qq_app_id: $("#f-appid").value.trim(),
-    qq_app_secret: $("#f-secret").value,
     owner_ids,
     private_reply_mode: $("#f-private-mode").value,
     private_allowed_ids,

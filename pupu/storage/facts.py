@@ -109,7 +109,7 @@ def resolve_person_reference(
         return normalize_person_key(default_key)
 
     normalized = normalize_person_key(raw)
-    if normalized in {OWNER_PERSON_KEY, INSTANCE_PERSON_KEY} or normalized.startswith(("qq:", "qqofficial:")):
+    if normalized in {OWNER_PERSON_KEY, INSTANCE_PERSON_KEY} or normalized.startswith("qq:"):
         return normalized
 
     lookup = _known_people_map(conn)

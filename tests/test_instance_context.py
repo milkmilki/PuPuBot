@@ -9,12 +9,16 @@ from pupu.instance_context import (
     activate_instance_context,
     get_current_instance_context,
 )
+from pupu.logging_utils import close_all_log_sinks
 from pupu.memory_index import memu_adapter
 from pupu.persona.core import get_pupu_name
 from pupu.storage.db import get_data_dir, get_db_path
 
 
 class InstanceContextTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        close_all_log_sinks()
+
     def _make_instance(self, root: Path, instance_id: str, display_name: str) -> Path:
         inst = root / "instances" / instance_id
         inst.mkdir(parents=True)
@@ -54,6 +58,7 @@ class InstanceContextTests(unittest.TestCase):
                 self.assertEqual(get_data_dir(), str(inst_b / "data"))
                 self.assertEqual(memu_adapter._memu_db_path(), inst_b / "data" / "memu.db")
                 self.assertEqual(get_pupu_name(), "Bob")
+            close_all_log_sinks()
 
     def test_memu_runtime_uses_context_specific_cache_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -83,6 +88,7 @@ class InstanceContextTests(unittest.TestCase):
             self.assertIs(service_a1, service_a2)
             self.assertIsNot(service_a1, service_b1)
             self.assertEqual(mock_new.call_count, 2)
+            close_all_log_sinks()
 
 
 if __name__ == "__main__":

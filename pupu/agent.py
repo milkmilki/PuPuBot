@@ -353,7 +353,7 @@ def _sanitize_review_speaker_name(value: object, fallback: str) -> str:
     if not text:
         return fallback
     lowered = text.lower()
-    if lowered.startswith("qq:") or lowered.startswith("qqofficial:"):
+    if lowered.startswith("qq:"):
         return fallback
     return text[:32]
 
@@ -383,8 +383,6 @@ def _identity_session_for_group_person(person: dict | None) -> str:
         return "owner"
     if key.startswith("qq:"):
         qq_id = key.removeprefix("qq:")
-    elif key.startswith("qqofficial:"):
-        return f"c2c_{key.removeprefix('qqofficial:')}"
     if qq_id:
         return f"private_{qq_id}"
     return ""
@@ -945,7 +943,7 @@ def chat(
 
     context_session = str(context_session or session_id or "default")
     identity_session = str(identity_session or session_id or "default")
-    is_group_context = context_session.startswith("group_") or context_session.startswith("qqgroup_")
+    is_group_context = context_session.startswith("group_")
 
     cancel_wait_timer(context_session)
 
