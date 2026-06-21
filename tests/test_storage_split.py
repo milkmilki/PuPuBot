@@ -106,6 +106,66 @@ class StorageSplitTests(unittest.TestCase):
         self.assertIsNotNone(row)
         self.assertEqual(dict(row), {"subject_person_key": "owner", "fact_key": "昵称", "fact_value": "小夫"})
 
+    def test_person_facts_duplicate_rows_are_deduped_before_unique_index(self):
+        conn = _get_conn()
+        try:
+            conn.execute("DROP INDEX IF EXISTS idx_person_facts_key")
+            conn.execute("DROP TABLE IF EXISTS person_facts")
+            conn.execute(
+                """
+                CREATE TABLE person_facts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subject_person_key TEXT NOT NULL,
+                    object_person_key TEXT NOT NULL DEFAULT '',
+                    scope TEXT NOT NULL DEFAULT 'person',
+                    fact_key TEXT NOT NULL,
+                    fact_value TEXT NOT NULL,
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    source_context_session TEXT NOT NULL DEFAULT '',
+                    source_msg_start_id INTEGER,
+                    source_msg_end_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """INSERT INTO person_facts (
+                       subject_person_key, object_person_key, scope, fact_key,
+                       fact_value, confidence, created_at, updated_at
+                   ) VALUES ('instance', '', 'person', '爱好', '旧值', 1.0, 't1', 't1')"""
+            )
+            conn.execute(
+                """INSERT INTO person_facts (
+                       subject_person_key, object_person_key, scope, fact_key,
+                       fact_value, confidence, created_at, updated_at
+                   ) VALUES ('instance', '', 'person', '爱好', '新值', 1.0, 't2', 't2')"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        init_db()
+
+        conn = _get_conn()
+        try:
+            rows = conn.execute(
+                """SELECT fact_value
+                   FROM person_facts
+                   WHERE subject_person_key = 'instance'
+                     AND object_person_key = ''
+                     AND scope = 'person'
+                     AND fact_key = '爱好'"""
+            ).fetchall()
+            index_row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_person_facts_key'"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        self.assertEqual([row["fact_value"] for row in rows], ["新值"])
+        self.assertIsNotNone(index_row)
+
     def test_context_messages_do_not_cross_between_contexts(self):
         save_message("user", "from one", "ignored", context_session=self.context_one)
         save_message("user", "from two", "ignored", context_session=self.context_two)

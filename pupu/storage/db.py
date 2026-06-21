@@ -34,17 +34,29 @@ def table_columns(conn, table_name: str) -> set[str]:
 
 def _migrate_person_facts_schema(conn) -> None:
     columns = table_columns(conn, "person_facts")
-    if "legacy_session_id" not in columns:
-        conn.execute("DROP INDEX IF EXISTS idx_person_facts_legacy_session")
+    duplicate = conn.execute(
+        """
+        SELECT 1
+        FROM (
+            SELECT subject_person_key, object_person_key, scope, fact_key, COUNT(*) AS c
+            FROM person_facts
+            GROUP BY subject_person_key, object_person_key, scope, fact_key
+            HAVING c > 1
+        )
+        LIMIT 1
+        """
+    ).fetchone()
+    if "legacy_session_id" not in columns and duplicate is None:
         return
 
     conn.execute("DROP INDEX IF EXISTS idx_person_facts_key")
     conn.execute("DROP INDEX IF EXISTS idx_person_facts_subject")
     conn.execute("DROP INDEX IF EXISTS idx_person_facts_object")
     conn.execute("DROP INDEX IF EXISTS idx_person_facts_legacy_session")
+    conn.execute("DROP TABLE IF EXISTS person_facts_new")
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS person_facts_new (
+        CREATE TABLE person_facts_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             subject_person_key TEXT NOT NULL,
             object_person_key TEXT NOT NULL DEFAULT '',
@@ -70,7 +82,22 @@ def _migrate_person_facts_schema(conn) -> None:
         SELECT id, subject_person_key, object_person_key, scope, fact_key,
                fact_value, confidence, source_context_session,
                source_msg_start_id, source_msg_end_id, created_at, updated_at
-        FROM person_facts
+        FROM person_facts pf
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM person_facts newer
+            WHERE newer.subject_person_key = pf.subject_person_key
+              AND newer.object_person_key = pf.object_person_key
+              AND newer.scope = pf.scope
+              AND newer.fact_key = pf.fact_key
+              AND (
+                  COALESCE(newer.updated_at, '') > COALESCE(pf.updated_at, '')
+                  OR (
+                      COALESCE(newer.updated_at, '') = COALESCE(pf.updated_at, '')
+                      AND newer.id > pf.id
+                  )
+              )
+        )
         """
     )
     conn.execute("DROP TABLE person_facts")
@@ -147,24 +174,6 @@ def init_db():
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-    """
-    )
-    cursor.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_person_facts_key
-        ON person_facts(subject_person_key, object_person_key, scope, fact_key)
-    """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_person_facts_subject
-        ON person_facts(subject_person_key, updated_at)
-    """
-    )
-    cursor.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_person_facts_object
-        ON person_facts(object_person_key, updated_at)
     """
     )
     cursor.execute(
@@ -363,6 +372,24 @@ def init_db():
         )
 
     _migrate_person_facts_schema(conn)
+    cursor.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_person_facts_key
+        ON person_facts(subject_person_key, object_person_key, scope, fact_key)
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_person_facts_subject
+        ON person_facts(subject_person_key, updated_at)
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_person_facts_object
+        ON person_facts(object_person_key, updated_at)
+    """
+    )
 
     for old_table in ("important_events", "user_facts", "self_facts"):
         cursor.execute(f"DROP TABLE IF EXISTS {old_table}")
