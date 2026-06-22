@@ -26,7 +26,7 @@ from ..storage.db import get_conn, get_data_dir
 from ..storage.event_threads import get_recent_event_threads
 from ..storage.facts import get_person_facts
 
-DEFAULT_TOP_K = 6
+DEFAULT_TOP_K = 5
 DEFAULT_LOG_PREVIEW_CHARS = 220
 DEFAULT_RECENCY_DECAY_DAYS = 30.0
 DEFAULT_SOURCE_SUMMARY_LIMIT = 80

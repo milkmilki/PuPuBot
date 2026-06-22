@@ -11,6 +11,7 @@ os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
 from pupu.agent import (
+    REVIEW_INTERVAL,
     _format_chat_history_for_prompt,
     _format_event_thread_candidates_for_review,
     _format_message_content_for_prompt,
@@ -63,6 +64,48 @@ class BatchReviewTests(unittest.TestCase):
     def _save_chat_turn(self, index: int):
         save_message("user", f"user-{index}", self.session_id, source=CHAT)
         save_message("assistant", f"assistant-{index}", self.session_id, source=CHAT)
+
+    def _fill_chat_turns_to_review_interval(self, session_id: str, start_index: int = 0) -> None:
+        for index in range(start_index, REVIEW_INTERVAL):
+            save_message("user", f"user-{index}", session_id, source=CHAT)
+            save_message("assistant", f"assistant-{index}", session_id, source=CHAT)
+
+    def _fill_assistant_messages_to_review_interval(
+        self,
+        session_id: str,
+        *,
+        start_index: int = 0,
+        speaker_name: str = "璐璐",
+    ) -> None:
+        for index in range(start_index, REVIEW_INTERVAL):
+            save_message_with_speaker(
+                "assistant",
+                f"assistant-{index}",
+                session_id,
+                source=CHAT,
+                speaker_key="instance",
+                speaker_name=speaker_name,
+            )
+
+    def _fill_group_replay_to_review_interval(self, session_id: str, start_index: int = 10) -> None:
+        for index in range(start_index, REVIEW_INTERVAL):
+            save_message_with_speaker(
+                "user",
+                f"filler-user-{index}",
+                session_id,
+                source=CHAT,
+                speaker_key="owner",
+                speaker_name="小夫",
+                speaker_qq="424225912",
+            )
+            save_message_with_speaker(
+                "assistant",
+                f"filler-assistant-{index}",
+                session_id,
+                source=CHAT,
+                speaker_key="instance",
+                speaker_name="璐璐",
+            )
 
     def _setup_group_replay_people(self):
         conn = get_conn()
@@ -543,7 +586,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertEqual(count, 0)
 
     def test_batch_review_uses_json_task_provider_output(self):
-        for i in range(10):
+        for i in range(REVIEW_INTERVAL):
             self._save_chat_turn(i)
         create_scheduled_task(
             self.session_id,
@@ -631,7 +674,7 @@ class BatchReviewTests(unittest.TestCase):
         self.assertIn("这次提醒让约定更清晰", text)
 
     def test_batch_review_input_uses_instance_name_instead_of_pupu(self):
-        for i in range(10):
+        for i in range(REVIEW_INTERVAL):
             self._save_chat_turn(i)
 
         raw = """{
@@ -674,7 +717,7 @@ class BatchReviewTests(unittest.TestCase):
         finally:
             conn.close()
 
-        for i in range(5):
+        for i in range(REVIEW_INTERVAL):
             save_message_with_speaker(
                 "user",
                 f"user-{i}",
@@ -731,15 +774,7 @@ class BatchReviewTests(unittest.TestCase):
             speaker_name="Bob",
             speaker_qq="456",
         )
-        for i in range(9):
-            save_message_with_speaker(
-                "assistant",
-                f"assistant-{i}",
-                self.session_id,
-                source=CHAT,
-                speaker_key="instance",
-                speaker_name="璐璐",
-            )
+        self._fill_assistant_messages_to_review_interval(self.session_id, start_index=1)
 
         raw = """{
           "summary": "Alice、Bob 和璐璐完成群聊测试。",
@@ -769,6 +804,7 @@ class BatchReviewTests(unittest.TestCase):
         identity_session = self._group_replay_identity()
         self._setup_group_replay_people()
         self._save_group_replay_batch(group_session)
+        self._fill_group_replay_to_review_interval(group_session, start_index=10)
 
         raw = """{
           "summary": "2026年6月18日傍晚，小夫在群聊中与仆仆、璐璐约定晚上看表现。",
@@ -807,6 +843,7 @@ class BatchReviewTests(unittest.TestCase):
         identity_session = self._group_replay_identity()
         self._setup_group_replay_people()
         self._save_group_replay_batch(group_session)
+        self._fill_group_replay_to_review_interval(group_session, start_index=10)
 
         raw = """{
           "summary": "2026年6月18日傍晚，小夫在群聊中与仆仆、璐璐约定晚上看表现。",
@@ -897,6 +934,7 @@ class BatchReviewTests(unittest.TestCase):
         identity_session = self._group_replay_identity()
         self._setup_group_replay_people()
         self._save_real_group_20260618_batch(group_session)
+        self._fill_group_replay_to_review_interval(group_session, start_index=10)
 
         raw = """{
           "summary": "2026年6月18日傍晚，小夫在群聊中与仆仆、璐璐约定晚上看表现。",
@@ -1397,7 +1435,7 @@ class BatchReviewTests(unittest.TestCase):
         reset_session(context_id)
         reset_session(identity_id)
         set_familiarity(0, session_id=identity_id)
-        for i in range(10):
+        for i in range(REVIEW_INTERVAL):
             save_message("user", f"user-{i}", context_id, source=CHAT)
             save_message("assistant", f"assistant-{i}", context_id, source=CHAT)
 
@@ -1438,7 +1476,7 @@ class BatchReviewTests(unittest.TestCase):
         finally:
             conn.close()
 
-        for i in range(5):
+        for i in range(REVIEW_INTERVAL):
             save_message_with_speaker(
                 "user",
                 f"alice-{i}",
@@ -1510,7 +1548,7 @@ class BatchReviewTests(unittest.TestCase):
         existing = get_person_facts(subject_person_keys=[person_key], include_relationships=False)
         fact_id = existing[0]["id"]
 
-        for i in range(5):
+        for i in range(REVIEW_INTERVAL):
             save_message_with_speaker(
                 "user",
                 f"AliceUpdate说自己没有刘海 {i}",
@@ -1578,7 +1616,7 @@ class BatchReviewTests(unittest.TestCase):
         existing = get_person_facts(subject_person_keys=[person_key], include_relationships=False)
         fact_id = existing[0]["id"]
 
-        for i in range(5):
+        for i in range(REVIEW_INTERVAL):
             save_message_with_speaker(
                 "user",
                 f"普通聊天 {i}",
@@ -1619,7 +1657,7 @@ class BatchReviewTests(unittest.TestCase):
 
     def test_batch_review_omits_familiarity_delta_after_identity_score_reaches_limit(self):
         set_familiarity(100, session_id=self.session_id)
-        for i in range(10):
+        for i in range(REVIEW_INTERVAL):
             self._save_chat_turn(i)
 
         raw = """{

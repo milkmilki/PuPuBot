@@ -109,7 +109,7 @@ memu:
   api_key: ""
   base_url: https://api.openai.com/v1
   method: rag
-  retrieve_top_k: 6
+  retrieve_top_k: 5
   ranking: salience
   llm_provider: openai
   llm_api_key: ""

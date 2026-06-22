@@ -66,11 +66,11 @@ from .storage.people import resolve_person_for_prompt
 from .storage.db import get_conn
 from .tools import execute_tool, get_chat_tool_definitions, is_admin_tool
 
-REVIEW_INTERVAL = 10
+REVIEW_INTERVAL = 30
 REVIEW_SOURCE = CHAT
-CHAT_HISTORY_LIMIT = 10
+CHAT_HISTORY_LIMIT = 30
 PROMPT_SUMMARY_LIMIT = 2
-PROMPT_EVENT_THREAD_LIMIT = 6
+PROMPT_EVENT_THREAD_LIMIT = 5
 BATCH_REVIEW_MAX_TOKENS = 10000
 REVIEW_TASK_CONTEXT_LIMIT = 30
 REVIEW_TASK_FIELD_LIMIT = 120
@@ -273,7 +273,7 @@ def _format_event_thread_candidates_for_review(
     candidates = find_related_event_threads(
         identity_session,
         text,
-        limit=6,
+        limit=5,
         person_keys=person_keys,
     )
     if not candidates:
