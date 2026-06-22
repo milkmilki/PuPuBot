@@ -39,11 +39,21 @@ class ToolingRegistryTests(unittest.TestCase):
         reset_session("test_tooling_registry")
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
+        os.environ.pop("PUPU_VISION_API_KEY", None)
+        os.environ.pop("PUPU_VISION_BASE_URL", None)
+        os.environ.pop("PUPU_VISION_MODEL", None)
+        os.environ.pop("PUPU_VISION_TIMEOUT", None)
+        os.environ.pop("DASHSCOPE_API_KEY", None)
         refresh_tool_definitions()
 
     def tearDown(self):
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
+        os.environ.pop("PUPU_VISION_API_KEY", None)
+        os.environ.pop("PUPU_VISION_BASE_URL", None)
+        os.environ.pop("PUPU_VISION_MODEL", None)
+        os.environ.pop("PUPU_VISION_TIMEOUT", None)
+        os.environ.pop("DASHSCOPE_API_KEY", None)
         refresh_tool_definitions()
 
     def test_chat_tools_are_namespaced(self):
@@ -272,6 +282,88 @@ class ToolingRegistryTests(unittest.TestCase):
             names,
             {"filesystem", "system", "media", "scheduler"},
         )
+
+    def test_media_server_exposes_qwen_vision_tool(self):
+        names = {tool["name"] for tool in get_chat_tool_definitions()}
+        self.assertIn("mcp__media__look_at_image", names)
+        self.assertIn("mcp__media__describe_image", names)
+
+    def test_describe_image_requires_image_and_key(self):
+        no_image = execute_tool(
+            "mcp__media__describe_image",
+            {},
+            image_urls=[],
+            session_id="test_tooling_registry",
+        )
+        self.assertIn("没有可以看的图片", no_image)
+
+        with patch.dict(
+            os.environ,
+            {
+                "PUPU_VISION_API_KEY": "",
+                "DASHSCOPE_API_KEY": "",
+                "PUPU_MEMU_EMBED_API_KEY": "",
+                "PUPU_MEMU_API_KEY": "",
+            },
+            clear=False,
+        ):
+            missing_key = execute_tool(
+                "mcp__media__describe_image",
+                {},
+                image_urls=["https://example.test/image.jpg"],
+                session_id="test_tooling_registry",
+            )
+        self.assertIn("API Key 未配置", missing_key)
+
+    def test_describe_image_calls_openai_compatible_vision_endpoint(self):
+        os.environ["PUPU_VISION_API_KEY"] = "vision-key"
+        os.environ["PUPU_VISION_BASE_URL"] = "https://dashscope.test/compatible-mode/v1"
+        os.environ["PUPU_VISION_MODEL"] = "qwen3.6-flash"
+        os.environ["PUPU_VISION_TIMEOUT"] = "12"
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return self._payload
+
+        calls = {}
+
+        def fake_download(url):
+            calls["download_url"] = url
+            return "ZmFrZS1pbWFnZQ==", "image/png"
+
+        def fake_post(url, *, headers, json, timeout):
+            calls["url"] = url
+            calls["headers"] = headers
+            calls["json"] = json
+            calls["timeout"] = timeout
+            return FakeResponse({"choices": [{"message": {"content": "图里有一只白色杯子。"}}]})
+
+        with patch("pupu.tooling.servers.media.download_image_as_base64", side_effect=fake_download):
+            with patch("pupu.tooling.servers.media.httpx.post", side_effect=fake_post):
+                result = execute_tool(
+                    "mcp__media__describe_image",
+                    {"image_index": 0, "question": "图里有什么？"},
+                    image_urls=["https://example.test/cup.png"],
+                    session_id="test_tooling_registry",
+                )
+
+        self.assertEqual(result, "图里有一只白色杯子。")
+        self.assertEqual(calls["download_url"], "https://example.test/cup.png")
+        self.assertEqual(calls["url"], "https://dashscope.test/compatible-mode/v1/chat/completions")
+        self.assertEqual(calls["headers"]["Authorization"], "Bearer vision-key")
+        self.assertEqual(calls["timeout"], 12.0)
+        self.assertEqual(calls["json"]["model"], "qwen3.6-flash")
+        content = calls["json"]["messages"][0]["content"]
+        self.assertEqual(content[0]["type"], "text")
+        self.assertEqual(content[0]["text"], "图里有什么？")
+        self.assertEqual(content[1]["type"], "image_url")
+        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
 
     def test_external_stdio_mcp_server_is_registered_and_callable(self):
         fixture = Path(__file__).resolve().parent / "fixtures" / "fake_mcp_server.py"

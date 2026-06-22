@@ -256,6 +256,7 @@ pip install -r requirements.txt
 - `user.owner_ids`：如果要使用 QQ owner-only 命令，填你的 QQ 号。
 - `instance.qq_mode`：可选 `cli` 或 `napcat`。
 - `napcat.port`：使用 NapCat 时填写反向 WebSocket 端口。
+- `vision.api_key`：可选。需要让 DeepSeek 等纯文本模型通过图片工具看图时，填写百炼/DashScope API key；默认视觉模型为 `qwen3.6-flash`。
 
 API key 不会放进仓库追踪文件。实例相关文件由启动器或 Console 创建在 `instances/<id>/` 下。`pupu.yaml`、`data/`、`instances/`、日志和 SQLite 数据库都已加入 `.gitignore`。
 

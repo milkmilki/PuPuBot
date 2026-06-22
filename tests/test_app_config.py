@@ -18,6 +18,10 @@ class AppConfigTests(unittest.TestCase):
                 "PUPU_DEEPSEEK_BASE_URL",
                 "PUPU_CONSOLE_PORT",
                 "PUPU_MEMU_ENABLED",
+                "PUPU_VISION_API_KEY",
+                "PUPU_VISION_BASE_URL",
+                "PUPU_VISION_MODEL",
+                "PUPU_VISION_TIMEOUT",
                 "PUPU_TTS_ENABLED",
                 "PUPU_CODEX_MCP_SERVERS_JSON",
                 "PUPU_MCP_SERVERS_JSON",
@@ -51,6 +55,11 @@ console:
   port: 8999
 memu:
   enabled: false
+vision:
+  api_key: vision-key
+  base_url: https://dashscope.test/compatible-mode/v1
+  model: qwen3.6-flash
+  timeout: 12
 tts:
   enabled: true
 mcp:
@@ -78,6 +87,10 @@ mcp:
         self.assertEqual(os.environ["PUPU_DEEPSEEK_BASE_URL"], "https://deepseek.test/anthropic")
         self.assertEqual(os.environ["PUPU_CONSOLE_PORT"], "8999")
         self.assertEqual(os.environ["PUPU_MEMU_ENABLED"], "false")
+        self.assertEqual(os.environ["PUPU_VISION_API_KEY"], "vision-key")
+        self.assertEqual(os.environ["PUPU_VISION_BASE_URL"], "https://dashscope.test/compatible-mode/v1")
+        self.assertEqual(os.environ["PUPU_VISION_MODEL"], "qwen3.6-flash")
+        self.assertEqual(os.environ["PUPU_VISION_TIMEOUT"], "12")
         self.assertEqual(os.environ["PUPU_TTS_ENABLED"], "true")
         self.assertIn("brave-search", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])
         self.assertIn("test-brave-key", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])

@@ -2,6 +2,11 @@
 
 ## 2026-06-21
 
+### 视觉工具
+
+- 新增 `mcp__media__describe_image`，通过百炼/DashScope OpenAI-compatible 接口调用 `qwen3.6-flash` 识图，给 DeepSeek 等纯文本模型补充图片理解能力。
+- `pupu.yaml.example` 新增 `vision` 配置块，支持 `api_key`、`base_url`、`model` 和 `timeout`；工具会优先使用视觉专用 key，也可复用 `DASHSCOPE_API_KEY` 或 memU embedding key。
+
 ### 默认记忆窗口
 
 - 默认 batch review 触发批量从 10 条消息调整为 30 条消息，减少过短片段导致的碎片化总结。
