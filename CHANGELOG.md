@@ -22,10 +22,15 @@
 - `pupu.yaml.example` 新增 `vision` 配置块，支持 `model` 和 `timeout`；视觉工具直接复用 `memu.embed_api_key` / `memu.embed_base_url` 这套百炼配置，不再要求单独填写视觉 key。
 - `describe_image` 支持 `query` / `question` / `prompt`，智能体可以带着“这是谁、图片在表达什么、画得怎么样”等具体问题看图，不再只能返回泛泛描述。
 - 每个会话会短期缓存最近图片 URL（默认 30 分钟、最多 8 张），用户后续追问“刚才那张图”时，`describe_image` 可继续复用最近图片；若工具调用未显式传 `query`，会默认使用当前用户文本作为看图问题。
+- 视觉工具会缓存已成功下载的图片 base64 内容，`look_at_image` 成功后 `describe_image` 可直接复用同一张图，避免 QQ/NapCat 临时图片 URL 二次下载失败；调用百炼/Qwen 视觉接口遇到 SSL EOF、连接中断、超时或 5xx/429 等瞬时错误时会自动重试。
+- `describe_image` 默认优先把原始 http 图片 URL 交给百炼/Qwen，失败时再回退 base64，避免大图 base64 请求体导致 `RemoteProtocolError`、`WinError 10054` 或 `ReadTimeout`；同一会话中同一张图同一问题的识别文本会短期复用。
+- 调用百炼/Qwen 视觉接口时会带上 `X-DashScope-OssResourceResolve: enable` 以支持 QQ/NapCat 临时图片 URL；400 错误会输出百炼响应体，方便区分 `InvalidURL`、格式不支持、图片过大等真实原因。
+- `look_at_image` 聊天工具改为返回 Qwen 视觉文字描述，不再只返回 Anthropic 图片 content block，避免 DeepSeek/Codex 等纯文本链路误以为“看不到图”。
 
 ### memU
 
 - `recall_memories()` 对 `APITimeoutError`、连接失败、网络/限流等瞬时错误恢复 3 次重试日志，避免一次 recall 超时后直接放弃长期记忆检索。
+- memU recall 检索 query 只使用当前轮用户内容，不再拼入 30 条近期上下文；近期上下文只用于最终对话模型生成回复，避免旧话题污染长期记忆召回。
 
 ### 默认记忆窗口
 

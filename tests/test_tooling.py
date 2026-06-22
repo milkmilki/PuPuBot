@@ -6,6 +6,8 @@ from unittest.mock import patch
 import sys
 import json
 
+import httpx
+
 TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 activate_test_instance(TEST_DB_PATH)
@@ -42,6 +44,7 @@ class ToolingRegistryTests(unittest.TestCase):
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
+        os.environ.pop("PUPU_VISION_IMAGE_MODE", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
         os.environ.pop("PUPU_MEMU_EMBED_API_KEY", None)
         os.environ.pop("PUPU_MEMU_EMBED_BASE_URL", None)
@@ -54,6 +57,7 @@ class ToolingRegistryTests(unittest.TestCase):
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
+        os.environ.pop("PUPU_VISION_IMAGE_MODE", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
         os.environ.pop("PUPU_MEMU_EMBED_API_KEY", None)
         os.environ.pop("PUPU_MEMU_EMBED_BASE_URL", None)
@@ -360,6 +364,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(calls["download_url"], "https://example.test/cup.png")
         self.assertEqual(calls["url"], "https://dashscope.test/compatible-mode/v1/chat/completions")
         self.assertEqual(calls["headers"]["Authorization"], "Bearer embed-key")
+        self.assertEqual(calls["headers"]["X-DashScope-OssResourceResolve"], "enable")
         self.assertEqual(calls["timeout"], 12.0)
         self.assertEqual(calls["json"]["model"], "qwen3.6-flash")
         content = calls["json"]["messages"][0]["content"]
@@ -367,7 +372,28 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertIn("问题：图里有什么？", content[0]["text"])
         self.assertIn("不要把不确定", content[0]["text"])
         self.assertEqual(content[1]["type"], "image_url")
-        self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual(content[1]["image_url"]["url"], "https://example.test/cup.png")
+
+    def test_look_at_image_returns_text_description(self):
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": "图里是一张上色插画。"}}]}
+
+        with patch("pupu.tooling.servers.media.download_image_as_base64", return_value=("abc", "image/jpeg")):
+            with patch("pupu.tooling.servers.media.httpx.post", return_value=FakeResponse()):
+                result = execute_tool(
+                    "mcp__media__look_at_image",
+                    {"query": "色不色？"},
+                    image_urls=["https://example.test/colored.jpg"],
+                    session_id="test_tooling_registry",
+                )
+
+        self.assertEqual(result, "图里是一张上色插画。")
 
     def test_describe_image_prompt_alias_still_works(self):
         os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
@@ -430,7 +456,132 @@ class ToolingRegistryTests(unittest.TestCase):
 
         self.assertEqual(first, "复用了刚才那张图。")
         self.assertEqual(second, "复用了刚才那张图。")
-        self.assertEqual(calls, ["https://example.test/recent.jpg", "https://example.test/recent.jpg"])
+        self.assertEqual(calls, ["https://example.test/recent.jpg"])
+
+    def test_describe_image_reuses_image_data_cached_by_look_at_image(self):
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": "识别成功。"}}]}
+
+        calls = []
+
+        def fake_download(url):
+            calls.append(url)
+            return "abc", "image/jpeg"
+
+        with patch("pupu.tooling.servers.media.download_image_as_base64", side_effect=fake_download):
+            with patch("pupu.tooling.servers.media.httpx.post", return_value=FakeResponse()):
+                execute_tool(
+                    "mcp__media__look_at_image",
+                    {"image_index": 0},
+                    image_urls=["https://example.test/cached.jpg"],
+                    session_id="test_tooling_registry",
+                )
+                result = execute_tool(
+                    "mcp__media__describe_image",
+                    {"query": "这是什么？"},
+                    image_urls=None,
+                    session_id="test_tooling_registry",
+                )
+
+        self.assertEqual(result, "识别成功。")
+        self.assertEqual(calls, ["https://example.test/cached.jpg"])
+
+    def test_describe_image_reuses_cached_vision_text_for_same_query(self):
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": "缓存这次识别。"}}]}
+
+        post_calls = []
+
+        def fake_post(url, *, headers, json, timeout):
+            post_calls.append(json["messages"][0]["content"][1]["image_url"]["url"])
+            return FakeResponse()
+
+        with patch("pupu.tooling.servers.media.download_image_as_base64", return_value=("abc", "image/jpeg")):
+            with patch("pupu.tooling.servers.media.httpx.post", side_effect=fake_post):
+                first = execute_tool(
+                    "mcp__media__describe_image",
+                    {"query": "这是谁？"},
+                    image_urls=["https://example.test/person.jpg"],
+                    session_id="test_tooling_registry",
+                )
+                second = execute_tool(
+                    "mcp__media__describe_image",
+                    {"query": "这是谁？"},
+                    image_urls=None,
+                    session_id="test_tooling_registry",
+                )
+
+        self.assertEqual(first, "缓存这次识别。")
+        self.assertEqual(second, "缓存这次识别。")
+        self.assertEqual(post_calls, ["https://example.test/person.jpg"])
+
+    def test_describe_image_retries_transient_vision_error(self):
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": "重试后看到了。"}}]}
+
+        calls = []
+
+        def fake_post(url, *, headers, json, timeout):
+            calls.append(url)
+            if len(calls) == 1:
+                raise httpx.ConnectError("[SSL: UNEXPECTED_EOF_WHILE_READING]")
+            return FakeResponse()
+
+        with patch("pupu.tooling.servers.media.time.sleep", return_value=None):
+            with patch("pupu.tooling.servers.media.download_image_as_base64", return_value=("abc", "image/png")):
+                with patch("pupu.tooling.servers.media.httpx.post", side_effect=fake_post):
+                    result = execute_tool(
+                        "mcp__media__describe_image",
+                        {"query": "再看看这个图呢"},
+                        image_urls=["https://example.test/retry.jpg"],
+                        session_id="test_tooling_registry",
+                    )
+
+        self.assertEqual(result, "重试后看到了。")
+        self.assertEqual(len(calls), 2)
+
+    def test_describe_image_reports_dashscope_error_body(self):
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_VISION_IMAGE_MODE"] = "url"
+
+        def fake_post(url, *, headers, json, timeout):
+            response = httpx.Response(
+                400,
+                text='{"code":"InvalidURL","message":"The request URL is invalid"}',
+                request=httpx.Request("POST", url),
+            )
+            response.raise_for_status()
+
+        with patch("pupu.tooling.servers.media.download_image_as_base64", return_value=("abc", "image/jpeg")):
+            with patch("pupu.tooling.servers.media.httpx.post", side_effect=fake_post):
+                result = execute_tool(
+                    "mcp__media__describe_image",
+                    {"query": "这是什么图？"},
+                    image_urls=["https://example.test/bad.jpg"],
+                    session_id="test_tooling_registry",
+                )
+
+        self.assertIn("HTTPStatusError", result)
+        self.assertIn("InvalidURL", result)
+        self.assertIn("The request URL is invalid", result)
 
     def test_external_stdio_mcp_server_is_registered_and_callable(self):
         fixture = Path(__file__).resolve().parent / "fixtures" / "fake_mcp_server.py"

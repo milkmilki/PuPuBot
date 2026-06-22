@@ -209,6 +209,33 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertEqual(calls[0]["where"], {})
         self.assertEqual(memories[0]["text"], "小夫在群聊中与仆仆、璐璐约好晚上看番。")
 
+    def test_recall_query_ignores_recent_history_context(self):
+        calls = []
+
+        class FakeService:
+            async def retrieve(self, *, queries, where=None):
+                calls.append({"queries": queries, "where": where})
+                return {"items": []}
+
+        history = [
+            {"role": "assistant", "content": "旧话题：猫耳项圈线稿"},
+            {"role": "user", "content": "旧话题：棕色尘埃2"},
+        ]
+
+        with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+            with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
+                recall_memories(
+                    query="这次只问晚饭吃什么",
+                    context_session="owner",
+                    identity_session="owner",
+                    history=history,
+                )
+
+        sent_text = calls[0]["queries"][0]["content"]["text"]
+        self.assertIn("这次只问晚饭吃什么", sent_text)
+        self.assertNotIn("猫耳项圈线稿", sent_text)
+        self.assertNotIn("棕色尘埃2", sent_text)
+
     def test_recall_retries_transient_timeout(self):
         calls = []
 

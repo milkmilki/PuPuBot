@@ -1820,9 +1820,7 @@ def recall_memories(
         return []
 
     character_name = _current_character_name()
-    recent = _format_history_for_recall(history, character_name=character_name)
-    current_query = f"用户: {_replace_default_character_name(query, character_name)}".strip()
-    full_query = (recent + "\n" + current_query).strip()
+    full_query = f"用户: {_replace_default_character_name(query, character_name)}".strip()
     messages = [{"role": "user", "content": {"text": full_query}}]
     where = _global_cache_where()
     _log(
