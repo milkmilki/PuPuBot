@@ -46,6 +46,7 @@ class OneBotTransport:
         self._ws: WebSocket | None = None
         self._write_lock = asyncio.Lock()
         self._pending: dict[str, asyncio.Future[dict]] = {}
+        self._event_tasks: set[asyncio.Task] = set()
         self.info = OneBotConnectionInfo()
         self._configure_routes()
 
@@ -130,6 +131,11 @@ class OneBotTransport:
             if not future.done():
                 future.set_exception(RuntimeError("OneBot transport stopped"))
         self._pending.clear()
+        for task in list(self._event_tasks):
+            task.cancel()
+        if self._event_tasks:
+            await asyncio.gather(*self._event_tasks, return_exceptions=True)
+        self._event_tasks.clear()
         if self._server is not None:
             self._server.should_exit = True
         if self._server_task is not None:
@@ -176,7 +182,9 @@ class OneBotTransport:
                     if not future.done():
                         future.set_result(data)
                     continue
-                await self._on_event(data)
+                task = asyncio.create_task(self._dispatch_event(data))
+                self._event_tasks.add(task)
+                task.add_done_callback(self._event_tasks.discard)
         except WebSocketDisconnect:
             pass
         except asyncio.CancelledError:
@@ -192,6 +200,14 @@ class OneBotTransport:
                 self._pending.pop(echo, None)
                 if not future.done():
                     future.set_exception(RuntimeError("NapCat disconnected"))
+
+    async def _dispatch_event(self, data: dict) -> None:
+        try:
+            await self._on_event(data)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._log(f"[pupu][actor] OneBot event error: {type(exc).__name__}: {exc}")
 
     async def call_action(
         self,

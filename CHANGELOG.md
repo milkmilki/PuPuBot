@@ -2,6 +2,10 @@
 
 ## 2026-06-21
 
+### OneBot 命令发送修复
+
+- 修复 NapCat actor 在处理 `/proactive status`、`/proactive force` 这类命令时等待发送 echo 导致 WebSocket 读循环自锁的问题；OneBot 事件现在后台派发，socket 会继续接收 NapCat 的 action 响应。
+
 ### Proactive 命令修复
 
 - QQ/CLI 命令服务现在兼容裸 `proactive status`、`proactive force`，不会把这类文本送进聊天模型导致等待普通回复。

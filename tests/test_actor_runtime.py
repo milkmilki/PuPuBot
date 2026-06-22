@@ -553,6 +553,61 @@ class OneBotTransportIntegrationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await actor.stop()
 
+    async def test_actor_onebot_command_send_can_receive_echo_while_handling_event(self) -> None:
+        try:
+            import websockets
+        except ImportError:
+            self.skipTest("websockets is not installed")
+
+        port = self._free_port()
+        ctx = self._make_ctx("actor-onebot-command", port=port)
+        actor = InstanceActor(ctx, preflight=False, start_background_tasks=False)
+        await actor.start()
+        try:
+            uri = f"ws://127.0.0.1:{port}/onebot/v11/ws?self_id=999001"
+            async with websockets.connect(uri, additional_headers={"x-self-id": "999001"}) as ws:
+                for _ in range(20):
+                    if actor.transport and actor.transport.info.connected:
+                        break
+                    await asyncio.sleep(0.05)
+                self.assertIsNotNone(actor.transport)
+                self.assertTrue(actor.transport.info.connected)
+
+                await ws.send(
+                    json.dumps(
+                        {
+                            "post_type": "message",
+                            "message_type": "private",
+                            "user_id": 111,
+                            "message_id": 43,
+                            "message": [{"type": "text", "data": {"text": "proactive status"}}],
+                        }
+                    )
+                )
+                action = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                self.assertEqual(action["action"], "send_private_msg")
+                self.assertEqual(action["params"]["user_id"], 111)
+                self.assertIn("主动消息", action["params"]["message"])
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "data": {"message_id": 1001},
+                            "echo": action["echo"],
+                        }
+                    )
+                )
+
+                for _ in range(20):
+                    if not actor.transport or not actor.transport._pending:
+                        break
+                    await asyncio.sleep(0.05)
+                self.assertEqual(actor.transport._pending, {})
+                self.assertTrue(actor.transport.info.connected)
+        finally:
+            await actor.stop()
+
     async def test_actor_onebot_rejects_unexpected_self_id(self) -> None:
         try:
             import websockets
