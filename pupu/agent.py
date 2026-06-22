@@ -64,6 +64,7 @@ from .review_followups import (
 )
 from .storage.people import resolve_person_for_prompt
 from .storage.db import get_conn
+from .tooling.image_cache import resolve_image_context
 from .tools import execute_tool, get_chat_tool_definitions, is_admin_tool
 
 REVIEW_INTERVAL = 30
@@ -989,6 +990,23 @@ def chat(
         raise
 
 
+def _tool_input_with_default_image_query(
+    tool_name: str,
+    tool_input: dict,
+    user_input: str,
+) -> dict:
+    if str(tool_name or "") not in {"describe_image", "mcp__media__describe_image"}:
+        return tool_input
+    if any(str(tool_input.get(key) or "").strip() for key in ("query", "question", "prompt")):
+        return tool_input
+    query = str(user_input or "").strip()
+    if not query:
+        return tool_input
+    updated = dict(tool_input)
+    updated["query"] = query
+    return updated
+
+
 def _chat_impl(
     user_input: str,
     session_id: str = "default",
@@ -1009,6 +1027,7 @@ def _chat_impl(
     context_session = str(context_session or session_id or "default")
     identity_session = str(identity_session or session_id or "default")
     is_group_context = context_session.startswith("group_")
+    tool_image_urls = resolve_image_context(context_session, image_urls)
 
     cancel_wait_timer(context_session)
 
@@ -1128,10 +1147,11 @@ def _chat_impl(
     def _tool_handler(tool_name: str, tool_input: dict, reason_hint: str | None = None):
         if is_admin_tool(tool_name) and not is_admin:
             return "权限不足：只有管理员才能使用文件和命令工具。"
+        tool_input = _tool_input_with_default_image_query(tool_name, tool_input, user_input)
         return execute_tool(
             tool_name,
             tool_input,
-            image_urls=image_urls,
+            image_urls=tool_image_urls,
             session_id=context_session,
             reason_hint=reason_hint or None,
         )
@@ -1145,7 +1165,7 @@ def _chat_impl(
         tools=get_chat_tool_definitions(),
         tool_handler=_tool_handler,
         session_id=context_session,
-        image_urls=image_urls,
+        image_urls=tool_image_urls,
         is_admin=is_admin,
         tool_exposure="chat",
     )

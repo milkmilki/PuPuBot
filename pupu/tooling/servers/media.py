@@ -8,12 +8,17 @@ from typing import Any
 import httpx
 
 from ..base import BuiltinToolServer, ToolContext, ToolSpec
+from ..image_cache import resolve_image_context
 from ...richmsg import download_image_as_base64
 
 DEFAULT_VISION_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_VISION_MODEL = "qwen3.6-flash"
 DEFAULT_VISION_TIMEOUT = 45.0
 MAX_PROMPT_CHARS = 800
+DEFAULT_VISION_QUESTION = (
+    "请用中文观察这张图片。说明画面主体、人物或物体、可见文字、场景氛围、"
+    "风格/画法，以及用户可能想表达的信息；不确定的身份或背景要明确说不确定。"
+)
 
 
 def look_at_image(image_urls: list[str], index: int = 0) -> str | list[dict]:
@@ -121,7 +126,15 @@ def describe_image_with_qwen(
     if not result:
         return "图片下载失败了"
     b64, media_type = result
-    question = (prompt or "请用中文描述这张图片，重点说明画面内容、文字和用户可能想表达的信息。").strip()
+    user_question = str(prompt or "").strip()
+    if user_question:
+        question = (
+            "请用中文回答下面这个关于图片的问题。优先围绕问题作答，同时补充有助于理解图片的关键细节；"
+            "不要把不确定的身份、人物关系或作者信息说成事实。\n\n"
+            f"问题：{user_question}"
+        )
+    else:
+        question = DEFAULT_VISION_QUESTION
     if len(question) > MAX_PROMPT_CHARS:
         question = question[:MAX_PROMPT_CHARS]
 
@@ -163,14 +176,22 @@ def describe_image_with_qwen(
 
 
 def _handle_look_at_image(tool_input: dict, context: ToolContext):
-    return look_at_image(context.image_urls or [], tool_input.get("image_index", 0))
+    return look_at_image(
+        resolve_image_context(context.session_id, context.image_urls),
+        tool_input.get("image_index", 0),
+    )
 
 
 def _handle_describe_image(tool_input: dict, context: ToolContext):
+    prompt = (
+        tool_input.get("query")
+        or tool_input.get("question")
+        or tool_input.get("prompt")
+    )
     return describe_image_with_qwen(
-        context.image_urls or [],
+        resolve_image_context(context.session_id, context.image_urls),
         tool_input.get("image_index", 0),
-        tool_input.get("question") or tool_input.get("prompt"),
+        prompt,
     )
 
 
@@ -181,7 +202,7 @@ MEDIA_SERVER = BuiltinToolServer(
         ToolSpec(
             server="media",
             name="look_at_image",
-            description="查看用户刚刚发的图片。只在你真的好奇或者觉得有必要看的时候才用，普通聊天不需要每张图都看。",
+            description="查看用户当前或最近发的图片。只在你真的好奇或者觉得有必要看的时候才用，普通聊天不需要每张图都看。",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -199,9 +220,11 @@ MEDIA_SERVER = BuiltinToolServer(
             server="media",
             name="describe_image",
             description=(
-                "Use the configured Qwen vision model to inspect a user image and "
-                "return a concise text description. Use this when the chat model "
-                "cannot see images directly or when image details matter."
+                "Use the configured Qwen vision model to inspect the current or recently sent user image. "
+                "Pass a query/question when you want to know something specific, "
+                "such as who or what is shown, what the image is about, visible text, "
+                "style, drawing quality, mood, or whether a detail is present. "
+                "Without a query, it returns a general observation."
             ),
             input_schema={
                 "type": "object",
@@ -213,6 +236,14 @@ MEDIA_SERVER = BuiltinToolServer(
                     "question": {
                         "type": "string",
                         "description": "Optional specific question about the image.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional natural-language query about what to inspect or answer in the image.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Backward-compatible alias for question/query.",
                     },
                 },
                 "required": [],

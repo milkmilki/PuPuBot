@@ -11,7 +11,7 @@ activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 os.environ["PUPU_MEMU_ENABLED"] = "false"
 
-from pupu.agent import REVIEW_INTERVAL, chat, _maybe_batch_review
+from pupu.agent import REVIEW_INTERVAL, chat, _maybe_batch_review, _tool_input_with_default_image_query
 from pupu.facts_report import format_facts_report
 from pupu.event_thread_report import format_event_threads_report
 import pupu.proactive as proactive
@@ -45,6 +45,7 @@ from pupu.memory_index.memu_adapter import (
 from pupu.memory_index import run_memu_maintenance, run_memu_tidy
 from pupu.message_sources import CHAT, PROACTIVE, SCHEDULED, WAIT_FOLLOWUP
 from pupu.persona import build_system_prompt
+from pupu.tooling.image_cache import clear_recent_images
 
 
 class MemuMemoryTests(unittest.TestCase):
@@ -55,6 +56,10 @@ class MemuMemoryTests(unittest.TestCase):
     def setUp(self):
         self.session_id = f"test_memu_{self._testMethodName}"
         reset_session(self.session_id)
+        clear_recent_images()
+
+    def tearDown(self):
+        clear_recent_images()
 
     def _save_chat_turn(self, index: int):
         save_message("user", f"user-{index}", self.session_id, source=CHAT)
@@ -203,6 +208,40 @@ class MemuMemoryTests(unittest.TestCase):
 
         self.assertEqual(calls[0]["where"], {})
         self.assertEqual(memories[0]["text"], "小夫在群聊中与仆仆、璐璐约好晚上看番。")
+
+    def test_recall_retries_transient_timeout(self):
+        calls = []
+
+        class APITimeoutError(Exception):
+            pass
+
+        class FakeService:
+            async def retrieve(self, *, queries, where=None):
+                calls.append({"queries": queries, "where": where})
+                if len(calls) == 1:
+                    raise APITimeoutError("Request timed out.")
+                return {
+                    "items": [
+                        {
+                            "id": "retry-summary",
+                            "summary": '{"kind":"summary","text":"重试后取回的记忆。"}',
+                            "score": 0.8,
+                        }
+                    ]
+                }
+
+        with patch("pupu.memory_index.memu_adapter.time.sleep", return_value=None):
+            with patch("pupu.memory_index.memu_adapter.is_memu_long_term_enabled", return_value=True):
+                with patch("pupu.memory_index.memu_adapter._get_service", return_value=FakeService()):
+                    memories = recall_memories(
+                        query="刚才那张图",
+                        context_session="owner",
+                        identity_session="owner",
+                        history=[],
+                    )
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(memories[0]["text"], "重试后取回的记忆。")
 
     def test_list_items_uses_global_memu_cache_scope(self):
         calls = []
@@ -458,6 +497,27 @@ class MemuMemoryTests(unittest.TestCase):
         self.assertNotIn("summary-one-old", system_prompt)
         self.assertIn("summary-two-recent", system_prompt)
         self.assertIn("summary-three-latest", system_prompt)
+
+    def test_chat_reuses_recent_image_context_for_followup_turn(self):
+        with patch("pupu.agent.is_memu_long_term_enabled", return_value=False):
+            with patch("pupu.agent.chat_complete", return_value="ok") as mock_chat:
+                with patch("pupu.agent._maybe_batch_review", return_value=None):
+                    chat("姐姐看得到嘛", self.session_id, image_urls=["https://example.test/sketch.jpg"])
+                    chat("刚才那张画得怎么样？", self.session_id)
+
+        first_images = mock_chat.call_args_list[0].kwargs["image_urls"]
+        second_images = mock_chat.call_args_list[1].kwargs["image_urls"]
+        self.assertEqual(first_images, ["https://example.test/sketch.jpg"])
+        self.assertEqual(second_images, ["https://example.test/sketch.jpg"])
+
+    def test_describe_image_tool_input_defaults_query_to_user_text(self):
+        updated = _tool_input_with_default_image_query(
+            "mcp__media__describe_image",
+            {"image_index": 0},
+            "姐姐看得到嘛",
+        )
+
+        self.assertEqual(updated["query"], "姐姐看得到嘛")
 
     def test_proactive_prompt_uses_memu_recall_when_enabled(self):
         recent = [

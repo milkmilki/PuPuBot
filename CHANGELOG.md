@@ -20,6 +20,12 @@
 
 - 新增 `mcp__media__describe_image`，通过百炼/DashScope OpenAI-compatible 接口调用 `qwen3.6-flash` 识图，给 DeepSeek 等纯文本模型补充图片理解能力。
 - `pupu.yaml.example` 新增 `vision` 配置块，支持 `model` 和 `timeout`；视觉工具直接复用 `memu.embed_api_key` / `memu.embed_base_url` 这套百炼配置，不再要求单独填写视觉 key。
+- `describe_image` 支持 `query` / `question` / `prompt`，智能体可以带着“这是谁、图片在表达什么、画得怎么样”等具体问题看图，不再只能返回泛泛描述。
+- 每个会话会短期缓存最近图片 URL（默认 30 分钟、最多 8 张），用户后续追问“刚才那张图”时，`describe_image` 可继续复用最近图片；若工具调用未显式传 `query`，会默认使用当前用户文本作为看图问题。
+
+### memU
+
+- `recall_memories()` 对 `APITimeoutError`、连接失败、网络/限流等瞬时错误恢复 3 次重试日志，避免一次 recall 超时后直接放弃长期记忆检索。
 
 ### 默认记忆窗口
 

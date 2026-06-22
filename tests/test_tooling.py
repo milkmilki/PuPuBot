@@ -28,6 +28,7 @@ from pupu.tools import (
     refresh_tool_definitions,
 )
 from pupu.tooling import refresh_registry
+from pupu.tooling.image_cache import clear_recent_images
 
 
 class ToolingRegistryTests(unittest.TestCase):
@@ -37,6 +38,7 @@ class ToolingRegistryTests(unittest.TestCase):
 
     def setUp(self):
         reset_session("test_tooling_registry")
+        clear_recent_images()
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
@@ -48,6 +50,7 @@ class ToolingRegistryTests(unittest.TestCase):
         refresh_tool_definitions()
 
     def tearDown(self):
+        clear_recent_images()
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
@@ -348,7 +351,7 @@ class ToolingRegistryTests(unittest.TestCase):
             with patch("pupu.tooling.servers.media.httpx.post", side_effect=fake_post):
                 result = execute_tool(
                     "mcp__media__describe_image",
-                    {"image_index": 0, "question": "图里有什么？"},
+                    {"image_index": 0, "query": "图里有什么？"},
                     image_urls=["https://example.test/cup.png"],
                     session_id="test_tooling_registry",
                 )
@@ -361,9 +364,73 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(calls["json"]["model"], "qwen3.6-flash")
         content = calls["json"]["messages"][0]["content"]
         self.assertEqual(content[0]["type"], "text")
-        self.assertEqual(content[0]["text"], "图里有什么？")
+        self.assertIn("问题：图里有什么？", content[0]["text"])
+        self.assertIn("不要把不确定", content[0]["text"])
         self.assertEqual(content[1]["type"], "image_url")
         self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    def test_describe_image_prompt_alias_still_works(self):
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": "看起来像一幅草图。"}}]}
+
+        calls = {}
+
+        def fake_post(url, *, headers, json, timeout):
+            calls["prompt"] = json["messages"][0]["content"][0]["text"]
+            return FakeResponse()
+
+        with patch("pupu.tooling.servers.media.download_image_as_base64", return_value=("abc", "image/jpeg")):
+            with patch("pupu.tooling.servers.media.httpx.post", side_effect=fake_post):
+                result = execute_tool(
+                    "mcp__media__describe_image",
+                    {"prompt": "这张画画得怎么样？"},
+                    image_urls=["https://example.test/sketch.jpg"],
+                    session_id="test_tooling_registry",
+                )
+
+        self.assertEqual(result, "看起来像一幅草图。")
+        self.assertIn("问题：这张画画得怎么样？", calls["prompt"])
+
+    def test_describe_image_reuses_recent_session_image(self):
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"choices": [{"message": {"content": "复用了刚才那张图。"}}]}
+
+        calls = []
+
+        def fake_download(url):
+            calls.append(url)
+            return "abc", "image/jpeg"
+
+        with patch("pupu.tooling.servers.media.download_image_as_base64", side_effect=fake_download):
+            with patch("pupu.tooling.servers.media.httpx.post", return_value=FakeResponse()):
+                first = execute_tool(
+                    "mcp__media__describe_image",
+                    {"query": "先看这张"},
+                    image_urls=["https://example.test/recent.jpg"],
+                    session_id="test_tooling_registry",
+                )
+                second = execute_tool(
+                    "mcp__media__describe_image",
+                    {"query": "刚才那张画得怎么样？"},
+                    image_urls=None,
+                    session_id="test_tooling_registry",
+                )
+
+        self.assertEqual(first, "复用了刚才那张图。")
+        self.assertEqual(second, "复用了刚才那张图。")
+        self.assertEqual(calls, ["https://example.test/recent.jpg", "https://example.test/recent.jpg"])
 
     def test_external_stdio_mcp_server_is_registered_and_callable(self):
         fixture = Path(__file__).resolve().parent / "fixtures" / "fake_mcp_server.py"

@@ -30,6 +30,7 @@ DEFAULT_TOP_K = 5
 DEFAULT_LOG_PREVIEW_CHARS = 220
 DEFAULT_RECENCY_DECAY_DAYS = 30.0
 DEFAULT_SOURCE_SUMMARY_LIMIT = 80
+RECALL_RETRY_ATTEMPTS = 3
 _service_lock = threading.Lock()
 _op_lock = threading.Lock()
 _disabled_reasons_logged: set[str] = set()
@@ -892,6 +893,28 @@ def _run(coro):
     except RuntimeError:
         return asyncio.run(coro)
     raise RuntimeError("memU sync helper cannot run inside an active event loop; call it in a thread")
+
+
+def _is_transient_memu_error(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    text = str(exc).lower()
+    transient_terms = (
+        "timeout",
+        "timed out",
+        "connect",
+        "connection",
+        "network",
+        "transport",
+        "temporarily",
+        "rate limit",
+        "too many requests",
+        "service unavailable",
+    )
+    return any(term in name or term in text for term in transient_terms)
+
+
+def _retry_delay_seconds(attempt: int) -> float:
+    return min(8.0, float(2 ** max(0, attempt - 1)))
 
 
 def _scope(identity_session: str, context_session: str | None = None) -> dict[str, str]:
@@ -1816,8 +1839,29 @@ def recall_memories(
 
     start = time.monotonic()
     try:
-        with _op_lock:
-            result = _run(_retrieve())
+        result = None
+        for attempt in range(1, RECALL_RETRY_ATTEMPTS + 1):
+            try:
+                with _op_lock:
+                    result = _run(_retrieve())
+                if attempt > 1:
+                    _log(
+                        "recall retry recovered "
+                        f"context={context_session} identity={identity_session} "
+                        f"attempt={attempt}/{RECALL_RETRY_ATTEMPTS}"
+                    )
+                break
+            except Exception as exc:
+                if attempt >= RECALL_RETRY_ATTEMPTS or not _is_transient_memu_error(exc):
+                    raise
+                delay = _retry_delay_seconds(attempt)
+                _log(
+                    "recall retry "
+                    f"context={context_session} identity={identity_session} "
+                    f"attempt={attempt}/{RECALL_RETRY_ATTEMPTS} delay_seconds={delay:.1f} "
+                    f"error={type(exc).__name__}: {_preview(exc, 500)}"
+                )
+                time.sleep(delay)
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - start) * 1000)
         _log(
@@ -1825,6 +1869,8 @@ def recall_memories(
             f"context={context_session} identity={identity_session} elapsed_ms={elapsed_ms} "
             f"error={type(exc).__name__}: {_preview(exc, 800)}"
         )
+        return []
+    if result is None:
         return []
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
