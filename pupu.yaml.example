@@ -123,10 +123,8 @@ memu:
 vision:
   # Qwen vision tool for image understanding. Uses Alibaba Cloud Model Studio /
   # DashScope OpenAI-compatible Chat Completions.
-  # If api_key/base_url are empty, PuPu can fall back to DASHSCOPE_API_KEY or
-  # the memU embedding key/base_url when they point to the same Bailian account.
-  api_key: ""
-  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  # The tool reuses memu.embed_api_key and memu.embed_base_url, so Bailian users
+  # only need one API key for embedding + vision.
   model: qwen3.6-flash
   timeout: 45
 

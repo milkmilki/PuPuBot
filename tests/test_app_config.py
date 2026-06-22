@@ -18,8 +18,8 @@ class AppConfigTests(unittest.TestCase):
                 "PUPU_DEEPSEEK_BASE_URL",
                 "PUPU_CONSOLE_PORT",
                 "PUPU_MEMU_ENABLED",
-                "PUPU_VISION_API_KEY",
-                "PUPU_VISION_BASE_URL",
+                "PUPU_MEMU_EMBED_API_KEY",
+                "PUPU_MEMU_EMBED_BASE_URL",
                 "PUPU_VISION_MODEL",
                 "PUPU_VISION_TIMEOUT",
                 "PUPU_TTS_ENABLED",
@@ -55,9 +55,9 @@ console:
   port: 8999
 memu:
   enabled: false
+  embed_api_key: embed-key
+  embed_base_url: https://dashscope.test/compatible-mode/v1
 vision:
-  api_key: vision-key
-  base_url: https://dashscope.test/compatible-mode/v1
   model: qwen3.6-flash
   timeout: 12
 tts:
@@ -87,8 +87,8 @@ mcp:
         self.assertEqual(os.environ["PUPU_DEEPSEEK_BASE_URL"], "https://deepseek.test/anthropic")
         self.assertEqual(os.environ["PUPU_CONSOLE_PORT"], "8999")
         self.assertEqual(os.environ["PUPU_MEMU_ENABLED"], "false")
-        self.assertEqual(os.environ["PUPU_VISION_API_KEY"], "vision-key")
-        self.assertEqual(os.environ["PUPU_VISION_BASE_URL"], "https://dashscope.test/compatible-mode/v1")
+        self.assertEqual(os.environ["PUPU_MEMU_EMBED_API_KEY"], "embed-key")
+        self.assertEqual(os.environ["PUPU_MEMU_EMBED_BASE_URL"], "https://dashscope.test/compatible-mode/v1")
         self.assertEqual(os.environ["PUPU_VISION_MODEL"], "qwen3.6-flash")
         self.assertEqual(os.environ["PUPU_VISION_TIMEOUT"], "12")
         self.assertEqual(os.environ["PUPU_TTS_ENABLED"], "true")

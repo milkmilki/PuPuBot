@@ -269,8 +269,6 @@ def apply_app_config_env(
         "memu.embed_api_key": "PUPU_MEMU_EMBED_API_KEY",
         "memu.embed_base_url": "PUPU_MEMU_EMBED_BASE_URL",
         "memu.embed_model": "PUPU_MEMU_EMBED_MODEL",
-        "vision.api_key": "PUPU_VISION_API_KEY",
-        "vision.base_url": "PUPU_VISION_BASE_URL",
         "vision.model": "PUPU_VISION_MODEL",
         "vision.timeout": "PUPU_VISION_TIMEOUT",
         "tts.enabled": "PUPU_TTS_ENABLED",

@@ -10,7 +10,7 @@
 ### 视觉工具
 
 - 新增 `mcp__media__describe_image`，通过百炼/DashScope OpenAI-compatible 接口调用 `qwen3.6-flash` 识图，给 DeepSeek 等纯文本模型补充图片理解能力。
-- `pupu.yaml.example` 新增 `vision` 配置块，支持 `api_key`、`base_url`、`model` 和 `timeout`；工具会优先使用视觉专用 key，也可复用 `DASHSCOPE_API_KEY` 或 memU embedding key。
+- `pupu.yaml.example` 新增 `vision` 配置块，支持 `model` 和 `timeout`；视觉工具直接复用 `memu.embed_api_key` / `memu.embed_base_url` 这套百炼配置，不再要求单独填写视觉 key。
 
 ### 默认记忆窗口
 

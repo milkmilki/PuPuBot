@@ -39,21 +39,23 @@ class ToolingRegistryTests(unittest.TestCase):
         reset_session("test_tooling_registry")
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
-        os.environ.pop("PUPU_VISION_API_KEY", None)
-        os.environ.pop("PUPU_VISION_BASE_URL", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
-        os.environ.pop("DASHSCOPE_API_KEY", None)
+        os.environ.pop("PUPU_MEMU_EMBED_API_KEY", None)
+        os.environ.pop("PUPU_MEMU_EMBED_BASE_URL", None)
+        os.environ.pop("PUPU_MEMU_API_KEY", None)
+        os.environ.pop("PUPU_MEMU_BASE_URL", None)
         refresh_tool_definitions()
 
     def tearDown(self):
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
-        os.environ.pop("PUPU_VISION_API_KEY", None)
-        os.environ.pop("PUPU_VISION_BASE_URL", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
-        os.environ.pop("DASHSCOPE_API_KEY", None)
+        os.environ.pop("PUPU_MEMU_EMBED_API_KEY", None)
+        os.environ.pop("PUPU_MEMU_EMBED_BASE_URL", None)
+        os.environ.pop("PUPU_MEMU_API_KEY", None)
+        os.environ.pop("PUPU_MEMU_BASE_URL", None)
         refresh_tool_definitions()
 
     def test_chat_tools_are_namespaced(self):
@@ -300,8 +302,6 @@ class ToolingRegistryTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "PUPU_VISION_API_KEY": "",
-                "DASHSCOPE_API_KEY": "",
                 "PUPU_MEMU_EMBED_API_KEY": "",
                 "PUPU_MEMU_API_KEY": "",
             },
@@ -316,8 +316,8 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertIn("API Key 未配置", missing_key)
 
     def test_describe_image_calls_openai_compatible_vision_endpoint(self):
-        os.environ["PUPU_VISION_API_KEY"] = "vision-key"
-        os.environ["PUPU_VISION_BASE_URL"] = "https://dashscope.test/compatible-mode/v1"
+        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_MEMU_EMBED_BASE_URL"] = "https://dashscope.test/compatible-mode/v1"
         os.environ["PUPU_VISION_MODEL"] = "qwen3.6-flash"
         os.environ["PUPU_VISION_TIMEOUT"] = "12"
 
@@ -356,7 +356,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(result, "图里有一只白色杯子。")
         self.assertEqual(calls["download_url"], "https://example.test/cup.png")
         self.assertEqual(calls["url"], "https://dashscope.test/compatible-mode/v1/chat/completions")
-        self.assertEqual(calls["headers"]["Authorization"], "Bearer vision-key")
+        self.assertEqual(calls["headers"]["Authorization"], "Bearer embed-key")
         self.assertEqual(calls["timeout"], 12.0)
         self.assertEqual(calls["json"]["model"], "qwen3.6-flash")
         content = calls["json"]["messages"][0]["content"]

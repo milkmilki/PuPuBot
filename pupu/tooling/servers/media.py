@@ -48,9 +48,8 @@ def look_at_image(image_urls: list[str], index: int = 0) -> str | list[dict]:
 
 def _vision_api_key() -> str:
     for name in (
-        "PUPU_VISION_API_KEY",
-        "DASHSCOPE_API_KEY",
         "PUPU_MEMU_EMBED_API_KEY",
+        "PUPU_MEMU_API_KEY",
     ):
         value = os.environ.get(name, "").strip()
         if value:
@@ -60,8 +59,8 @@ def _vision_api_key() -> str:
 
 def _vision_base_url() -> str:
     return (
-        os.environ.get("PUPU_VISION_BASE_URL", "").strip()
-        or os.environ.get("PUPU_MEMU_EMBED_BASE_URL", "").strip()
+        os.environ.get("PUPU_MEMU_EMBED_BASE_URL", "").strip()
+        or os.environ.get("PUPU_MEMU_BASE_URL", "").strip()
         or DEFAULT_VISION_BASE_URL
     ).rstrip("/")
 
@@ -114,8 +113,8 @@ def describe_image_with_qwen(
     api_key = _vision_api_key()
     if not api_key:
         return (
-            "视觉模型 API Key 未配置。请在 pupu.yaml 的 vision.api_key 中填写百炼 API Key，"
-            "或设置 PUPU_VISION_API_KEY / DASHSCOPE_API_KEY。"
+            "视觉模型 API Key 未配置。请在 pupu.yaml 的 memu.embed_api_key 中填写百炼 API Key，"
+            "视觉工具会直接复用 memU embedding 的百炼配置。"
         )
 
     result = download_image_as_base64(image_urls[index])
