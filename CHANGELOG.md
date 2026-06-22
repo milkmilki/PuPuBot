@@ -2,6 +2,10 @@
 
 ## 2026-06-21
 
+### 关系阶段 Prompt 通用化
+
+- 重写 `FAMILIARITY_PROMPTS`，从具体口癖和实例偏好改为更通用的关系状态描述，让不同实例都能复用同一套好感度关系提示。
+
 ### OneBot 命令发送修复
 
 - 修复 NapCat actor 在处理 `/proactive status`、`/proactive force` 这类命令时等待发送 echo 导致 WebSocket 读循环自锁的问题；OneBot 事件现在后台派发，socket 会继续接收 NapCat 的 action 响应。
