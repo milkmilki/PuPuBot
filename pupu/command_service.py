@@ -43,7 +43,11 @@ class CommandResult:
 
 
 def is_command_text(text: str) -> bool:
-    return bool(str(text or "").lstrip().startswith("/"))
+    value = str(text or "").lstrip()
+    if value.startswith("/"):
+        return True
+    command_name = value.partition(" ")[0]
+    return resolve_command(command_name, surface="qq") is not None
 
 
 def _parse_tidy_mode(command_arg: str) -> tuple[str | None, str | None]:
@@ -92,6 +96,7 @@ async def execute_command(
     silence_setter=None,
     proactive_starter=None,
     proactive_stopper=None,
+    proactive_forcer=None,
 ) -> CommandResult:
     text = str(raw_text or "").strip()
     if not is_command_text(text):
@@ -187,6 +192,13 @@ async def execute_command(
                 "主动消息："
                 + ("已开启" if is_proactive_enabled() else "已关闭"),
             )
+        if action in {"force", "run", "now", "once", "手动", "立即", "强制"}:
+            if proactive_forcer is not None:
+                msg = proactive_forcer()
+                if asyncio.iscoroutine(msg):
+                    msg = await msg
+                return CommandResult(True, str(msg or "主动消息 force 已执行。"))
+            return CommandResult(True, "这个入口暂不支持 force。")
         enabled = _parse_on_off(action)
         if enabled is True:
             set_proactive_enabled(True)
@@ -204,7 +216,7 @@ async def execute_command(
                     msg = await msg
                 return CommandResult(True, str(msg or "主动消息已关闭。"))
             return CommandResult(True, "主动消息已关闭。")
-        return CommandResult(True, "用法：/proactive [status|on|off]")
+        return CommandResult(True, "用法：/proactive [status|on|off|force]")
     if command_id == "debug":
         action = command_arg.strip().lower()
         if action in {"", "status", "状态", "?"}:

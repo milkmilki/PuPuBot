@@ -414,6 +414,22 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.gather(*actor._tasks, return_exceptions=True)
                 dialogue_loop.unregister_sender(OWNER_SESSION)
 
+    async def test_proactive_force_command_sends_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a", qq_mode="cli", owner_ids=[])
+            delivered: list[str] = []
+            actor = InstanceActor(ctx, preflight=False, cli_send=delivered.append)
+
+            with activate_instance_context(ctx):
+                init_db()
+                with patch("pupu.actor.instance_actor._get_current_period", return_value={"name": "白天"}):
+                    with patch("pupu.actor.instance_actor.generate_proactive_message", return_value="主动测试"):
+                        should_exit = await actor.handle_cli_text("proactive force", delivered.append)
+
+            self.assertFalse(should_exit)
+            self.assertIn("主动测试", delivered)
+            self.assertIn("主动消息 force 已发送。", delivered)
+
 
 class OneBotTransportIntegrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:

@@ -25,7 +25,7 @@ from pupu.llm import ProviderConfigError, preflight_model_providers
 from pupu.logging_utils import close_current_instance_log_sinks, setup_runtime_logging
 from pupu.maintenance import maybe_run_daily_memu_tidy
 from pupu.memory import init_db
-from pupu.proactive import proactive_loop
+from pupu.proactive import _get_current_period, generate_proactive_message, proactive_loop
 from pupu.proactive_control import is_proactive_enabled
 from pupu.scheduler import sender_scheduled_tasks_loop
 from pupu.sessions import OWNER_SESSION
@@ -282,6 +282,20 @@ class InstanceActor:
                 task.cancel()
         return "主动消息已关闭。"
 
+    async def _force_proactive_once(self) -> str:
+        with activate_instance_context(self.context):
+            period = _get_current_period()
+            if period is None:
+                return "当前时段不适合主动消息，force 未发送。"
+            from pupu.memory import get_familiarity
+
+            score = get_familiarity(OWNER_SESSION)
+            text = await asyncio.to_thread(generate_proactive_message, score, period)
+            if not text:
+                return "主动消息 force 没有生成可发送内容。"
+            await self._send_by_session(OWNER_SESSION, text)
+            return "主动消息 force 已发送。"
+
     async def _send_by_session(self, session_id: str, text: str) -> None:
         sid = str(session_id or "")
         if self.context.qq_mode == "cli":
@@ -476,6 +490,7 @@ class InstanceActor:
             silence_setter=self.buffer.set_group_silence,
             proactive_starter=self._start_proactive_loop,
             proactive_stopper=self._stop_proactive_loop,
+            proactive_forcer=self._force_proactive_once,
         )
         if not result.handled:
             return False
@@ -505,11 +520,12 @@ class InstanceActor:
                     identity_session=OWNER_SESSION,
                     is_admin=True,
                     user_id="owner",
-                    can_exit=True,
-                ),
-                proactive_starter=self._start_proactive_loop,
-                proactive_stopper=self._stop_proactive_loop,
-            )
+                can_exit=True,
+            ),
+            proactive_starter=self._start_proactive_loop,
+            proactive_stopper=self._stop_proactive_loop,
+            proactive_forcer=self._force_proactive_once,
+        )
             if result.handled:
                 if result.text:
                     send(result.text)

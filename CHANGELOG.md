@@ -2,6 +2,11 @@
 
 ## 2026-06-21
 
+### Proactive 命令修复
+
+- QQ/CLI 命令服务现在兼容裸 `proactive status`、`proactive force`，不会把这类文本送进聊天模型导致等待普通回复。
+- 补齐 `proactive force` 执行路径，会立即生成一条主动消息并通过当前实例 sender 发送。
+
 ### 视觉工具
 
 - 新增 `mcp__media__describe_image`，通过百炼/DashScope OpenAI-compatible 接口调用 `qwen3.6-flash` 识图，给 DeepSeek 等纯文本模型补充图片理解能力。

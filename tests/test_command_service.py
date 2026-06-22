@@ -73,6 +73,38 @@ class CommandServiceTests(unittest.TestCase):
         )
         self.assertIn("已开启", status.text)
 
+    def test_bare_proactive_status_is_treated_as_command(self):
+        ctx = CommandContext(
+            surface="qq",
+            context_session="owner",
+            identity_session="owner",
+            is_admin=True,
+        )
+
+        result = asyncio.run(execute_command("proactive status", ctx))
+
+        self.assertTrue(result.handled)
+        self.assertIn("主动消息", result.text)
+
+    def test_proactive_force_uses_forcer_callback(self):
+        calls = []
+        ctx = CommandContext(
+            surface="qq",
+            context_session="owner",
+            identity_session="owner",
+            is_admin=True,
+        )
+
+        async def forcer():
+            calls.append("force")
+            return "主动消息 force 已发送。"
+
+        result = asyncio.run(execute_command("/proactive force", ctx, proactive_forcer=forcer))
+
+        self.assertTrue(result.handled)
+        self.assertEqual(calls, ["force"])
+        self.assertIn("force 已发送", result.text)
+
 
 if __name__ == "__main__":
     unittest.main()
