@@ -1,5 +1,13 @@
 ﻿# 更新日志
 
+## 2026-06-24
+
+### LLM API provider 收口
+
+- 移除 `codex_cli` provider、Codex CLI 子进程调用和 PuPu-for-Codex MCP server；后续模型接入只走 LLM API provider。
+- `pupu.yaml.example`、桌宠 API key 设置和 provider 校验不再展示或接受 `codex_cli`。
+- 外部 MCP server 保留为 PuPu 内置 stdio MCP client 管理，通过普通 tool schema 提供给 DeepSeek/Anthropic 等 API provider。
+
 ## 2026-06-21
 
 ### 关系阶段 Prompt 通用化

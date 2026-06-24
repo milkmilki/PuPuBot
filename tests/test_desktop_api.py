@@ -25,12 +25,10 @@ class DesktopApiTests(unittest.TestCase):
             for key in (
                 "PUPU_REPO_ROOT",
                 "PUPU_YAML_PATH",
-                "PUPU_CODEX_MCP_SERVERS_JSON",
                 "PUPU_MCP_SERVERS_JSON",
             )
         }
         os.environ["PUPU_REPO_ROOT"] = self._tmp.name
-        os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
         yaml_path = Path(self._tmp.name) / "pupu.yaml"
         yaml_path.write_text("", encoding="utf-8")

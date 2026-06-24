@@ -23,7 +23,6 @@ class AppConfigTests(unittest.TestCase):
                 "PUPU_VISION_MODEL",
                 "PUPU_VISION_TIMEOUT",
                 "PUPU_TTS_ENABLED",
-                "PUPU_CODEX_MCP_SERVERS_JSON",
                 "PUPU_MCP_SERVERS_JSON",
             )
         }
@@ -92,13 +91,9 @@ mcp:
         self.assertEqual(os.environ["PUPU_VISION_MODEL"], "qwen3.6-flash")
         self.assertEqual(os.environ["PUPU_VISION_TIMEOUT"], "12")
         self.assertEqual(os.environ["PUPU_TTS_ENABLED"], "true")
-        self.assertIn("brave-search", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])
-        self.assertIn("test-brave-key", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])
-        self.assertNotIn("disabled-demo", os.environ["PUPU_CODEX_MCP_SERVERS_JSON"])
-        self.assertEqual(
-            os.environ["PUPU_MCP_SERVERS_JSON"],
-            os.environ["PUPU_CODEX_MCP_SERVERS_JSON"],
-        )
+        self.assertIn("brave-search", os.environ["PUPU_MCP_SERVERS_JSON"])
+        self.assertIn("test-brave-key", os.environ["PUPU_MCP_SERVERS_JSON"])
+        self.assertNotIn("disabled-demo", os.environ["PUPU_MCP_SERVERS_JSON"])
         self.assertIn('"exposures": ["chat", "proactive"]', os.environ["PUPU_MCP_SERVERS_JSON"])
         self.assertIn('"timeout": "30"', os.environ["PUPU_MCP_SERVERS_JSON"])
 

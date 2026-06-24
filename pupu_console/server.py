@@ -365,7 +365,7 @@ def api_get_desktop_api_key_settings() -> dict[str, Any]:
         secrets[field] = _mask_secret(_nested_get(cfg, field))
     return {
         "config_path": str(config_path),
-        "providers": ["deepseek", "anthropic", "xiaoshuoai", "codex_cli"],
+        "providers": ["deepseek", "anthropic", "xiaoshuoai"],
         "values": values,
         "secrets": secrets,
     }

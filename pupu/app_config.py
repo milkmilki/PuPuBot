@@ -246,12 +246,6 @@ def apply_app_config_env(
         "llm.xiaoshuoai.model": "PUPU_XIAOSHUOAI_MODEL",
         "llm.xiaoshuoai.timeout": "PUPU_XIAOSHUOAI_TIMEOUT",
         "llm.xiaoshuoai.temperature": "PUPU_XIAOSHUOAI_TEMPERATURE",
-        "llm.codex_cli.bin": "PUPU_CODEX_BIN",
-        "llm.codex_cli.profile": "PUPU_CODEX_PROFILE",
-        "llm.codex_cli.reasoning_effort": "PUPU_CODEX_REASONING_EFFORT",
-        "llm.codex_cli.tool_mode": "PUPU_CODEX_TOOL_MODE",
-        "llm.codex_cli.proxy": "PUPU_CODEX_PROXY",
-        "llm.codex_cli.no_proxy": "PUPU_CODEX_NO_PROXY",
         "console.host": "PUPU_CONSOLE_HOST",
         "console.port": "PUPU_CONSOLE_PORT",
         "arbiter.audit": "PUPU_ARBITER_AUDIT",
@@ -291,17 +285,11 @@ def apply_app_config_env(
     mcp_servers = _normalize_mcp_servers(_lookup(cfg, "mcp.servers"))
     if mcp_servers:
         _set_env(
-            "PUPU_CODEX_MCP_SERVERS_JSON",
-            json.dumps(mcp_servers, ensure_ascii=False),
-            override=override,
-        )
-        _set_env(
             "PUPU_MCP_SERVERS_JSON",
             json.dumps(mcp_servers, ensure_ascii=False),
             override=override,
         )
     elif override:
-        os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
     if refresh_tools:
         try:

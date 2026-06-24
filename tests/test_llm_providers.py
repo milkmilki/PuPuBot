@@ -1,7 +1,5 @@
 import os
-import json
 from pathlib import Path
-import tempfile
 import unittest
 from tests.helpers import activate_test_instance
 from unittest.mock import Mock, patch
@@ -12,16 +10,8 @@ activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
 
 from pupu import llm
-from pupu.codex_mcp_server import _tool_definitions
-from pupu.llm_providers import (
-    AnthropicProvider,
-    CodexCliProvider,
-    OpenAICompatibleProvider,
-    _codex_subprocess_env,
-    _default_codex_command,
-)
+from pupu.llm_providers import AnthropicProvider, OpenAICompatibleProvider
 from pupu.memory import init_db
-from pupu.sessions import OWNER_SESSION
 
 
 class LLMProviderTests(unittest.TestCase):
@@ -33,19 +23,34 @@ class LLMProviderTests(unittest.TestCase):
         llm._providers.clear()
         llm._last_provider_used.clear()
 
-    def test_provider_routing_defaults_to_anthropic_and_accepts_codex(self):
+    def test_provider_routing_defaults_to_anthropic_and_accepts_api_providers(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("PUPU_CHAT_PROVIDER", None)
             self.assertEqual(llm.get_provider_name("chat"), "anthropic")
-
-        with patch.dict(os.environ, {"PUPU_CHAT_PROVIDER": "codex_cli"}, clear=False):
-            self.assertEqual(llm.get_provider_name("chat"), "codex_cli")
 
         with patch.dict(os.environ, {"PUPU_CHAT_PROVIDER": "xiaoshuoai"}, clear=False):
             self.assertEqual(llm.get_provider_name("chat"), "xiaoshuoai")
 
         with patch.dict(os.environ, {"PUPU_CHAT_PROVIDER": "deepseek"}, clear=False):
             self.assertEqual(llm.get_provider_name("chat"), "deepseek")
+
+    def test_codex_cli_is_not_a_supported_provider(self):
+        with self.assertRaises(llm.ProviderError):
+            llm.set_provider_name("chat", "codex_cli")
+
+        with patch.dict(os.environ, {"PUPU_CHAT_PROVIDER": "codex_cli"}, clear=False):
+            with self.assertRaises(llm.ProviderError):
+                llm.get_provider("chat")
+            with self.assertRaises(llm.ProviderError):
+                llm.chat_complete(
+                    role="chat",
+                    model="ignored",
+                    system="system",
+                    messages=[{"role": "user", "content": "hi"}],
+                    max_tokens=10,
+                )
+            with self.assertRaises(llm.ProviderConfigError):
+                llm.validate_model_provider_config(roles=("chat",))
 
     def test_set_provider_name_updates_runtime_environment(self):
         with patch.dict(os.environ, {"PUPU_CHAT_PROVIDER": "anthropic"}, clear=False):
@@ -158,7 +163,7 @@ class LLMProviderTests(unittest.TestCase):
 
         text_block = Mock()
         text_block.type = "text"
-        text_block.text = "工具调用完成"
+        text_block.text = "tool done"
 
         first_response = Mock()
         first_response.stop_reason = "tool_use"
@@ -193,7 +198,7 @@ class LLMProviderTests(unittest.TestCase):
             tool_handler=lambda name, payload, hint: "2026-05-01",
         )
 
-        self.assertEqual(result, "工具调用完成")
+        self.assertEqual(result, "tool done")
         self.assertEqual(fake_client.messages.create.call_count, 2)
         self.assertEqual(fake_client.messages.create.call_args_list[0].kwargs["model"], "deepseek-v4-pro")
 
@@ -264,7 +269,7 @@ class LLMProviderTests(unittest.TestCase):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
         fake_response.json.return_value = {
-            "choices": [{"message": {"content": "你好呀"}}]
+            "choices": [{"message": {"content": "hello"}}]
         }
 
         with patch("pupu.llm_providers.httpx.post", return_value=fake_response) as post:
@@ -275,7 +280,7 @@ class LLMProviderTests(unittest.TestCase):
                 max_tokens=20,
             )
 
-        self.assertEqual(text, "你好呀")
+        self.assertEqual(text, "hello")
         _, kwargs = post.call_args
         self.assertEqual(kwargs["headers"]["Authorization"], "Bearer test-key")
         self.assertEqual(kwargs["json"]["model"], "novel-model")
@@ -324,9 +329,9 @@ class LLMProviderTests(unittest.TestCase):
         fake_response.json.side_effect = ValueError("not json")
         fake_response.text = "\n".join(
             [
-                'data: {"choices":[{"delta":{"content":"停"}}]}',
-                'data: {"choices":[{"delta":{"content":"\\n\\n"}}]}',
-                'data: {"choices":[{"delta":{"content":"姐姐知道。"}}]}',
+                'data: {"choices":[{"delta":{"content":"hello"}}]}',
+                'data: {"choices":[{"delta":{"content":"\\n"}}]}',
+                'data: {"choices":[{"delta":{"content":"there"}}]}',
                 "data: [DONE]",
             ]
         )
@@ -339,7 +344,7 @@ class LLMProviderTests(unittest.TestCase):
                 max_tokens=20,
             )
 
-        self.assertEqual(text, "停\n\n姐姐知道。")
+        self.assertEqual(text, "hello\nthere")
 
     def test_openai_compatible_provider_can_enable_thinking_mode(self):
         provider = OpenAICompatibleProvider(
@@ -353,7 +358,7 @@ class LLMProviderTests(unittest.TestCase):
         fake_response = Mock()
         fake_response.raise_for_status.return_value = None
         fake_response.json.return_value = {
-            "choices": [{"message": {"content": "你好呀"}}]
+            "choices": [{"message": {"content": "hello"}}]
         }
 
         with patch("pupu.llm_providers.httpx.post", return_value=fake_response) as post:
@@ -364,7 +369,7 @@ class LLMProviderTests(unittest.TestCase):
                 max_tokens=20,
             )
 
-        self.assertEqual(text, "你好呀")
+        self.assertEqual(text, "hello")
         _, kwargs = post.call_args
         self.assertEqual(kwargs["json"]["reasoning_effort"], "high")
         self.assertEqual(
@@ -384,7 +389,7 @@ class LLMProviderTests(unittest.TestCase):
             def chat_complete(self, **kwargs):
                 return "ok"
 
-        with patch.dict(os.environ, {"PUPU_CHAT_PROVIDER": "codex_cli"}, clear=False):
+        with patch.dict(os.environ, {"PUPU_CHAT_PROVIDER": "deepseek"}, clear=False):
             with patch("pupu.llm.get_provider", return_value=FailingProvider()):
                 with patch("pupu.llm.AnthropicProvider", FallbackProvider):
                     with patch("pupu.llm.get_client", return_value=object()):
@@ -399,242 +404,8 @@ class LLMProviderTests(unittest.TestCase):
         self.assertEqual(text, "ok")
         self.assertEqual(
             llm.last_provider_label("chat", "claude-test"),
-            "anthropic:claude-test fallback_from=codex_cli",
+            "anthropic:claude-test fallback_from=deepseek",
         )
-
-    def test_codex_command_includes_output_file_and_mcp_config(self):
-        provider = CodexCliProvider(
-            workspace_root=Path("D:/repo"),
-            python_executable="D:/venv/Scripts/python.exe",
-            codex_command="codex",
-        )
-
-        with patch.dict(
-            os.environ,
-            {
-                "PUPU_CODEX_PROFILE": "pupu-fast",
-                "PUPU_CODEX_REASONING_EFFORT": "low",
-            },
-            clear=False,
-        ):
-            command = provider.build_exec_command(
-                output_path=Path("D:/tmp/last.txt"),
-                run_dir=Path("D:/tmp/run"),
-                use_mcp=True,
-                session_id=OWNER_SESSION,
-                image_urls=["https://example.test/a.png"],
-                is_admin=True,
-                tool_exposure="chat",
-            )
-        joined = " ".join(command)
-
-        self.assertIn("exec", command)
-        self.assertIn("--json", command)
-        self.assertIn("--output-last-message", command)
-        self.assertIn("-p", command)
-        self.assertIn("pupu-fast", command)
-        self.assertIn("model_reasoning_effort='low'", joined)
-        self.assertIn("mcp_servers.pupu.command='D:/venv/Scripts/python.exe'", joined)
-        self.assertIn("mcp_servers.pupu.env.PUPU_MCP_SESSION_ID='owner'", joined)
-        self.assertIn("mcp_servers.pupu.env.PUPU_MCP_IS_ADMIN='1'", joined)
-        self.assertIn("mcp_servers.pupu.env.PUPU_MCP_EXPOSURE='chat'", joined)
-        self.assertEqual(command[-1], "-")
-
-    def test_codex_command_can_use_explicit_env_path(self):
-        with patch.dict(os.environ, {"PUPU_CODEX_BIN": "D:/Tools/codex.exe"}, clear=False):
-            provider = CodexCliProvider(workspace_root=Path("D:/repo"))
-            self.assertEqual(_default_codex_command(), "D:/Tools/codex.exe")
-
-        self.assertEqual(provider.codex_command, "D:/Tools/codex.exe")
-
-    def test_codex_command_prefers_real_candidate_before_path_alias(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            appdata = Path(tmp) / "Roaming"
-            npm = appdata / "npm"
-            npm.mkdir(parents=True)
-            codex_cmd = npm / "codex.cmd"
-            codex_cmd.write_text("@echo off\n", encoding="utf-8")
-
-            with patch.dict(
-                os.environ,
-                {"APPDATA": str(appdata), "PUPU_CODEX_BIN": ""},
-                clear=False,
-            ):
-                with patch(
-                    "pupu.llm_providers.shutil.which",
-                    return_value="C:/Program Files/WindowsApps/OpenAI.Codex/app/resources/codex.exe",
-                ):
-                    self.assertEqual(_default_codex_command(), str(codex_cmd))
-
-    def test_codex_subprocess_env_can_inject_proxy(self):
-        with patch.dict(
-            os.environ,
-            {
-                "PUPU_CODEX_PROXY": "http://127.0.0.1:7890",
-                "PUPU_CODEX_NO_PROXY": "localhost,127.0.0.1",
-            },
-            clear=False,
-        ):
-            env = _codex_subprocess_env()
-
-        self.assertEqual(env["HTTP_PROXY"], "http://127.0.0.1:7890")
-        self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:7890")
-        self.assertEqual(env["ALL_PROXY"], "http://127.0.0.1:7890")
-        self.assertEqual(env["NO_PROXY"], "localhost,127.0.0.1")
-
-    def test_codex_subprocess_env_is_none_without_proxy(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("PUPU_CODEX_PROXY", None)
-            self.assertIsNone(_codex_subprocess_env())
-
-    def test_mcp_tool_listing_filters_admin_tools_for_non_admin(self):
-        with patch.dict(
-            os.environ,
-            {"PUPU_MCP_EXPOSURE": "chat", "PUPU_MCP_IS_ADMIN": "0"},
-            clear=False,
-        ):
-            non_admin_names = {tool["name"] for tool in _tool_definitions()}
-
-        with patch.dict(
-            os.environ,
-            {"PUPU_MCP_EXPOSURE": "chat", "PUPU_MCP_IS_ADMIN": "1"},
-            clear=False,
-        ):
-            admin_names = {tool["name"] for tool in _tool_definitions()}
-
-        self.assertIn("mcp__scheduler__manage_scheduled_task", non_admin_names)
-        self.assertNotIn("mcp__system__run_command", non_admin_names)
-        self.assertIn("mcp__system__run_command", admin_names)
-
-    def test_codex_tool_bridge_executes_local_tool_handler(self):
-        provider = CodexCliProvider(workspace_root=Path("D:/repo"))
-        calls = []
-        replies = iter(
-            [
-                '{"type":"tool_call","name":"mcp__scheduler__manage_scheduled_task","input":{"action":"list"},"reason":"need list"}',
-                '{"type":"final","text":"done"}',
-            ]
-        )
-
-        def fake_run(*args, **kwargs):
-            return next(replies)
-
-        def fake_tool(name, tool_input, reason):
-            calls.append((name, tool_input, reason))
-            return "task list"
-
-        with (
-            patch.dict(os.environ, {"PUPU_CODEX_TOOL_MODE": "bridge"}, clear=False),
-            patch.object(CodexCliProvider, "_run_codex_exec", fake_run),
-        ):
-            text = provider.chat_complete(
-                system="system",
-                messages=[{"role": "user", "content": "hello"}],
-                max_tokens=100,
-                tools=[
-                    {
-                        "name": "mcp__scheduler__manage_scheduled_task",
-                        "description": "manage tasks",
-                        "input_schema": {"type": "object"},
-                    }
-                ],
-                tool_handler=fake_tool,
-            )
-
-        self.assertEqual(text, "done")
-        self.assertEqual(calls[0][0], "mcp__scheduler__manage_scheduled_task")
-        self.assertEqual(calls[0][1], {"action": "list"})
-
-    def test_codex_cli_uses_real_mcp_by_default_for_tools(self):
-        provider = CodexCliProvider(workspace_root=Path("D:/repo"))
-        captured = {}
-        tool_calls = []
-
-        def fake_run(self, prompt, **kwargs):
-            captured["prompt"] = prompt
-            captured.update(kwargs)
-            return "final reply"
-
-        def fake_tool(name, tool_input, reason):
-            tool_calls.append((name, tool_input, reason))
-            return "should not run locally"
-
-        with (
-            patch.dict(os.environ, {}, clear=False),
-            patch.object(CodexCliProvider, "_run_codex_exec", fake_run),
-        ):
-            os.environ.pop("PUPU_CODEX_TOOL_MODE", None)
-            text = provider.chat_complete(
-                system="## 当前身份\n你就是璐璐。\n\n## 对话输出协议\n只输出 JSON。",
-                messages=[{"role": "user", "content": "hello"}],
-                max_tokens=100,
-                tools=[
-                    {
-                        "name": "mcp__scheduler__manage_scheduled_task",
-                        "description": "manage tasks",
-                        "input_schema": {"type": "object"},
-                    }
-                ],
-                tool_handler=fake_tool,
-                session_id=OWNER_SESSION,
-                is_admin=True,
-            )
-
-        self.assertEqual(text, "final reply")
-        self.assertEqual(tool_calls, [])
-        self.assertTrue(captured["use_mcp"])
-        self.assertEqual(captured["session_id"], OWNER_SESSION)
-        self.assertTrue(captured["is_admin"])
-        self.assertIn("不要用文字、JSON 或代码块模拟工具调用", captured["prompt"])
-        self.assertIn("直接输出璐璐接下来要发给用户的话", captured["prompt"])
-        self.assertIn("遵守上文已经给出的输出协议", captured["prompt"])
-        self.assertNotIn("直接输出仆仆接下来", captured["prompt"])
-        self.assertNotIn("不要输出 JSON", captured["prompt"])
-
-    def test_codex_command_includes_external_mcp_servers_from_env(self):
-        provider = CodexCliProvider(
-            workspace_root=Path("D:/repo"),
-            python_executable="D:/venv/Scripts/python.exe",
-            codex_command="codex",
-        )
-        external = [
-            {
-                "name": "brave-search",
-                "command": "npx",
-                "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-                "env": {"BRAVE_API_KEY": "test-key"},
-                "cwd": "D:/repo",
-            },
-            {
-                "name": "pupu",
-                "command": "ignored",
-            },
-        ]
-
-        with patch.dict(
-            os.environ,
-            {"PUPU_CODEX_MCP_SERVERS_JSON": json.dumps(external)},
-            clear=False,
-        ):
-            command = provider.build_exec_command(
-                output_path=Path("D:/tmp/last.txt"),
-                run_dir=Path("D:/tmp/run"),
-                use_mcp=True,
-                session_id=OWNER_SESSION,
-                image_urls=[],
-                is_admin=False,
-                tool_exposure="chat",
-            )
-        joined = " ".join(command)
-
-        self.assertIn("mcp_servers.pupu.command='D:/venv/Scripts/python.exe'", joined)
-        self.assertIn("mcp_servers.brave-search.command='npx'", joined)
-        self.assertIn(
-            "mcp_servers.brave-search.args=['-y','@modelcontextprotocol/server-brave-search']",
-            joined,
-        )
-        self.assertIn("mcp_servers.brave-search.env.BRAVE_API_KEY='test-key'", joined)
-        self.assertIn("mcp_servers.brave-search.cwd='D:/repo'", joined)
 
 
 if __name__ == "__main__":

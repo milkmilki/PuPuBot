@@ -12,7 +12,7 @@ https://github.com/tavily-ai/tavily-mcp
 - `tavily_map`：站点地图
 - `tavily_research`：综合研究
 
-它需要 `TAVILY_API_KEY`，并且需要本机能运行 Node/npm。
+它需要 `TAVILY_API_KEY`，并且本机需要能运行 Node/npm。
 
 ## 配置
 
@@ -48,14 +48,11 @@ mcp:
         DEFAULT_PARAMETERS: '{"search_depth":"basic","max_results":5}'
 ```
 
-修改 `pupu.yaml` 后需要重启 PuPu 实例。
+修改 `pupu.yaml` 后需要重启 PuPu 实例或刷新工具 registry。
 
 ## 使用范围
 
-外部 MCP server 会同时接入：
-
-- DeepSeek/Anthropic 等 provider：PuPu 会通过内置 stdio MCP client 注册工具。
-- `codex_cli` provider：PuPu 会把它作为外部 MCP server 挂给 Codex CLI。
+外部 MCP server 由 PuPu 内置 stdio MCP client 接入，然后统一注册进工具表。DeepSeek、Anthropic 等 LLM API provider 会看到普通 tool schema，真正执行时仍由 PuPu 复用对应的 MCP stdio session。
 
 成功后，工具名会类似：
 

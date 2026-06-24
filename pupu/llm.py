@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import anthropic
 
 from .app_config import apply_app_config_env
 from .llm_providers import (
     AnthropicProvider,
-    CodexCliProvider,
     OpenAICompatibleProvider,
     ProviderError,
     collect_reason_hint,
@@ -26,7 +24,6 @@ DEFAULT_JUDGE_TEMPERATURE = 0.1
 _client = None
 _providers: dict[str, object] = {}
 _last_provider_used: dict[str, str] = {}
-_root = Path(__file__).resolve().parent.parent
 _preflight_done = False
 
 _ROLE_ENV = {
@@ -35,7 +32,7 @@ _ROLE_ENV = {
     "maintenance": "PUPU_MAINTENANCE_PROVIDER",
     "proactive": "PUPU_PROACTIVE_PROVIDER",
 }
-SUPPORTED_PROVIDERS = ("anthropic", "codex_cli", "xiaoshuoai", "deepseek")
+SUPPORTED_PROVIDERS = ("anthropic", "xiaoshuoai", "deepseek")
 _RESERVED_PROVIDERS = ("gemini",)
 XIAOSHUOAI_ENDPOINT = (
     "https://www.gpt4novel.com/api/xiaoshuoai/ext/v1/chat/completions"
@@ -108,8 +105,6 @@ def get_provider(role: str):
     if name not in _providers:
         if name == "anthropic":
             _providers[name] = AnthropicProvider(get_client())
-        elif name == "codex_cli":
-            _providers[name] = CodexCliProvider(workspace_root=_root)
         elif name == "xiaoshuoai":
             _providers[name] = _xiaoshuoai_provider()
         elif name == "deepseek":
@@ -148,6 +143,11 @@ def chat_complete(
     tool_exposure: str = "chat",
 ) -> str:
     configured_provider = get_provider_name(role)
+    if configured_provider not in SUPPORTED_PROVIDERS:
+        raise ProviderError(
+            f"unknown provider {configured_provider!r}; supported providers: "
+            + ", ".join(SUPPORTED_PROVIDERS)
+        )
     temperature = role_temperature(role)
     try:
         provider = get_provider(role)
@@ -200,6 +200,11 @@ def json_task(
     task_name: str,
 ) -> str:
     configured_provider = get_provider_name(role)
+    if configured_provider not in SUPPORTED_PROVIDERS:
+        raise ProviderError(
+            f"unknown provider {configured_provider!r}; supported providers: "
+            + ", ".join(SUPPORTED_PROVIDERS)
+        )
     temperature = role_temperature(role)
     try:
         provider = get_provider(role)
@@ -230,11 +235,6 @@ def json_task(
         )
         _last_provider_used[role] = f"anthropic:{model} fallback_from={configured_provider}"
         return text
-
-
-def codex_cli_status() -> str:
-    CodexCliProvider(workspace_root=_root).check_available()
-    return "ok"
 
 
 def _xiaoshuoai_provider() -> OpenAICompatibleProvider:
@@ -428,16 +428,6 @@ def _provider_config_issue(provider_name: str) -> str | None:
             "XiaoshuoAI API key is not configured.\n"
             "Fill llm.xiaoshuoai.api_key in pupu.yaml, or set PUPU_XIAOSHUOAI_API_KEY."
         )
-    if provider_name == "codex_cli":
-        try:
-            codex_cli_status()
-            return None
-        except Exception as exc:
-            return (
-                "Codex CLI provider is not available.\n"
-                f"{exc}\n"
-                "Install/login Codex CLI, or change llm.provider in pupu.yaml."
-            )
     if provider_name not in SUPPORTED_PROVIDERS:
         return (
             f"Unknown provider {provider_name!r}.\n"
@@ -479,18 +469,6 @@ def preflight_model_providers(*, require_chat: bool = False) -> None:
     if require_chat:
         validate_model_provider_config(roles=("chat",))
 
-    checked = set()
-    for role in ("chat", "judge", "maintenance", "proactive"):
-        name = get_provider_name(role)
-        if name != "codex_cli" or name in checked:
-            continue
-        checked.add(name)
-        try:
-            codex_cli_status()
-            print("[pupu][llm] codex_cli ready: logged in and executable")
-        except Exception as exc:
-            print(f"[pupu][llm] codex_cli unavailable: {exc}; fallback will use anthropic")
-
 
 __all__ = [
     "DEFAULT_JUDGE_TEMPERATURE",
@@ -499,7 +477,6 @@ __all__ = [
     "ProviderError",
     "SUPPORTED_PROVIDERS",
     "chat_complete",
-    "codex_cli_status",
     "collect_reason_hint",
     "get_client",
     "get_provider",

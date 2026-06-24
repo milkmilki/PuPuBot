@@ -2,7 +2,7 @@
 # Copy this file to pupu.yaml, then fill only the values you need.
 
 llm:
-  # Supported: anthropic, deepseek, xiaoshuoai, codex_cli
+  # Supported: anthropic, deepseek, xiaoshuoai
   provider: deepseek
   chat_provider: deepseek
   judge_provider: deepseek
@@ -30,18 +30,8 @@ llm:
     timeout: 60
     temperature: 0.7
 
-  codex_cli:
-    bin: ""
-    profile: ""
-    reasoning_effort: low
-    # Default is real MCP tool calls. Set to bridge only for debugging the old JSON bridge.
-    tool_mode: mcp
-    proxy: ""
-    no_proxy: localhost,127.0.0.1,::1
-
-# Extra community MCP servers mounted into Codex CLI chat calls.
-# PuPu always mounts its builtin "pupu" MCP server automatically; do not name
-# external servers "pupu".
+# Extra community MCP servers mounted into PuPu's tool registry.
+# External server names are namespaced as mcp__<server>__<tool>.
 mcp:
   servers:
     # Tavily MCP server: web search + extract + crawl + map + research.

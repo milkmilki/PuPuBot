@@ -25,10 +25,7 @@ DEFAULT_MCP_TIMEOUT_SECONDS = 25.0
 def external_mcp_server_configs_from_env() -> list[dict[str, Any]]:
     """Load normalized external MCP server configs from the process env."""
 
-    raw = (
-        os.environ.get("PUPU_MCP_SERVERS_JSON", "").strip()
-        or os.environ.get("PUPU_CODEX_MCP_SERVERS_JSON", "").strip()
-    )
+    raw = os.environ.get("PUPU_MCP_SERVERS_JSON", "").strip()
     if not raw:
         return []
     try:

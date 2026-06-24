@@ -42,7 +42,6 @@ class ToolingRegistryTests(unittest.TestCase):
         reset_session("test_tooling_registry")
         clear_recent_images()
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
-        os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
         os.environ.pop("PUPU_VISION_IMAGE_MODE", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
@@ -55,7 +54,6 @@ class ToolingRegistryTests(unittest.TestCase):
     def tearDown(self):
         clear_recent_images()
         os.environ.pop("PUPU_MCP_SERVERS_JSON", None)
-        os.environ.pop("PUPU_CODEX_MCP_SERVERS_JSON", None)
         os.environ.pop("PUPU_VISION_MODEL", None)
         os.environ.pop("PUPU_VISION_IMAGE_MODE", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
