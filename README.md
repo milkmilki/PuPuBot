@@ -154,6 +154,45 @@ Facts 的写入前候选召回会优先用 memU 的 `person_fact` card 做语义
 - `events` 视图：展示人物、事件线和进展节点，适合检查事件链是否正确归并。
 - `facts` 视图：展示人物 facts 和关系 facts，适合检查人物画像与人物关系。
 
+## MCP 工具调用流程
+
+PuPuBot 会把内置工具和外部 MCP server 统一注册成模型可见的 tool schema。聊天时，模型不是直接连接 MCP server，而是通过 PuPu 的 `ToolRegistry` 代理执行工具；外部 MCP 仍然走 PuPu 内置的 stdio MCP client。
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant P as PuPu agent
+    participant L as LLM
+    participant R as ToolRegistry
+    participant M as Tavily MCP Server
+
+    U->>P: 火遮眼这个电影是什么，网上查一下
+    P->>P: 保存消息 / 召回记忆 / 构造 prompt
+    P->>L: messages + system + chat tools
+    L-->>P: tool_use: mcp__tavily__tavily_search({query:"火遮眼 电影"})
+    P->>R: execute_tool("mcp__tavily__tavily_search")
+    R->>M: MCP tools/call tavily_search
+    M-->>R: 搜索结果
+    R-->>P: tool_result
+    P->>L: messages + tool_result
+    L-->>P: 最终自然语言回复
+    P->>P: 解析 / 保存 / batch review 检查
+    P-->>U: 发到 QQ / CLI
+```
+
+工具循环里，prompt 上下文会随着每次工具调用继续累加。更准确地说，`system` 和工具 schema 会在每次模型请求里继续传入，`messages` 会追加模型的 `tool_use` 轮次和工具返回的 `tool_result`：
+
+```text
+用户问题 + system + 可用工具 schema
+-> LLM 选择 tool_use
+-> 用户问题 + system + 可用工具 schema + 第一次 tool_use + 第一次 tool_result
+-> LLM 再次选择 tool_use
+-> 用户问题 + system + 可用工具 schema + 第一次结果 + 第二次 tool_use + 第二次 tool_result
+-> LLM 输出最终回复
+```
+
+这个循环会一直持续到模型不再返回 `tool_use`，而是返回普通文本。普通文本才会进入后续的对话输出解析、回复保存和 QQ/CLI 发送。工具调用期间模型附带的解释文字不会直接发送给用户；只有开启深度调试时，才会作为工具调用 reason 写入日志。
+
 ## 开放群对话逻辑
 
 PuPuBot 支持多个实例同时待在同一个开放群里。为了避免两个 bot 抢话，每个实例收到群消息后不会立刻回复，而是先把消息放入本地 buffer，并把观察结果交给控制台进程内的内嵌仲裁 runtime。仲裁 runtime 按群上下文判断本轮应该由哪个 bot 接话；只有被选中的实例才会合并 buffer 内容并生成回复。

@@ -2,6 +2,10 @@
 
 ## 2026-06-24
 
+### 文档
+
+- README 新增 MCP 工具调用流程图，说明外部 MCP server 如何通过 PuPu `ToolRegistry` 代理成普通 tool schema，以及工具循环中 `tool_use` / `tool_result` 如何逐轮追加到模型上下文。
+
 ### LLM API provider 收口
 
 - 移除 `codex_cli` provider、Codex CLI 子进程调用和 PuPu-for-Codex MCP server；后续模型接入只走 LLM API provider。
