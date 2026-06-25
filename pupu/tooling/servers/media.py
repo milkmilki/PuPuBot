@@ -55,40 +55,6 @@ def _vision_retry_delay_seconds(attempt: int) -> float:
     return min(4.0, float(2 ** max(0, attempt - 1)))
 
 
-def look_at_image(
-    image_urls: list[str],
-    index: int = 0,
-    session_id: str | None = None,
-) -> str | list[dict]:
-    """Download and return an image as a Claude content block."""
-
-    if not image_urls:
-        return "没有可以看的图片"
-    if index < 0 or index >= len(image_urls):
-        return f"图片索引超出范围，共 {len(image_urls)} 张图"
-
-    url = image_urls[index]
-    result = _image_data_or_download(session_id, url)
-    if not result:
-        return "图片下载失败了"
-
-    b64, media_type = result
-    return [
-        {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": b64,
-            },
-        },
-        {
-            "type": "text",
-            "text": "这是用户发的图片",
-        },
-    ]
-
-
 def _vision_api_key() -> str:
     for name in (
         "PUPU_MEMU_EMBED_API_KEY",
@@ -299,15 +265,6 @@ def describe_image_with_qwen(
     return f"视觉模型调用失败：{type(last_error).__name__}: {_vision_error_preview(last_error) if last_error else '<none>'}"
 
 
-def _handle_look_at_image(tool_input: dict, context: ToolContext):
-    return describe_image_with_qwen(
-        resolve_image_context(context.session_id, context.image_urls),
-        tool_input.get("image_index", 0),
-        tool_input.get("query") or tool_input.get("question") or tool_input.get("prompt"),
-        session_id=context.session_id,
-    )
-
-
 def _handle_describe_image(tool_input: dict, context: ToolContext):
     prompt = (
         tool_input.get("query")
@@ -326,35 +283,6 @@ MEDIA_SERVER = BuiltinToolServer(
     name="media",
     description="Image inspection tools.",
     tools=(
-        ToolSpec(
-            server="media",
-            name="look_at_image",
-            description="查看用户当前或最近发的图片，并返回中文文字描述。只在你真的好奇或者觉得有必要看的时候才用，普通聊天不需要每张图都看。",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "image_index": {
-                        "type": "integer",
-                        "description": "要看第几张图，从 0 开始，默认 0 表示第一张",
-                    },
-                    "question": {
-                        "type": "string",
-                        "description": "可选，关于图片的具体问题。",
-                    },
-                    "query": {
-                        "type": "string",
-                        "description": "可选，想让视觉模型重点看的内容。",
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "兼容字段，等同于 question/query。",
-                    },
-                },
-                "required": [],
-            },
-            handler=_handle_look_at_image,
-            legacy_names=("look_at_image",),
-        ),
         ToolSpec(
             server="media",
             name="describe_image",

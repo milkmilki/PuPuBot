@@ -108,7 +108,7 @@ def parse_onebot_message(message) -> tuple[str, list[str]]:
     """Parse OneBot v11 message into (text, image_urls).
 
     Stickers (mface, subType!=0) are silently ignored.
-    Real images are collected as URLs for the look_at_image tool.
+    Real images are collected as URLs for the vision tool.
     """
     text_parts = []
     image_urls = []

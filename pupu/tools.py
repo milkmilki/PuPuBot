@@ -14,7 +14,6 @@ from .tooling import (
     refresh_registry,
 )
 from .tooling.servers.filesystem import list_dir, read_file, write_file
-from .tooling.servers.media import look_at_image
 from .tooling.servers.scheduler import manage_scheduled_task
 from .tooling.servers.system import run_command
 
@@ -138,7 +137,6 @@ __all__ = [
     "get_registry",
     "is_admin_tool",
     "list_dir",
-    "look_at_image",
     "manage_scheduled_task",
     "read_file",
     "refresh_registry",

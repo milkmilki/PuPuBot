@@ -292,8 +292,8 @@ class ToolingRegistryTests(unittest.TestCase):
 
     def test_media_server_exposes_qwen_vision_tool(self):
         names = {tool["name"] for tool in get_chat_tool_definitions()}
-        self.assertIn("mcp__media__look_at_image", names)
         self.assertIn("mcp__media__describe_image", names)
+        self.assertNotIn("mcp__media__look_at_image", names)
 
     def test_describe_image_requires_image_and_key(self):
         no_image = execute_tool(
@@ -372,7 +372,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(content[1]["type"], "image_url")
         self.assertEqual(content[1]["image_url"]["url"], "https://example.test/cup.png")
 
-    def test_look_at_image_returns_text_description(self):
+    def test_describe_image_returns_text_description(self):
         os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
@@ -385,7 +385,7 @@ class ToolingRegistryTests(unittest.TestCase):
         with patch("pupu.tooling.servers.media.download_image_as_base64", return_value=("abc", "image/jpeg")):
             with patch("pupu.tooling.servers.media.httpx.post", return_value=FakeResponse()):
                 result = execute_tool(
-                    "mcp__media__look_at_image",
+                    "mcp__media__describe_image",
                     {"query": "色不色？"},
                     image_urls=["https://example.test/colored.jpg"],
                     session_id="test_tooling_registry",
@@ -456,7 +456,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(second, "复用了刚才那张图。")
         self.assertEqual(calls, ["https://example.test/recent.jpg"])
 
-    def test_describe_image_reuses_image_data_cached_by_look_at_image(self):
+    def test_describe_image_reuses_downloaded_image_data(self):
         os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
@@ -475,7 +475,7 @@ class ToolingRegistryTests(unittest.TestCase):
         with patch("pupu.tooling.servers.media.download_image_as_base64", side_effect=fake_download):
             with patch("pupu.tooling.servers.media.httpx.post", return_value=FakeResponse()):
                 execute_tool(
-                    "mcp__media__look_at_image",
+                    "mcp__media__describe_image",
                     {"image_index": 0},
                     image_urls=["https://example.test/cached.jpg"],
                     session_id="test_tooling_registry",
