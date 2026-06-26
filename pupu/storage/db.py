@@ -360,8 +360,6 @@ def init_db():
         ON semantic_sync_log(identity_session, context_session, start_msg_id, end_msg_id, status)
     """
     )
-    cursor.execute("DROP TABLE IF EXISTS memu_sync_log")
-
     message_columns = table_columns(conn, "messages")
     if "source" not in message_columns:
         cursor.execute(

@@ -4,13 +4,12 @@
 
 ### 语义索引内化
 
-- 用 PuPu 内置 SQLite 语义索引替换外部 `memu-py`：新增 `semantic_cards` 和 `semantic_sync_log`，SQLite 继续作为唯一事实源，语义索引只保存可重建 card 与 embedding。
-- `/recall`、`/tidy`、batch review sync、facts 写入前候选召回和自动维护都改走内置 semantic index；调试字段从 `memu_*` 收口为 `semantic_*`。
-- `pupu.yaml.example` 中 `memu:` 改为 `semantic_index:`，视觉工具复用 `semantic_index.embed_api_key` / `semantic_index.embed_base_url`。
-- 删除 `requirements-memu.txt`、`pupu/memory_index/memu_adapter.py`、旧 memU tidy/prompt 代码和第三方 SDK runtime，不再需要手动安装外部 memU。
-- 旧 `data/memu.db` 不迁移也不作为事实源；需要时运行 `/tidy rebuild` 会直接从 `data/pupu.db` 重建 `semantic_cards`。
-- 新增 `scripts/rebuild_semantic_index.py`，可对所有本地实例全量重建 `semantic_cards`，并在成功后删除旧 `memu.db`、`memu_resources` 等外部 memU 缓存。
-- README 增加已有实例迁移说明，明确本地旧 `memu:` 配置需要迁到 `semantic_index:`。
+- 用 PuPu 内置 SQLite 语义索引作为长期记忆召回层：新增 `semantic_cards` 和 `semantic_sync_log`，SQLite 继续作为唯一事实源，语义索引只保存可重建 card 与 embedding。
+- `/recall`、`/tidy`、batch review sync、facts 写入前候选召回和自动维护都使用内置 semantic index。
+- `pupu.yaml.example` 使用 `semantic_index:` 配置，视觉工具复用 `semantic_index.embed_api_key` / `semantic_index.embed_base_url`。
+- 删除外部记忆 SDK runtime 和相关依赖文件，项目只使用 PuPu 自带的 semantic index。
+- 新增 `scripts/rebuild_semantic_index.py`，可从各实例 SQLite 事实源全量重建 `semantic_cards`。
+- README 更新为纯 `semantic_index:` 配置与重建说明。
 
 ### 维护性收敛
 
@@ -161,13 +160,13 @@
 
 ### 运行时与实例上下文重构
 
-- 新增显式 `InstanceContext`，实例目录、数据库、persona、日志和旧外部语义缓存路径统一从当前实例上下文读取。
-- 新增共享 runtime 层，集中管理 MCP 工具 runtime 和旧外部语义缓存 runtime，为后续多实例单进程化做准备。
+- 新增显式 `InstanceContext`，实例目录、数据库、persona 和日志路径统一从当前实例上下文读取。
+- 新增共享 runtime 层，集中管理 MCP 工具 runtime，为后续多实例单进程化做准备。
 - 清理旧的实例路径环境变量依赖。
 - 移除 `person_facts.legacy_session_id` 兼容字段，并在数据库初始化时自动迁移旧表结构。
 - 修复只有 facts、没有聊天/摘要/事件线时维护流程不会扫描到该会话的问题。
 - 更新 CLI、实例启动、日志、persona、配置、语义召回、工具 registry 等模块，使它们优先使用实例上下文。
-- 扩充测试辅助工具和回归测试，覆盖实例上下文隔离、CLI 选实例、旧外部语义缓存 runtime 隔离、工具 runtime 复用和 facts schema 迁移。
+- 扩充测试辅助工具和回归测试，覆盖实例上下文隔离、CLI 选实例、语义索引隔离、工具 runtime 复用和 facts schema 迁移。
 
 ### 验证
 

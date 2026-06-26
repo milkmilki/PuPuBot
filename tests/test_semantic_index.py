@@ -84,7 +84,6 @@ class SemanticIndexTests(unittest.TestCase):
 
         self.assertIn("semantic_cards", tables)
         self.assertIn("semantic_sync_log", tables)
-        self.assertNotIn("memu_sync_log", tables)
 
     def test_projection_builds_readable_cards(self) -> None:
         with patch("pupu.semantic_index.projection.get_pupu_name", return_value="璐璐"):

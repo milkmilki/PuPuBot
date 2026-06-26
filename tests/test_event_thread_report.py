@@ -111,7 +111,6 @@ class EventThreadReportTests(unittest.TestCase):
 
         report = format_event_threads_report(self.session_id)
 
-        self.assertNotIn("memU", report)
         self.assertIn("Event A", report)
 
     def test_report_detail_and_search_use_event_threads(self):

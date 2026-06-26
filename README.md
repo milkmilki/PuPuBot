@@ -147,15 +147,13 @@ Facts 的写入前候选召回会优先用语义索引里的 `person_fact` card 
 
 本地维护仍会处理 SQLite 内部的摘要、facts 和事件线轻量更新，但不会 drop 本地事件线。整体原则是：**SQLite 负责真实记忆，语义索引负责更容易想起来。**
 
-已有实例从旧外部 memU 升级到内置语义索引时，可以用仓库脚本一次性重建所有真实实例：
+需要全量刷新所有实例的语义索引时，可以用仓库脚本从 SQLite 事实源重新生成 `semantic_cards`：
 
 ```powershell
-.\ForFun\Scripts\python.exe scripts\rebuild_semantic_index.py --delete-old-memu-cache
+.\ForFun\Scripts\python.exe scripts\rebuild_semantic_index.py
 ```
 
-这个脚本会逐个扫描 `instances/<id>/instance.json`，从各实例的 `data/pupu.db` 全量重建 `semantic_cards`，成功后删除旧的 `data/memu.db`、`data/memu_resources` 和旧 memU 备份缓存。旧 memU 文件只是可重建缓存，不是事实源；真正的 messages、summaries、person_facts、event_threads 仍在 `data/pupu.db` 里。
-
-如果本地 `pupu.yaml` 还保留旧的 `memu:` 配置块，需要把百炼 embedding 配置迁到 `semantic_index:`：
+这个脚本会逐个扫描 `instances/<id>/instance.json`，从各实例的 `data/pupu.db` 全量重建 `semantic_cards`。配置只使用 `semantic_index:`：
 
 ```yaml
 semantic_index:
@@ -327,7 +325,7 @@ API key 不会放进仓库追踪文件。实例相关文件由启动器或 Conso
 python start.py
 ```
 
-`start.py` 每次都会要求选择已有实例或创建新实例。项目不再保留根目录默认 bot；每次运行都绑定到一个实例目录，实例拥有自己的 `instance.json`、`persona.json` 和 `data/pupu.db`。语义索引表也在 `data/pupu.db` 里，旧外部缓存数据库文件不再参与运行。
+`start.py` 每次都会要求选择已有实例或创建新实例。项目不再保留根目录默认 bot；每次运行都绑定到一个实例目录，实例拥有自己的 `instance.json`、`persona.json` 和 `data/pupu.db`。语义索引表也在同一个 `data/pupu.db` 里。
 
 Windows 下可以双击 `启动仆仆.bat`，它只是 `ForFun\Scripts\python.exe start.py` 的启动包装。
 
