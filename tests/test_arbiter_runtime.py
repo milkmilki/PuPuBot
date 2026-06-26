@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from pupu.arbiter_runtime import EmbeddedArbiterRuntime
+from pupu.logging_utils import close_all_log_sinks
 
 
 class EmbeddedArbiterRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -21,6 +22,7 @@ class EmbeddedArbiterRuntimeTests(unittest.IsolatedAsyncioTestCase):
         (Path(self._tmp.name) / "instances" / "_shared").mkdir(parents=True, exist_ok=True)
 
     async def asyncTearDown(self) -> None:
+        close_all_log_sinks()
         for key, value in self._old_env.items():
             if value is None:
                 os.environ.pop(key, None)

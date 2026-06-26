@@ -11,6 +11,7 @@
 - 新增 `requirements.lock.txt` 记录当前验证环境的依赖快照。
 - 从 `agent.py` 拆出 `pupu.review_parser`，集中处理 batch review JSON 清洗、修复和 normalize，并补充独立 parser 单元测试。
 - 修复聊天 prompt 中 `speaker_qq` 单说话人消息没有优先使用固定人物名的问题，避免 raw QQ 昵称污染最近上下文。
+- arbiter runtime 测试在清理统一临时目录前显式关闭 PuPu 日志 sink，避免 Windows 下日志文件句柄未释放导致目录删除失败。
 
 ## 2026-06-24
 
