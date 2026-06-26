@@ -214,12 +214,12 @@ class PersistentMcpStdioSession:
         if proc is None:
             return
         try:
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except Exception:
+                pass
             if proc.poll() is None:
-                try:
-                    if proc.stdin is not None:
-                        proc.stdin.close()
-                except Exception:
-                    pass
                 proc.terminate()
                 try:
                     proc.wait(timeout=2)

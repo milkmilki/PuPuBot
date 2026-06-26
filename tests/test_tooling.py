@@ -5,6 +5,7 @@ from tests.helpers import activate_test_instance
 from unittest.mock import patch
 import sys
 import json
+import io
 
 import httpx
 
@@ -30,6 +31,7 @@ from pupu.tools import (
     refresh_tool_definitions,
 )
 from pupu.tooling import refresh_registry
+from pupu.tooling.external_mcp import PersistentMcpStdioSession
 from pupu.tooling.image_cache import clear_recent_images
 
 
@@ -696,6 +698,43 @@ class ToolingRegistryTests(unittest.TestCase):
 
         self.assertIn("fake result for after restart", result)
         self.assertEqual(counter.read_text(encoding="utf-8"), "2")
+
+    def test_external_stdio_close_closes_stdin_after_process_exit(self):
+        session = PersistentMcpStdioSession(
+            name="fake",
+            command=sys.executable,
+            args=[],
+            env={},
+            cwd=None,
+            timeout=1,
+        )
+
+        class ExitedProcess:
+            def __init__(self) -> None:
+                self.stdin = io.BytesIO()
+                self.stdout = io.BytesIO()
+                self.stderr = io.BytesIO()
+
+            def poll(self) -> int:
+                return 0
+
+            def terminate(self) -> None:
+                raise AssertionError("already exited process should not be terminated")
+
+            def wait(self, timeout=None) -> int:
+                return 0
+
+            def kill(self) -> None:
+                raise AssertionError("already exited process should not be killed")
+
+        proc = ExitedProcess()
+        session._proc = proc  # type: ignore[assignment]
+
+        session.close()
+
+        self.assertTrue(proc.stdin.closed)
+        self.assertTrue(proc.stdout.closed)
+        self.assertTrue(proc.stderr.closed)
 
 
 if __name__ == "__main__":

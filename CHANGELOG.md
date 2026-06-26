@@ -11,6 +11,11 @@
 - 补充开放群仲裁回归测试，覆盖 cursor 推进、未选中清 buffer、旧 decision 不清新 buffer、过期 decision 过滤。
 - 修复编码审计测试自身包含 mojibake marker 导致全量回归自命中的问题。
 
+### MCP 资源释放
+
+- 修复外部 stdio MCP 子进程已退出后关闭 session 时未关闭 `stdin` pipe 的资源泄漏，消除全量测试里的 `ResourceWarning`。
+- 补充外部 MCP session 关闭测试，覆盖已退出进程也会关闭 stdin/stdout/stderr。
+
 ### 语义索引内化
 
 - 用 PuPu 内置 SQLite 语义索引作为长期记忆召回层：新增 `semantic_cards` 和 `semantic_sync_log`，SQLite 继续作为唯一事实源，语义索引只保存可重建 card 与 embedding。
