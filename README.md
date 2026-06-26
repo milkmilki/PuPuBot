@@ -279,10 +279,18 @@ unregister = register_hook("instance.status", on_status)
 
 ### 1. 安装依赖
 
+推荐使用 Python 3.12 或 3.13。Python 3.14 可以运行基础功能，但 memU 依赖树可能还需要手动安装或暂时关闭语义缓存。
+
 ```powershell
-python -m venv ForFun
+py -3.13 -m venv ForFun
 .\ForFun\Scripts\Activate.ps1
 pip install -r requirements.txt
+```
+
+memU 是可选增强能力，不是基础运行依赖。不安装 memU 时，PuPuBot 仍然可以使用基础聊天、SQLite 聊天记录、summaries、facts、events、tasks 和 batch review；安装 memU 后会额外启用 embedding 语义召回缓存：
+
+```powershell
+pip install -r requirements-memu.txt
 ```
 
 ### 2. 配置

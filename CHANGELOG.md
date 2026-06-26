@@ -1,5 +1,15 @@
 ﻿# 更新日志
 
+## 2026-06-26
+
+### 维护性收敛
+
+- 测试启动时统一把 Python 临时目录指向 `tests/_tmp/runtime`，降低 Windows 用户目录、权限和 sandbox 差异导致的测试不稳定。
+- `tests.helpers` 新增统一测试临时目录 helper，后续测试可逐步迁移到同一套 scratch 目录。
+- 基础依赖和可选 memU 依赖拆分：`requirements.txt` 只保留基础运行依赖，`requirements-memu.txt` 单独安装 memU 语义召回缓存。
+- `deploy.bat` 不再强制 Python 3.14，改为优先 Python 3.13/3.12；Python 3.14 只作为可运行基础功能的 fallback，并提示 memU 兼容风险。
+- 新增 `requirements.lock.txt` 记录当前验证环境的依赖快照。
+
 ## 2026-06-24
 
 ### 文档

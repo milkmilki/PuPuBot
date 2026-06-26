@@ -1,0 +1,9 @@
+# Optional memU semantic recall cache.
+#
+# PuPuBot can run without this file: SQLite remains the source of truth for
+# chat history, summaries, facts, events, tasks, and batch review.
+# Install this only when you want embedding-backed memU recall/tidy cache.
+#
+# Python 3.12/3.13 is recommended. Python 3.14 may require manual --no-deps
+# installation until memU's dependency tree officially supports it.
+memu-py>=1.5.1,<1.6; python_version < "3.14"
