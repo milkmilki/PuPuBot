@@ -94,6 +94,47 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(body["reply"], "pong")
         chat_mock.assert_awaited_once_with(iid, "hello")
 
+    def test_debug_smoke_send_text_requires_loopback(self) -> None:
+        iid = self._create_instance()
+
+        with TestClient(self.server.app, client=("203.0.113.9", 4321)) as remote_client:
+            response = remote_client.post(
+                "/api/debug/smoke/send_text",
+                json={
+                    "instance_id": iid,
+                    "target": "group",
+                    "group_id": "900",
+                    "text": "hello",
+                },
+            )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_debug_smoke_send_text_routes_to_process_manager(self) -> None:
+        iid = self._create_instance()
+
+        with self.client:
+            with patch.object(self.server.pm, "smoke_send_text", return_value={"ok": True}) as send_mock:
+                response = self.client.post(
+                    "/api/debug/smoke/send_text",
+                    json={
+                        "instance_id": iid,
+                        "target": "group",
+                        "group_id": "900",
+                        "text": "hello",
+                    },
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True})
+        send_mock.assert_awaited_once_with(
+            iid,
+            target="group",
+            text="hello",
+            user_id="",
+            group_id="900",
+        )
+
     def test_desktop_events_websocket_receives_hook_events(self) -> None:
         with self.client:
             with self.client.websocket_connect("/ws/desktop/events") as ws:
@@ -190,6 +231,45 @@ class DesktopProcessManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(captured["is_admin"])
         self.assertEqual(captured["context_session"], DESKTOP_SESSION_ID)
         self.assertEqual(captured["identity_session"], DESKTOP_SESSION_ID)
+        self.assertEqual(captured["instance_id"], iid)
+
+    async def test_smoke_send_text_uses_running_actor_context(self) -> None:
+        iid = instance_store.create_instance("Desk Actor", qq_mode="cli", port=18143)
+        actor = InstanceActor.from_instance_dir(
+            instance_store.instance_dir(iid),
+            preflight=False,
+            start_background_tasks=False,
+        )
+        with activate_instance_context(actor.context):
+            init_db()
+        actor._started = True
+
+        pm = ProcessManager()
+        pm._actors[iid] = actor
+
+        captured: dict[str, object] = {}
+
+        async def fake_send_text(target, text: str) -> None:
+            from pupu.instance_context import get_current_instance_context
+
+            captured["target"] = target
+            captured["text"] = text
+            captured["instance_id"] = get_current_instance_context().instance_id
+
+        actor.send_text = fake_send_text
+
+        result = await pm.smoke_send_text(
+            iid,
+            target="group",
+            group_id="900",
+            text=" hello ",
+        )
+
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["group_id"], "900")
+        self.assertEqual(captured["text"], "hello")
+        self.assertEqual(captured["target"].session_id, "group_900")
+        self.assertEqual(captured["target"].group_id, "900")
         self.assertEqual(captured["instance_id"], iid)
 
 

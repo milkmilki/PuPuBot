@@ -2,6 +2,14 @@
 
 ## 2026-06-26
 
+### NapCat 实机冒烟
+
+- 新增本机限定的 `POST /api/debug/smoke/send_text` 调试入口，用于让运行中的 actor 通过真实 OneBot transport 发送私聊或群聊文本，方便不依赖 NapCat WebUI token 做实机冒烟。
+- `ProcessManager.smoke_send_text()` 会在目标实例上下文中调用 actor sender，并校验目标类型、QQ 号和群号，避免调试入口绕过实例隔离。
+- 补充桌宠/Console API 回归测试，覆盖 smoke 入口只允许 localhost、路由到进程管理器、以及发送时使用当前 actor 的 `InstanceContext`。
+- 完成真实 NapCat 群聊仲裁冒烟：仆仆通过 `18081` 向群 `1103489921` 发送带 marker 的 at 消息，璐璐通过 `18082` 收到后由内嵌仲裁生成新 decision，并只由选中实例回复。
+- 新增个人 Codex skill `pupubot-napcat-debugging`，记录 PuPuBot/NapCat 实机调试、silence 恢复、arbiter.db 证据采集和 WebUI token 安全边界。
+
 ### 开放群仲裁稳定性
 
 - 修复 actor 开放群订阅启动时保留旧 decision cursor 的问题，避免 silence 切换或重启后误消费上一轮仲裁结论。

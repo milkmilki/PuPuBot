@@ -8,6 +8,7 @@ import threading
 from collections import defaultdict
 
 from pupu.actor import InstanceActor
+from pupu.actor.types import ActorOutboundTarget
 from pupu.app_config import apply_app_config_env, ensure_app_config_file
 
 from . import instance_store
@@ -153,6 +154,48 @@ class ProcessManager:
                 speaker_name="Desktop User",
             )
         return str(reply or "")
+
+    async def smoke_send_text(
+        self,
+        instance_id: str,
+        *,
+        target: str,
+        text: str,
+        user_id: str = "",
+        group_id: str = "",
+    ) -> dict[str, object]:
+        actor = self.get_actor(instance_id)
+        if actor is None:
+            raise RuntimeError("instance is not running")
+
+        target_kind = str(target or "").strip().lower()
+        cleaned = str(text or "").strip()
+        if not cleaned:
+            raise ValueError("missing text")
+        if target_kind == "private":
+            uid = str(user_id or "").strip()
+            if not uid.isdigit():
+                raise ValueError("private target requires numeric user_id")
+            outbound = ActorOutboundTarget(session_id=f"private_{uid}", user_id=uid)
+        elif target_kind == "group":
+            gid = str(group_id or "").strip()
+            if not gid.isdigit():
+                raise ValueError("group target requires numeric group_id")
+            outbound = ActorOutboundTarget(session_id=f"group_{gid}", group_id=gid)
+        else:
+            raise ValueError("target must be private or group")
+
+        from pupu.instance_context import activate_instance_context
+
+        with activate_instance_context(actor.context):
+            await actor.send_text(outbound, cleaned)
+        return {
+            "ok": True,
+            "instance_id": instance_id,
+            "target": target_kind,
+            "user_id": outbound.user_id,
+            "group_id": outbound.group_id,
+        }
 
     def tail_console_log(self, instance_id: str, n: int = 200) -> str:
         path = instance_store.console_log_path(instance_id)

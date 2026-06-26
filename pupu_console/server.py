@@ -420,6 +420,31 @@ async def api_desktop_chat(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@app.post("/api/debug/smoke/send_text")
+async def api_debug_smoke_send_text(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="debug smoke send is only allowed from localhost")
+    instance_id = str(body.get("instance_id") or "").strip()
+    if not instance_id:
+        raise HTTPException(status_code=400, detail="missing instance_id")
+    try:
+        instance_store.validate_instance_id(instance_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    try:
+        return await pm.smoke_send_text(
+            instance_id,
+            target=str(body.get("target") or ""),
+            text=str(body.get("text") or ""),
+            user_id=str(body.get("user_id") or ""),
+            group_id=str(body.get("group_id") or ""),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
 @app.post("/api/instances")
 def api_create_instance(body: dict[str, Any]) -> dict[str, Any]:
     apply_app_config_env()
