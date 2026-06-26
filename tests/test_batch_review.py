@@ -16,8 +16,8 @@ from pupu.agent import (
     _format_event_thread_candidates_for_review,
     _format_message_content_for_prompt,
     _format_turn_timestamp,
-    _parse_batch_review_result,
 )
+from pupu.review_parser import _parse_batch_review_result
 from pupu.memory import (
     append_event_step,
     _get_conn,

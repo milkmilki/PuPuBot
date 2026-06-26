@@ -9,6 +9,8 @@
 - 基础依赖和可选 memU 依赖拆分：`requirements.txt` 只保留基础运行依赖，`requirements-memu.txt` 单独安装 memU 语义召回缓存。
 - `deploy.bat` 不再强制 Python 3.14，改为优先 Python 3.13/3.12；Python 3.14 只作为可运行基础功能的 fallback，并提示 memU 兼容风险。
 - 新增 `requirements.lock.txt` 记录当前验证环境的依赖快照。
+- 从 `agent.py` 拆出 `pupu.review_parser`，集中处理 batch review JSON 清洗、修复和 normalize，并补充独立 parser 单元测试。
+- 修复聊天 prompt 中 `speaker_qq` 单说话人消息没有优先使用固定人物名的问题，避免 raw QQ 昵称污染最近上下文。
 
 ## 2026-06-24
 
