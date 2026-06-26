@@ -414,6 +414,15 @@ python -m unittest discover tests
 
 不要直接使用裸的 `unittest discover`，某些工作区里历史临时文件可能会被误收集。
 
+可选的真实 NapCat/QQ 冒烟测试默认会跳过，避免普通回归误发 QQ 消息。确认 Console、NapCat 和测试群都已准备好后，可以显式开启：
+
+```powershell
+$env:PUPU_RUN_LIVE_NAPCAT_SMOKE = "1"
+.\ForFun\Scripts\python.exe -m unittest tests.test_live_napcat_smoke
+```
+
+常用覆盖项：`PUPU_LIVE_CONSOLE_URL`、`PUPU_LIVE_GROUP_ID`、`PUPU_LIVE_SENDER_INSTANCE`、`PUPU_LIVE_TARGET_QQ`、`PUPU_LIVE_EXPECTED_SPEAKER`、`PUPU_LIVE_REQUIRE_REPLY`。该测试会临时关闭目标群 `/silence`，结束时默认恢复为开启；需要恢复到测试前状态时可设置 `PUPU_LIVE_RESTORE_SILENCE=previous`。
+
 ## 安全说明
 
 这个仓库只适合发布源码。不要提交：

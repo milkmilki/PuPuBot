@@ -9,6 +9,7 @@
 - 补充桌宠/Console API 回归测试，覆盖 smoke 入口只允许 localhost、路由到进程管理器、以及发送时使用当前 actor 的 `InstanceContext`。
 - 完成真实 NapCat 群聊仲裁冒烟：仆仆通过 `18081` 向群 `1103489921` 发送带 marker 的 at 消息，璐璐通过 `18082` 收到后由内嵌仲裁生成新 decision，并只由选中实例回复。
 - 新增个人 Codex skill `pupubot-napcat-debugging`，记录 PuPuBot/NapCat 实机调试、silence 恢复、arbiter.db 证据采集和 WebUI token 安全边界。
+- 新增默认跳过的 `tests.test_live_napcat_smoke`，可通过 `PUPU_RUN_LIVE_NAPCAT_SMOKE=1` 手动执行真实 QQ 群聊仲裁冒烟，并从 `arbiter.db` 校验 marker、decision、speaker 和可选回复证据。
 
 ### 开放群仲裁稳定性
 
