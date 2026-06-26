@@ -129,6 +129,38 @@ class MessageBuffer:
         self._arbiter_subscribers: dict[str, asyncio.Task] = {}
         self._arbiter_last_decision_id: dict[str, int] = {}
 
+    def _clear_group_state(
+        self,
+        group_id: str,
+        sid: str,
+        *,
+        cancel_subscriber: bool = False,
+        clear_cursor: bool = False,
+    ) -> None:
+        if cancel_subscriber:
+            task = self._arbiter_subscribers.pop(group_id, None)
+            if task and not task.done():
+                task.cancel()
+        debounce = self._debounce_tasks.pop(sid, None)
+        if debounce and not debounce.done():
+            debounce.cancel()
+        self._buffers.pop(sid, None)
+        self._session_phase.pop(sid, None)
+        if clear_cursor:
+            self._arbiter_last_decision_id.pop(group_id, None)
+
+    def _decision_covers_buffer(self, decision: dict, sid: str) -> bool:
+        buf = self._buffers.get(sid)
+        if not buf:
+            return True
+        since_message_id = str(decision.get("since_message_id") or "").strip()
+        if not since_message_id:
+            return True
+        current_message_id = str(buf.message.message_id or "").strip()
+        if not current_message_id:
+            return True
+        return current_message_id == since_message_id
+
     async def stop(self) -> None:
         tasks = [
             *self._debounce_tasks.values(),
@@ -156,11 +188,12 @@ class MessageBuffer:
         sid = f"group_{group_id}"
         result = get_shared_arbiter_runtime().set_silence(group_id, enabled)
         if enabled:
-            task = self._arbiter_subscribers.pop(group_id, None)
-            if task and not task.done():
-                task.cancel()
-            self._buffers.pop(sid, None)
-            self._session_phase.pop(sid, None)
+            self._clear_group_state(
+                group_id,
+                sid,
+                cancel_subscriber=True,
+                clear_cursor=True,
+            )
             self._log(f"[pupu][arbiter] silence on group={group_id}; subscriber stopped")
         else:
             self._log(f"[pupu][arbiter] silence off group={group_id}; embedded arbiter active")
@@ -380,7 +413,8 @@ class MessageBuffer:
         if existing and not existing.done():
             return
         if initial_since is not None:
-            self._arbiter_last_decision_id.setdefault(group_id, int(initial_since))
+            current = int(self._arbiter_last_decision_id.get(group_id, 0))
+            self._arbiter_last_decision_id[group_id] = max(current, int(initial_since))
         self._arbiter_subscribers[group_id] = asyncio.create_task(
             self._arbiter_decision_subscriber(group_id, sid)
         )
@@ -411,6 +445,8 @@ class MessageBuffer:
                 )
                 self._arbiter_last_decision_id[group_id] = decision_id
                 if speaker != bot_id:
+                    if self._decision_covers_buffer(decision, sid):
+                        self._clear_group_state(group_id, sid)
                     continue
                 if self._session_phase.get(sid) == "processing":
                     continue

@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, patch
 
 from pupu import dialogue_loop
 from pupu.actor import InstanceActor
+from pupu.actor.message_buffer import MessageBuffer, _Buffer
 from pupu.actor.onebot_transport import OneBotTransport, parse_onebot_message_segments
+from pupu.actor.types import ActorInboundMessage
 from pupu.instance_context import InstanceContext, activate_instance_context
 from pupu.logging_utils import close_all_log_sinks
 from pupu.memory import init_db
@@ -254,6 +256,119 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(captured[0]["reporter"]["bot_id"], "999001")
             self.assertEqual(captured[0]["reporter"]["qq"], "999001")
+
+    async def test_arbiter_subscriber_advances_cursor_to_observe_latest_decision(self) -> None:
+        buffer = MessageBuffer(
+            send_text=AsyncMock(),
+            handle_command=AsyncMock(return_value=False),
+        )
+        buffer._arbiter_last_decision_id["900"] = 3
+
+        class DummyTask:
+            def done(self) -> bool:
+                return False
+
+            def cancel(self) -> None:
+                return None
+
+        def fake_create_task(coro):
+            coro.close()
+            return DummyTask()
+
+        with patch.object(buffer, "is_group_silenced", return_value=False):
+            with patch("pupu.actor.message_buffer.asyncio.create_task", side_effect=fake_create_task):
+                buffer._ensure_subscriber("900", "group_900", 12)
+
+        self.assertEqual(buffer._arbiter_last_decision_id["900"], 12)
+
+    async def test_arbiter_non_selected_decision_clears_open_group_buffer(self) -> None:
+        buffer = MessageBuffer(
+            send_text=AsyncMock(),
+            handle_command=AsyncMock(return_value=False),
+            bot_qq_getter=lambda: "bot-a",
+        )
+        message = ActorInboundMessage(
+            session_id="group_900",
+            identity_session="owner",
+            user_id="111",
+            user_name="User",
+            text="hello",
+            group_id="900",
+            message_id="msg-1",
+        )
+        buffer._buffers["group_900"] = _Buffer(
+            message=message,
+            texts=["hello"],
+            is_open_group=True,
+        )
+
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.silence_checks = 0
+
+            def is_silenced(self, _group_id: str) -> bool:
+                self.silence_checks += 1
+                return self.silence_checks >= 2
+
+            async def await_decision(self, _group_id: str, _since: int, *, timeout: float):
+                return {
+                    "decision_id": 7,
+                    "speaker": "none",
+                    "reason": "test_none",
+                    "confidence": 1.0,
+                }
+
+        with patch("pupu.actor.message_buffer.load_bot_id", return_value="bot-a"):
+            with patch("pupu.actor.message_buffer.get_shared_arbiter_runtime", return_value=FakeRuntime()):
+                await buffer._arbiter_decision_subscriber("900", "group_900")
+
+        self.assertNotIn("group_900", buffer._buffers)
+        self.assertNotIn("group_900", buffer._session_phase)
+
+    async def test_arbiter_stale_decision_does_not_clear_newer_open_group_buffer(self) -> None:
+        buffer = MessageBuffer(
+            send_text=AsyncMock(),
+            handle_command=AsyncMock(return_value=False),
+            bot_qq_getter=lambda: "bot-a",
+        )
+        message = ActorInboundMessage(
+            session_id="group_900",
+            identity_session="owner",
+            user_id="111",
+            user_name="User",
+            text="newer message",
+            group_id="900",
+            message_id="new-msg",
+        )
+        buffer._buffers["group_900"] = _Buffer(
+            message=message,
+            texts=["newer message"],
+            is_open_group=True,
+        )
+
+        class FakeRuntime:
+            def __init__(self) -> None:
+                self.silence_checks = 0
+
+            def is_silenced(self, _group_id: str) -> bool:
+                self.silence_checks += 1
+                return self.silence_checks >= 2
+
+            async def await_decision(self, _group_id: str, _since: int, *, timeout: float):
+                return {
+                    "decision_id": 8,
+                    "speaker": "none",
+                    "reason": "old_none",
+                    "confidence": 1.0,
+                    "since_message_id": "old-msg",
+                }
+
+        with patch("pupu.actor.message_buffer.load_bot_id", return_value="bot-a"):
+            with patch("pupu.actor.message_buffer.get_shared_arbiter_runtime", return_value=FakeRuntime()):
+                await buffer._arbiter_decision_subscriber("900", "group_900")
+
+        self.assertIn("group_900", buffer._buffers)
+        self.assertEqual(buffer._buffers["group_900"].message.message_id, "new-msg")
 
     async def test_proactive_owner_followup_sender_delivers_after_timer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

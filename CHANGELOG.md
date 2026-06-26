@@ -2,6 +2,15 @@
 
 ## 2026-06-26
 
+### 开放群仲裁稳定性
+
+- 修复 actor 开放群订阅启动时保留旧 decision cursor 的问题，避免 silence 切换或重启后误消费上一轮仲裁结论。
+- 仲裁判定 `speaker=none` 或选中其它 bot 时，会清理当前轮本地群聊 buffer，防止下一轮把旧测试消息和新消息一起送进聊天模型。
+- 清理群聊 buffer 前会校验 decision 的 `since_message_id`，避免旧 decision 误删已经进入 buffer 的更新消息。
+- 仲裁 long-poll 不再返回已过期的 `group_decisions`。
+- 补充开放群仲裁回归测试，覆盖 cursor 推进、未选中清 buffer、旧 decision 不清新 buffer、过期 decision 过滤。
+- 修复编码审计测试自身包含 mojibake marker 导致全量回归自命中的问题。
+
 ### 语义索引内化
 
 - 用 PuPu 内置 SQLite 语义索引作为长期记忆召回层：新增 `semantic_cards` 和 `semantic_sync_log`，SQLite 继续作为唯一事实源，语义索引只保存可重建 card 与 embedding。

@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from datetime import timedelta
 from unittest.mock import patch
 
 from pupu_console import arbitrator
@@ -52,6 +53,34 @@ class ArbitratorTests(unittest.TestCase):
         loaded = arbitrator.load_decision_after("100", int(decision["decision_id"]) - 1)
         self.assertEqual(loaded, decision)
         mock_llm.assert_called_once()
+
+    def test_expired_decision_is_not_loaded_by_waiters(self):
+        self._observe_message()
+        conn = arbitrator._connect()
+        try:
+            now = arbitrator._now()
+            cursor = conn.execute(
+                """
+                INSERT INTO group_decisions
+                    (group_id, speaker, reason, confidence, since_message_id, decided_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "100",
+                    "bot_1",
+                    "old",
+                    1.0,
+                    "msg-1",
+                    arbitrator._iso(now - timedelta(minutes=10)),
+                    arbitrator._iso(now - timedelta(minutes=5)),
+                ),
+            )
+            decision_id = int(cursor.lastrowid)
+            conn.commit()
+        finally:
+            conn.close()
+
+        self.assertIsNone(arbitrator.load_decision_after("100", decision_id - 1))
 
     def test_llm_failure_degrades_to_none(self):
         self._observe_message()

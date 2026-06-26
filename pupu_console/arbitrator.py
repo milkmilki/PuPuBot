@@ -509,6 +509,7 @@ def _decision_row_to_dict(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
 
 def load_decision_after(group_id: str, since: int) -> dict[str, Any] | None:
     """Return the first decision with ``decision_id > since`` for this group."""
+    now_iso = _iso(_now())
     conn = _connect()
     try:
         row = conn.execute(
@@ -517,10 +518,11 @@ def load_decision_after(group_id: str, since: int) -> dict[str, Any] | None:
                    since_message_id, decided_at, expires_at
             FROM group_decisions
             WHERE group_id = ? AND decision_id > ?
+              AND (expires_at = '' OR expires_at > ?)
             ORDER BY decision_id ASC
             LIMIT 1
             """,
-            (group_id, int(since)),
+            (group_id, int(since), now_iso),
         ).fetchone()
     finally:
         conn.close()
