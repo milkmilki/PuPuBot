@@ -9,6 +9,8 @@
 - `pupu.yaml.example` 中 `memu:` 改为 `semantic_index:`，视觉工具复用 `semantic_index.embed_api_key` / `semantic_index.embed_base_url`。
 - 删除 `requirements-memu.txt`、`pupu/memory_index/memu_adapter.py`、旧 memU tidy/prompt 代码和第三方 SDK runtime，不再需要手动安装外部 memU。
 - 旧 `data/memu.db` 不迁移也不作为事实源；需要时运行 `/tidy rebuild` 会直接从 `data/pupu.db` 重建 `semantic_cards`。
+- 新增 `scripts/rebuild_semantic_index.py`，可对所有本地实例全量重建 `semantic_cards`，并在成功后删除旧 `memu.db`、`memu_resources` 等外部 memU 缓存。
+- README 增加已有实例迁移说明，明确本地旧 `memu:` 配置需要迁到 `semantic_index:`。
 
 ### 维护性收敛
 

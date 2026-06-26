@@ -147,6 +147,26 @@ Facts 的写入前候选召回会优先用语义索引里的 `person_fact` card 
 
 本地维护仍会处理 SQLite 内部的摘要、facts 和事件线轻量更新，但不会 drop 本地事件线。整体原则是：**SQLite 负责真实记忆，语义索引负责更容易想起来。**
 
+已有实例从旧外部 memU 升级到内置语义索引时，可以用仓库脚本一次性重建所有真实实例：
+
+```powershell
+.\ForFun\Scripts\python.exe scripts\rebuild_semantic_index.py --delete-old-memu-cache
+```
+
+这个脚本会逐个扫描 `instances/<id>/instance.json`，从各实例的 `data/pupu.db` 全量重建 `semantic_cards`，成功后删除旧的 `data/memu.db`、`data/memu_resources` 和旧 memU 备份缓存。旧 memU 文件只是可重建缓存，不是事实源；真正的 messages、summaries、person_facts、event_threads 仍在 `data/pupu.db` 里。
+
+如果本地 `pupu.yaml` 还保留旧的 `memu:` 配置块，需要把百炼 embedding 配置迁到 `semantic_index:`：
+
+```yaml
+semantic_index:
+  enabled: auto
+  retrieve_top_k: 5
+  embed_api_key: "你的百炼 API Key"
+  embed_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  embed_model: text-embedding-v4
+  timeout: 45
+```
+
 ### 可视化
 
 记忆图谱通过 `/events url` 查看：
