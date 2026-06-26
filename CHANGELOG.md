@@ -15,6 +15,8 @@
 
 - 测试启动时统一把 Python 临时目录指向 `tests/_tmp/runtime`，降低 Windows 用户目录、权限和 sandbox 差异导致的测试不稳定。
 - `tests.helpers` 新增统一测试临时目录 helper，后续测试可逐步迁移到同一套 scratch 目录。
+- 新增 tracked 文本文件 UTF-8 / 常见 mojibake 审计测试，防止中文 prompt、文档和控制台文案被错误编码提交。
+- 新增真实群聊日志回放测试，用同一段“小夫 / 仆仆 / 璐璐”群聊样本同时校验聊天 prompt、batch review 输入和仲裁上下文，防止 raw QQ 昵称污染、关系前缀回流和“双璐璐”人物合并回归。
 - `deploy.bat` 不再强制 Python 3.14，改为优先 Python 3.13/3.12；语义索引已经内置，不再有额外记忆库安装步骤。
 - 新增 `requirements.lock.txt` 记录当前验证环境的依赖快照。
 - 从 `agent.py` 拆出 `pupu.review_parser`，集中处理 batch review JSON 清洗、修复和 normalize，并补充独立 parser 单元测试。
