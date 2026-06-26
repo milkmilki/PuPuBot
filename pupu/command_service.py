@@ -11,9 +11,9 @@ from .facts_report import format_facts_report
 from .logging_utils import is_debug_console_enabled, set_debug_console_enabled
 from .memory import get_familiarity_info, get_recent_messages, reset_session
 from .memory_index import (
-    clear_memu_session,
-    format_memu_recall_report,
-    run_memu_maintenance,
+    clear_semantic_session,
+    format_semantic_recall_report,
+    run_semantic_maintenance,
 )
 from .message_sources import message_source_label
 from .persona import get_pupu_name
@@ -159,7 +159,7 @@ async def execute_command(
         return CommandResult(
             True,
             await asyncio.to_thread(
-                format_memu_recall_report,
+                format_semantic_recall_report,
                 query,
                 context.identity_session,
                 context.context_session,
@@ -172,17 +172,17 @@ async def execute_command(
         return CommandResult(
             True,
             await asyncio.to_thread(
-                run_memu_maintenance,
+                run_semantic_maintenance,
                 OWNER_SESSION,
                 mode=tidy_mode,
             ),
         )
     if command_id == "reset":
         reset_session(context.context_session)
-        await asyncio.to_thread(clear_memu_session, context.context_session)
+        await asyncio.to_thread(clear_semantic_session, context.context_session)
         if context.identity_session != context.context_session:
             reset_session(context.identity_session)
-            await asyncio.to_thread(clear_memu_session, context.identity_session)
+            await asyncio.to_thread(clear_semantic_session, context.identity_session)
         return CommandResult(True, "已重置当前会话记忆、好感度和聊天记录。")
     if command_id == "proactive":
         action = command_arg.strip().lower()

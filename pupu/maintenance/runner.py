@@ -28,16 +28,16 @@ def run_memory_maintenance(
     trigger: str = "manual",
     include_model: bool = True,
     now: datetime | None = None,
-    memu_mode: str = "apply",
+    semantic_mode: str = "apply",
 ) -> str:
     if not _maintenance_lock.acquire(blocking=False):
         return f"{BUSY_REPORT_PREFIX}，等它收尾一个。"
 
     run_at = now or datetime.now()
     run_date = run_at.date().isoformat()
-    tidy_mode = str(memu_mode or "apply").strip().lower()
+    tidy_mode = str(semantic_mode or "apply").strip().lower()
     if tidy_mode not in {"apply", "check"}:
-        raise ValueError("memu_mode must be 'apply' or 'check'")
+        raise ValueError("semantic_mode must be 'apply' or 'check'")
     try:
         init_db()
         conn = get_conn()

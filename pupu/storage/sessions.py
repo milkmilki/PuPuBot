@@ -28,7 +28,7 @@ def reset_session(session_id: str):
     ):
         conn.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
     conn.execute(
-        "DELETE FROM memu_sync_log WHERE context_session = ? OR identity_session = ?",
+        "DELETE FROM semantic_sync_log WHERE context_session = ? OR identity_session = ?",
         (session_id, session_id),
     )
     subject_key = person_from_session(session_id)

@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import tempfile
 import unittest
@@ -192,7 +192,7 @@ class ChatAndMemoryHookTests(unittest.TestCase):
             lambda event: seen.append((event.name, dict(event.payload))),
         )
 
-        with patch("pupu.agent.is_memu_long_term_enabled", return_value=False):
+        with patch("pupu.agent.is_semantic_index_enabled", return_value=False):
             with patch("pupu.agent.chat_complete", return_value='{"content":"好呀","should_wait":false}'):
                 with patch("pupu.agent._maybe_batch_review", return_value=None):
                     reply = chat("hello", session_id=self.session_id, is_admin=True)
@@ -210,7 +210,7 @@ class ChatAndMemoryHookTests(unittest.TestCase):
         seen = []
         register_hook("chat.error", lambda event: seen.append(dict(event.payload)))
 
-        with patch("pupu.agent.is_memu_long_term_enabled", return_value=False):
+        with patch("pupu.agent.is_semantic_index_enabled", return_value=False):
             with patch("pupu.agent.chat_complete", side_effect=RuntimeError("model down")):
                 with self.assertRaises(RuntimeError):
                     chat("hello", session_id=self.session_id, is_admin=True)
@@ -243,7 +243,7 @@ class ChatAndMemoryHookTests(unittest.TestCase):
           "task_updates": []
         }
         """
-        with patch("pupu.agent.is_memu_long_term_enabled", return_value=False):
+        with patch("pupu.agent.is_semantic_index_enabled", return_value=False):
             with patch("pupu.agent.find_related_person_facts", return_value=[]):
                 with patch("pupu.agent.json_task", return_value=raw):
                     _maybe_batch_review(self.session_id)

@@ -1,4 +1,4 @@
-import os
+﻿import os
 from datetime import datetime, timedelta
 from pathlib import Path
 import unittest
@@ -8,7 +8,7 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
-os.environ["PUPU_MEMU_ENABLED"] = "false"
+os.environ["PUPU_SEMANTIC_INDEX_ENABLED"] = "false"
 
 from pupu.event_thread_report import format_event_threads_report
 from pupu.memory import _get_conn, init_db, reset_session, upsert_event_threads
@@ -95,7 +95,7 @@ class EventThreadReportTests(unittest.TestCase):
         self.assertIn("New event", report)
         self.assertLess(report.index("New event"), report.index("Old event"))
 
-    def test_report_does_not_show_memu_sync_status(self):
+    def test_report_does_not_show_semantic_sync_status(self):
         upsert_event_threads(
             self.session_id,
             [

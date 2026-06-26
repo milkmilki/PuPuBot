@@ -24,7 +24,7 @@ from .memory import (
     count_pending_review_turns,
     get_familiarity,
     find_related_event_threads,
-    has_successful_memu_sync,
+    has_successful_semantic_sync,
     get_event_thread_recent_steps,
     get_event_threads,
     get_person_facts,
@@ -36,7 +36,7 @@ from .memory import (
     list_pending_review_sessions,
     list_people_for_message_range,
     person_from_session,
-    record_memu_sync,
+    record_semantic_sync,
     save_message,
     save_message_with_speaker,
     save_summary,
@@ -44,7 +44,7 @@ from .memory import (
     update_person_fact_by_id,
     upsert_person_facts,
 )
-from .memory_index import is_memu_long_term_enabled, recall_memories, sync_review_memory
+from .memory_index import is_semantic_index_enabled, recall_memories, sync_review_memory
 from .followup import DIALOGUE_OUTPUT_PROTOCOL, _parse_dialogue_output
 from .hooks import (
     emit_chat_error,
@@ -933,7 +933,7 @@ def _chat_impl(
 
     score = get_familiarity(identity_session)
     recalled_memories = []
-    if is_memu_long_term_enabled():
+    if is_semantic_index_enabled():
         recalled_memories = recall_memories(
             query=prompt_display_text,
             context_session=context_session,
@@ -1152,6 +1152,9 @@ def _maybe_batch_review_unlocked(
             batch[0]["id"],
             batch[-1]["id"],
         )
+        for person in batch_people:
+            if str(person.get("person_key") or "") == "instance" and character_name:
+                person["display_name"] = character_name
         batch_person_keys = {
             str(person.get("person_key") or "")
             for person in batch_people
@@ -1401,19 +1404,19 @@ def _maybe_batch_review_unlocked(
         else:
             print("[pupu] batch review task_updates empty")
 
-        if is_memu_long_term_enabled():
-            if has_successful_memu_sync(
+        if is_semantic_index_enabled():
+            if has_successful_semantic_sync(
                 context_session=context_session,
                 identity_session=identity_session,
                 start_msg_id=batch[0]["id"],
                 end_msg_id=batch[-1]["id"],
             ):
                 print(
-                    "[pupu][memu] sync review skipped: "
+                    "[pupu][semantic] sync review skipped: "
                     f"already synced range={batch[0]['id']}..{batch[-1]['id']}"
                 )
             else:
-                memu_result = sync_review_memory(
+                semantic_result = sync_review_memory(
                     context_session=context_session,
                     identity_session=identity_session,
                     start_msg_id=batch[0]["id"],
@@ -1422,18 +1425,18 @@ def _maybe_batch_review_unlocked(
                     person_facts=saved_person_facts,
                     event_threads=event_threads,
                 )
-                record_memu_sync(
+                record_semantic_sync(
                     context_session=context_session,
                     identity_session=identity_session,
                     start_msg_id=batch[0]["id"],
                     end_msg_id=batch[-1]["id"],
-                    memu_ids=memu_result.ids,
-                    status=memu_result.status,
-                    error=memu_result.error,
+                    semantic_ids=semantic_result.ids,
+                    status=semantic_result.status,
+                    error=semantic_result.error,
                 )
                 print(
-                    "[pupu][memu] sync review recorded: "
-                    f"status={memu_result.status}, ids={len(memu_result.ids)}"
+                    "[pupu][semantic] sync review recorded: "
+                    f"status={semantic_result.status}, ids={len(semantic_result.ids)}"
                 )
 
         print(

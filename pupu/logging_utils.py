@@ -21,7 +21,7 @@ _original_stderr = sys.stderr
 LOG_RETENTION_DAYS = 3
 
 _VERBOSE_CONSOLE_PREFIXES = (
-    "[pupu][memu]",
+    "[pupu][semantic]",
     "[pupu][tool]",
     "[pupu] batch review",
     "[pupu] dialogue decision",

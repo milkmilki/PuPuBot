@@ -44,9 +44,7 @@ _API_SECRET_FIELDS = {
     "llm.anthropic.api_key",
     "llm.deepseek.api_key",
     "llm.xiaoshuoai.api_key",
-    "memu.api_key",
-    "memu.llm_api_key",
-    "memu.embed_api_key",
+    "semantic_index.embed_api_key",
     "mcp.servers.tavily.env.TAVILY_API_KEY",
 }
 _API_VALUE_FIELDS = {
@@ -58,9 +56,7 @@ _API_VALUE_FIELDS = {
     "llm.anthropic.base_url",
     "llm.deepseek.base_url",
     "llm.xiaoshuoai.base_url",
-    "memu.base_url",
-    "memu.llm_base_url",
-    "memu.embed_base_url",
+    "semantic_index.embed_base_url",
 }
 _API_SETTING_FIELDS = _API_SECRET_FIELDS | _API_VALUE_FIELDS
 _shutdown_lock = threading.Lock()
@@ -461,11 +457,8 @@ def api_get_instance(instance_id: str) -> dict[str, Any]:
     cfg["pid"] = st.get("pid")
     cfg["runtime"] = st.get("runtime")
     mp = instance_store.memory_db_path(instance_id)
-    memu_path = instance_store.memu_db_path(instance_id)
     cfg["memory_path"] = str(mp)
     cfg["memory_db_exists"] = mp.is_file()
-    cfg["memu_path"] = str(memu_path)
-    cfg["memu_db_exists"] = memu_path.is_file()
     return cfg
 
 
@@ -558,15 +551,12 @@ def api_instance_logs(instance_id: str, tail: int = 200) -> dict[str, str]:
 def api_memory_path(instance_id: str) -> dict[str, Any]:
     try:
         p = instance_store.memory_db_path(instance_id)
-        memu_path = instance_store.memu_db_path(instance_id)
     except (FileNotFoundError, ValueError) as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     sp = str(p)
     return {
         "memory_path": sp,
         "exists": p.is_file(),
-        "memu_path": str(memu_path),
-        "memu_exists": memu_path.is_file(),
     }
 
 

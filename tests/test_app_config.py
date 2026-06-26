@@ -1,4 +1,4 @@
-import importlib
+﻿import importlib
 import os
 import tempfile
 import unittest
@@ -17,9 +17,9 @@ class AppConfigTests(unittest.TestCase):
                 "PUPU_DEEPSEEK_API_KEY",
                 "PUPU_DEEPSEEK_BASE_URL",
                 "PUPU_CONSOLE_PORT",
-                "PUPU_MEMU_ENABLED",
-                "PUPU_MEMU_EMBED_API_KEY",
-                "PUPU_MEMU_EMBED_BASE_URL",
+                "PUPU_SEMANTIC_INDEX_ENABLED",
+                "PUPU_SEMANTIC_INDEX_EMBED_API_KEY",
+                "PUPU_SEMANTIC_INDEX_EMBED_BASE_URL",
                 "PUPU_VISION_MODEL",
                 "PUPU_VISION_TIMEOUT",
                 "PUPU_TTS_ENABLED",
@@ -52,7 +52,7 @@ llm:
     base_url: https://deepseek.test/anthropic
 console:
   port: 8999
-memu:
+semantic_index:
   enabled: false
   embed_api_key: embed-key
   embed_base_url: https://dashscope.test/compatible-mode/v1
@@ -85,9 +85,9 @@ mcp:
         self.assertEqual(os.environ["PUPU_DEEPSEEK_API_KEY"], "test-key")
         self.assertEqual(os.environ["PUPU_DEEPSEEK_BASE_URL"], "https://deepseek.test/anthropic")
         self.assertEqual(os.environ["PUPU_CONSOLE_PORT"], "8999")
-        self.assertEqual(os.environ["PUPU_MEMU_ENABLED"], "false")
-        self.assertEqual(os.environ["PUPU_MEMU_EMBED_API_KEY"], "embed-key")
-        self.assertEqual(os.environ["PUPU_MEMU_EMBED_BASE_URL"], "https://dashscope.test/compatible-mode/v1")
+        self.assertEqual(os.environ["PUPU_SEMANTIC_INDEX_ENABLED"], "false")
+        self.assertEqual(os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"], "embed-key")
+        self.assertEqual(os.environ["PUPU_SEMANTIC_INDEX_EMBED_BASE_URL"], "https://dashscope.test/compatible-mode/v1")
         self.assertEqual(os.environ["PUPU_VISION_MODEL"], "qwen3.6-flash")
         self.assertEqual(os.environ["PUPU_VISION_TIMEOUT"], "12")
         self.assertEqual(os.environ["PUPU_TTS_ENABLED"], "true")

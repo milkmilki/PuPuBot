@@ -75,9 +75,9 @@ COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         "recall",
         "recall",
-        aliases=("memu_recall", "召回"),
+        aliases=("semantic_recall", "召回"),
         category="记忆",
-        description="调试 memU 会召回哪些记忆",
+        description="调试语义索引会召回哪些记忆",
         usage="/recall <内容>",
     ),
     CommandSpec(
@@ -85,7 +85,7 @@ COMMANDS: tuple[CommandSpec, ...] = (
         "tidy",
         aliases=("cleanup", "整理记忆", "整理"),
         category="记忆",
-        description="整理 memU 长期记忆，默认 apply，也可用 check",
+        description="整理语义索引，默认 apply，也可用 check",
         usage="/tidy [check|apply|rebuild]",
         admin_surfaces=_surface_set(("qq",)),
     ),

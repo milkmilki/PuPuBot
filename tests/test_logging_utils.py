@@ -1,4 +1,4 @@
-import tempfile
+﻿import tempfile
 import unittest
 from datetime import datetime
 from io import StringIO
@@ -139,13 +139,13 @@ class RuntimeLoggingTests(unittest.TestCase):
         with patch.object(logging_utils, "_original_print") as original_print:
             with patch.object(logging_utils, "_get_sink", return_value=sink):
                 logging_utils.set_debug_console_enabled(False)
-                logging_utils._patched_print("[pupu][memu] recall start")
+                logging_utils._patched_print("[pupu][semantic] recall start")
 
                 original_print.assert_not_called()
-                self.assertIn("[pupu][memu] recall start", sink.getvalue())
+                self.assertIn("[pupu][semantic] recall start", sink.getvalue())
 
                 logging_utils.set_debug_console_enabled(True)
-                logging_utils._patched_print("[pupu][memu] recall start")
+                logging_utils._patched_print("[pupu][semantic] recall start")
 
                 original_print.assert_called_once()
 

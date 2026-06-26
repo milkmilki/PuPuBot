@@ -10,11 +10,11 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
-os.environ["PUPU_MEMU_ENABLED"] = "false"
+os.environ["PUPU_SEMANTIC_INDEX_ENABLED"] = "false"
 
 from pupu.maintenance import (
     maybe_run_daily_maintenance,
-    maybe_run_daily_memu_tidy,
+    maybe_run_daily_semantic_tidy,
     run_memory_maintenance,
 )
 from pupu.memory import (
@@ -193,7 +193,7 @@ class MaintenanceTests(unittest.TestCase):
             self.assertIsNone(maybe_run_daily_maintenance(datetime(2026, 4, 26, 8, 0, 0)))
             mock_run.assert_not_called()
 
-    def test_maybe_run_daily_memu_tidy_runs_once_during_three_oclock_hour(self):
+    def test_maybe_run_daily_semantic_tidy_runs_once_during_three_oclock_hour(self):
         tidy_result = {
             "mode": "apply",
             "scanned": 3,
@@ -212,10 +212,10 @@ class MaintenanceTests(unittest.TestCase):
             "note": "done",
             "status": "ok",
         }
-        with patch("pupu.maintenance.run_memu_tidy", return_value=tidy_result) as mock_run:
-            self.assertIsNone(maybe_run_daily_memu_tidy(datetime(2026, 4, 26, 2, 59, 0)))
-            report = maybe_run_daily_memu_tidy(datetime(2026, 4, 26, 3, 1, 0))
-            self.assertIn("memU cache sync complete", report)
+        with patch("pupu.maintenance.run_semantic_tidy", return_value=tidy_result) as mock_run:
+            self.assertIsNone(maybe_run_daily_semantic_tidy(datetime(2026, 4, 26, 2, 59, 0)))
+            report = maybe_run_daily_semantic_tidy(datetime(2026, 4, 26, 3, 1, 0))
+            self.assertIn("semantic index sync complete", report)
             mock_run.assert_called_once()
 
         conn = _get_conn()
@@ -224,29 +224,29 @@ class MaintenanceTests(unittest.TestCase):
                 """SELECT COUNT(*) AS c
                    FROM maintenance_runs
                    WHERE run_date = ? AND trigger = ? AND status = ?""",
-                ("2026-04-26", "auto_memu_tidy", "success"),
+                ("2026-04-26", "auto_semantic_tidy", "success"),
             ).fetchone()["c"]
         finally:
             conn.close()
 
         self.assertEqual(count, 1)
 
-        with patch("pupu.maintenance.run_memu_tidy", return_value=tidy_result) as mock_run:
-            self.assertIsNone(maybe_run_daily_memu_tidy(datetime(2026, 4, 26, 8, 0, 0)))
+        with patch("pupu.maintenance.run_semantic_tidy", return_value=tidy_result) as mock_run:
+            self.assertIsNone(maybe_run_daily_semantic_tidy(datetime(2026, 4, 26, 8, 0, 0)))
             mock_run.assert_not_called()
 
-        with patch("pupu.maintenance.run_memu_tidy", return_value=tidy_result) as mock_run:
-            self.assertIsNone(maybe_run_daily_memu_tidy(datetime(2026, 4, 27, 21, 0, 0)))
+        with patch("pupu.maintenance.run_semantic_tidy", return_value=tidy_result) as mock_run:
+            self.assertIsNone(maybe_run_daily_semantic_tidy(datetime(2026, 4, 27, 21, 0, 0)))
             mock_run.assert_not_called()
 
-    def test_run_memory_maintenance_forwards_memu_mode(self):
+    def test_run_memory_maintenance_forwards_semantic_mode(self):
         run_at = datetime(2026, 4, 26, 3, 0, 0)
         with patch("pupu.maintenance._run_memory_maintenance", return_value="ok") as mock_run:
             report = run_memory_maintenance(
                 trigger="manual",
             include_model=False,
             now=run_at,
-            memu_mode="check",
+            semantic_mode="check",
         )
 
         self.assertEqual(report, "ok")
@@ -254,7 +254,7 @@ class MaintenanceTests(unittest.TestCase):
             trigger="manual",
             include_model=False,
             now=run_at,
-            memu_mode="check",
+            semantic_mode="check",
         )
 
     def test_run_memory_maintenance_check_uses_model_preview(self):
@@ -276,7 +276,7 @@ class MaintenanceTests(unittest.TestCase):
                 trigger="manual",
                 include_model=True,
                 now=datetime(2026, 4, 26, 3, 0, 0),
-                memu_mode="check",
+                semantic_mode="check",
             )
 
         self.assertIn("记忆整理检查完成（manual）", report)

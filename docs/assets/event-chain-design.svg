@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
   <title id="title">PuPuBot 记忆系统架构图</title>
-  <desc id="desc">展示 PuPuBot 如何用 SQLite 保存结构化主记忆，并把 facts、事件线和摘要投影成 memU embedding 召回 card。</desc>
+  <desc id="desc">展示 PuPuBot 如何用 SQLite 保存结构化主记忆，并把 facts、事件线和摘要投影成内置语义索引 card。</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#f8fafc"/>
@@ -11,7 +11,7 @@
       <stop offset="0" stop-color="#1d4ed8"/>
       <stop offset="1" stop-color="#0f766e"/>
     </linearGradient>
-    <linearGradient id="memu" x1="0" x2="1">
+    <linearGradient id="semantic" x1="0" x2="1">
       <stop offset="0" stop-color="#7c3aed"/>
       <stop offset="1" stop-color="#be185d"/>
     </linearGradient>
@@ -45,7 +45,7 @@
   <rect width="1280" height="760" fill="url(#bg)"/>
 
   <text x="64" y="58" class="title">PuPuBot 记忆系统</text>
-  <text x="64" y="86" class="subtitle">SQLite 是唯一事实源；memU 是由 SQLite 投影出的 embedding 召回缓存，可以删除并重建。</text>
+  <text x="64" y="86" class="subtitle">SQLite 是唯一事实源；semantic_cards 是由 SQLite 投影出的 embedding 召回缓存，可以删除并重建。</text>
 
   <rect x="64" y="120" width="260" height="82" rx="16" fill="#ffffff" stroke="#dbe4ee" filter="url(#shadow)"/>
   <text x="88" y="153" class="card-title">聊天输入</text>
@@ -96,8 +96,8 @@
   <text x="360" y="544" class="tiny">event_people：事件与人物索引</text>
 
   <rect x="690" y="250" width="526" height="318" rx="20" fill="#ffffff" stroke="#cbd5e1" filter="url(#shadow)"/>
-  <rect x="690" y="250" width="526" height="52" rx="20" fill="url(#memu)"/>
-  <text x="716" y="283" class="lane-title">memU 语义召回缓存</text>
+  <rect x="690" y="250" width="526" height="52" rx="20" fill="url(#semantic)"/>
+  <text x="716" y="283" class="lane-title">内置语义索引缓存</text>
   <text x="1084" y="283" class="badge">Embedding RAG</text>
 
   <rect x="716" y="326" width="212" height="86" class="mini"/>
@@ -129,7 +129,7 @@
 
   <rect x="64" y="620" width="354" height="82" rx="16" fill="#fff7ed" stroke="#fed7aa" filter="url(#shadow)"/>
   <text x="88" y="653" class="card-title">写入前候选召回</text>
-  <text x="88" y="678" class="small">facts: memU 语义召回，失败退回 SQLite overlap</text>
+  <text x="88" y="678" class="small">facts: 语义索引召回，失败退回 SQLite overlap</text>
 
   <rect x="464" y="620" width="354" height="82" rx="16" fill="#f0f9ff" stroke="#bae6fd" filter="url(#shadow)"/>
   <text x="488" y="653" class="card-title">事件线归并</text>
@@ -150,5 +150,5 @@
   <text x="942" y="586" class="tiny">RAG 结果</text>
 
   <rect x="92" y="708" width="1094" height="32" rx="16" fill="#0f172a" opacity="0.92"/>
-  <text x="116" y="730" fill="#ffffff" font-size="14">原则：SQLite 保存结构化真实记忆；memU 只保存可重建的 embedding 召回缓存；模型写入长期记忆前先看候选，尽量更新旧记忆而不是制造重复。</text>
+  <text x="116" y="730" fill="#ffffff" font-size="14">原则：SQLite 保存结构化真实记忆；semantic_cards 只保存可重建的 embedding 召回缓存；模型写入长期记忆前先看候选，尽量更新旧记忆而不是制造重复。</text>
 </svg>

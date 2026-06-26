@@ -23,7 +23,7 @@ from pupu.hooks import emit_instance_status
 from pupu.instance_context import InstanceContext, activate_instance_context
 from pupu.llm import ProviderConfigError, preflight_model_providers
 from pupu.logging_utils import close_current_instance_log_sinks, setup_runtime_logging
-from pupu.maintenance import maybe_run_daily_memu_tidy
+from pupu.maintenance import maybe_run_daily_semantic_tidy
 from pupu.memory import init_db
 from pupu.proactive import _get_current_period, generate_proactive_message, proactive_loop
 from pupu.proactive_control import is_proactive_enabled
@@ -238,9 +238,9 @@ class InstanceActor:
                 backup_report = await asyncio.to_thread(maybe_run_daily_backup)
                 if backup_report:
                     self._log(f"[pupu] auto backup\n{backup_report}")
-                memu_report = await asyncio.to_thread(maybe_run_daily_memu_tidy)
-                if memu_report:
-                    self._log(f"[pupu] auto memu tidy\n{memu_report}")
+                semantic_report = await asyncio.to_thread(maybe_run_daily_semantic_tidy)
+                if semantic_report:
+                    self._log(f"[pupu] auto semantic tidy\n{semantic_report}")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

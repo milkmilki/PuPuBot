@@ -19,7 +19,7 @@ from .memory import (
     person_from_session,
     save_message,
 )
-from .memory_index import is_memu_long_term_enabled, recall_memories
+from .memory_index import is_semantic_index_enabled, recall_memories
 from .message_sources import CHAT, PROACTIVE, SCHEDULED, WAIT_FOLLOWUP
 from .persona import FAMILIARITY_PROMPTS, PROACTIVE_PROMPT, get_pupu_name
 from .proactive_control import is_proactive_enabled
@@ -189,7 +189,7 @@ def _format_person_facts_section(facts: list[dict], character_name: str) -> str:
     return "\n".join(lines)
 
 
-def _build_proactive_memu_query(score: int, period: dict, recent: list[dict]) -> str:
+def _build_proactive_semantic_query(score: int, period: dict, recent: list[dict]) -> str:
     character_name = get_pupu_name()
     recent_lines = []
     for item in recent[-4:]:
@@ -231,11 +231,11 @@ def _format_recalled_memories_section(memories: list[dict]) -> str:
 
 
 def _recall_proactive_memories(score: int, period: dict, recent: list[dict]) -> list[dict]:
-    if not is_memu_long_term_enabled():
+    if not is_semantic_index_enabled():
         return []
-    query = _build_proactive_memu_query(score, period, recent)
+    query = _build_proactive_semantic_query(score, period, recent)
     print(
-        f"[pupu][proactive] phase=memu_recall start score={score} "
+        f"[pupu][proactive] phase=semantic_recall start score={score} "
         f"period={period['name']} recent_messages={len(recent)} query_chars={len(query)}"
     )
     try:
@@ -247,9 +247,9 @@ def _recall_proactive_memories(score: int, period: dict, recent: list[dict]) -> 
             limit=4,
         )
     except Exception as exc:
-        print(f"[pupu][proactive] phase=memu_recall failed error={type(exc).__name__}: {exc}")
+        print(f"[pupu][proactive] phase=semantic_recall failed error={type(exc).__name__}: {exc}")
         return []
-    print(f"[pupu][proactive] phase=memu_recall done count={len(memories)}")
+    print(f"[pupu][proactive] phase=semantic_recall done count={len(memories)}")
     return memories
 
 
@@ -317,7 +317,7 @@ def _build_proactive_prompt(score: int, period: dict) -> str:
 
     topic = random.choice(period["topics"])
 
-    if is_memu_long_term_enabled():
+    if is_semantic_index_enabled():
         recalled_memories = _recall_proactive_memories(score, period, recent)
         prompt = PROACTIVE_PROMPT.format(
             character_name=character_name,

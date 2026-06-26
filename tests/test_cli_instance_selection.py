@@ -54,7 +54,6 @@ class CliInstanceSelectionTests(unittest.TestCase):
         self.assertEqual(ctx.instance_dir, inst.resolve())
         self.assertEqual(ctx.config_path, inst.resolve() / "instance.json")
         self.assertEqual(ctx.db_path, inst.resolve() / "data" / "pupu.db")
-        self.assertEqual(ctx.memu_db_path, inst.resolve() / "data" / "memu.db")
         self.assertEqual(ctx.persona_path, inst.resolve() / "persona.json")
         self.assertTrue((inst / "instance.json").is_file())
         self.assertTrue((inst / "persona.json").is_file())

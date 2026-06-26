@@ -70,16 +70,16 @@ def _score_fact(
     fact: dict[str, Any],
     query_tokens: set[str],
     *,
-    memu_score: float | None = None,
+    semantic_index_score: float | None = None,
     person_keys: set[str] | None = None,
 ) -> dict[str, Any] | None:
     text = _fact_text(fact)
     hay_tokens = _tokens(text)
     overlap_tokens = sorted(query_tokens & hay_tokens)
-    if not overlap_tokens and memu_score is None:
+    if not overlap_tokens and semantic_index_score is None:
         return None
     overlap_score = len(overlap_tokens) / max(1, min(len(query_tokens), len(hay_tokens)))
-    semantic_score = max(0.0, min(1.0, float(memu_score))) if memu_score is not None else 0.0
+    semantic_score = max(0.0, min(1.0, float(semantic_index_score))) if semantic_index_score is not None else 0.0
     scoped_people = {normalize_person_key(item) for item in (person_keys or set()) if normalize_person_key(item)}
     subject = normalize_person_key(fact.get("subject_person_key"))
     obj = normalize_person_key(fact.get("object_person_key"))
@@ -106,8 +106,8 @@ def _score_fact(
         ),
     )
     reason_bits = []
-    if memu_score is not None:
-        reason_bits.append(f"memu={semantic_score:.2f}")
+    if semantic_index_score is not None:
+        reason_bits.append(f"semantic={semantic_score:.2f}")
     if overlap_tokens:
         reason_bits.append("matched: " + ", ".join(overlap_tokens[:8]))
     if people_bonus:
@@ -122,7 +122,7 @@ def _score_fact(
     out["score"] = score
     out["reason_for_match"] = "; ".join(reason_bits) or "local candidate"
     out["match_debug"] = {
-        "memu_score": semantic_score,
+        "semantic_score": semantic_score,
         "overlap_score": overlap_score,
         "overlap_tokens": overlap_tokens[:12],
         "people_bonus": people_bonus,
@@ -132,7 +132,7 @@ def _score_fact(
         "fact_people": sorted(fact_people),
         "matched_people": matched_people,
         "total": score,
-        "used_memu_candidate": memu_score is not None,
+        "used_semantic_index": semantic_index_score is not None,
     }
     return out
 
@@ -161,8 +161,8 @@ def find_related_person_facts(
     by_id = {int(fact.get("id") or 0): fact for fact in facts if int(fact.get("id") or 0)}
     by_source_key = {_source_key_for_fact(fact): fact for fact in facts}
 
-    memu_scores: dict[int, float] = {}
-    memu_attempted = False
+    semantic_scores: dict[int, float] = {}
+    semantic_attempted = False
     try:
         memories = recall_memories(
             query=query,
@@ -171,7 +171,7 @@ def find_related_person_facts(
             history=[],
             limit=max(12, int(limit) * 3),
         )
-        memu_attempted = True
+        semantic_attempted = True
     except Exception:
         memories = []
     for item in memories:
@@ -192,7 +192,7 @@ def find_related_person_facts(
         except Exception:
             score = 0.0
         fact_id = int(fact.get("id") or 0)
-        memu_scores[fact_id] = max(memu_scores.get(fact_id, 0.0), score)
+        semantic_scores[fact_id] = max(semantic_scores.get(fact_id, 0.0), score)
 
     scored: list[dict[str, Any]] = []
     for fact in facts:
@@ -200,13 +200,13 @@ def find_related_person_facts(
         item = _score_fact(
             fact,
             query_tokens,
-            memu_score=memu_scores.get(fact_id),
+            semantic_index_score=semantic_scores.get(fact_id),
             person_keys=scoped_people,
         )
         if not item:
             continue
         if debug:
-            item["match_debug"]["memu_attempted"] = memu_attempted
+            item["match_debug"]["semantic_attempted"] = semantic_attempted
         scored.append(item)
 
     scored.sort(
@@ -251,13 +251,13 @@ def format_related_person_facts(
             lines.append(
                 "   debug: "
                 f"total={float(detail.get('total') or score):.3f} "
-                f"memu={float(detail.get('memu_score') or 0.0):.3f} "
+                f"semantic={float(detail.get('semantic_score') or 0.0):.3f} "
                 f"overlap={float(detail.get('overlap_score') or 0.0):.3f} "
                 f"people_bonus={float(detail.get('people_bonus') or 0.0):.3f} "
                 f"recent_bonus={float(detail.get('recent_bonus') or 0.0):.3f} "
                 f"confidence_bonus={float(detail.get('confidence_bonus') or 0.0):.3f} "
-                f"memu_attempted={bool(detail.get('memu_attempted'))} "
-                f"used_memu={bool(detail.get('used_memu_candidate'))}"
+                f"semantic_attempted={bool(detail.get('semantic_attempted'))} "
+                f"used_semantic_index={bool(detail.get('used_semantic_index'))}"
             )
             tokens = detail.get("overlap_tokens") or []
             if tokens:

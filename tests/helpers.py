@@ -33,12 +33,15 @@ def activate_test_instance(
     *,
     display_name: str = "Test PuPu",
     instance_id: str | None = None,
+    fresh: bool = False,
 ) -> InstanceContext:
     """Activate a real InstanceContext for tests that need storage paths."""
     ensure_test_tmp_root()
     db_path = Path(db_path).resolve()
     root = TEST_TMP_ROOT / "pupu_test_instances"
     instance_dir = root / (instance_id or db_path.stem)
+    if fresh and instance_dir.exists():
+        shutil.rmtree(instance_dir, ignore_errors=True)
     data_dir = instance_dir / "data"
     db_path = data_dir / db_path.name
     data_dir.mkdir(parents=True, exist_ok=True)

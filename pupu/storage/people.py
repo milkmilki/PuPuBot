@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from typing import Any
 
+from ..instance_context import get_current_instance_context
 from ..sessions import OWNER_SESSION
 from .db import get_conn
 
@@ -61,6 +62,9 @@ def default_owner_person() -> dict[str, Any]:
 
 
 def default_instance_person(display_name: str | None = None) -> dict[str, Any]:
+    if not _text(display_name):
+        ctx = get_current_instance_context()
+        display_name = ctx.display_name if ctx is not None else None
     return {
         "person_key": INSTANCE_PERSON_KEY,
         "kind": "instance",
@@ -274,9 +278,22 @@ def _apply_known_people(conn, people: dict[str, dict[str, Any]]) -> None:
 
 def ensure_default_people(conn, *, instance_name: str | None = None, now: str | None = None) -> None:
     owner = default_owner_person()
-    _insert_person_if_missing(conn, owner, now=now)
+    now = now or _now()
+    upsert_person(
+        conn,
+        owner["person_key"],
+        kind=owner["kind"],
+        display_name=owner["display_name"],
+        now=now,
+    )
     instance = default_instance_person(instance_name)
-    _insert_person_if_missing(conn, instance, now=now)
+    upsert_person(
+        conn,
+        instance["person_key"],
+        kind=instance["kind"],
+        display_name=instance["display_name"],
+        now=now,
+    )
 
 
 def person_from_message_sender(

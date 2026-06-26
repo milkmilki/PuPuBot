@@ -184,12 +184,6 @@ instance:
         finally:
             conn.close()
 
-    def test_memu_db_path_is_instance_local(self) -> None:
-        iid = instance_store.create_instance("MM", port=9310)
-        expected = Path(self._tmpdir.name) / "instances" / iid / "data" / "memu.db"
-
-        self.assertEqual(instance_store.memu_db_path(iid), expected.resolve())
-
     def test_replace_memory_db_overwrites(self) -> None:
         iid = instance_store.create_instance("M2", port=9301)
         target = instance_store.memory_db_path(iid)

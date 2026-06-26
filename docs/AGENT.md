@@ -22,12 +22,12 @@ InstanceActor per instance
         v
 pupu.agent.chat()
   - SQLite memory
-  - memU semantic cache
+  - built-in semantic index
   - MCP/tools
   - batch review
 ```
 
-PuPu is now instance-first and actor-only for runtime instances. There is no root-level default bot, no NoneBot plugin path, and no one-instance-one-Python-subprocess runtime. The console can host multiple `InstanceActor` objects in one Python process. The group arbiter remains a separate FastAPI service started by the console.
+PuPu is now instance-first and actor-only for runtime instances. There is no root-level default bot, no NoneBot plugin path, and no one-instance-one-Python-subprocess runtime. The console can host multiple `InstanceActor` objects in one Python process. Open-group arbitration is embedded in the console actor runtime.
 
 ## Key Files
 
@@ -46,8 +46,9 @@ PuPu is now instance-first and actor-only for runtime instances. There is no roo
 | [pupu/proactive.py](../pupu/proactive.py) | Idle proactive message loop; actor supplies the owner sender. |
 | [pupu/review_followups.py](../pupu/review_followups.py) | Batch review output parsing and persistence for summaries, person facts, event threads and tasks. |
 | [pupu/storage/](../pupu/storage/) | SQLite schema and storage functions. SQLite is the fact source of truth. |
-| [pupu/memory_index/](../pupu/memory_index/) | memU adapter and cache reconciliation. memU is a semantic cache over SQLite cards. |
-| [pupu_console/process_manager.py](../pupu_console/process_manager.py) | Actor supervisor for the console; starts/stops instance actors in the console process. Also starts the external arbiter service. |
+| [pupu/memory_index/](../pupu/memory_index/) | Facade for the built-in semantic index over SQLite source cards. |
+| [pupu/semantic_index/](../pupu/semantic_index/) | SQLite `semantic_cards` store, source-card projection, embedding client, recall, sync, and tidy reconciliation. |
+| [pupu_console/process_manager.py](../pupu_console/process_manager.py) | Actor supervisor for the console; starts/stops instance actors in the console process. |
 | [pupu_console/arbitrator.py](../pupu_console/arbitrator.py) | Open-group speaker arbitration. |
 | [pupu_console/server.py](../pupu_console/server.py) | FastAPI console API. |
 
@@ -70,7 +71,7 @@ Eligible sessions are `owner` and `private_<QQ>`. Group sessions never start wai
 2. `MessageBuffer` handles commands first. Any message beginning with `/` is never sent to the chat model.
 3. Non-command private messages are debounced locally. Open-group messages go through the arbiter flow.
 4. `chat()` saves the user message to SQLite with speaker metadata.
-5. Prompt building loads recent messages, summaries, person facts, event threads and memU recall cards.
+5. Prompt building loads recent messages, summaries, person facts, event threads and semantic recall cards.
 6. Model/tool loop runs.
 7. Parsed assistant text is saved and sent through the active transport.
 8. If enough chat messages accumulated, batch review writes summaries, person facts, event threads and scheduled task updates.
@@ -95,7 +96,7 @@ Each instance directory contains:
 - `instance.json`: display name, `qq_mode`, NapCat port, owner IDs, open groups, peer bot info, proactive flag, tool settings.
 - `persona.json`: persona/soul data.
 - `data/pupu.db`: SQLite source of truth.
-- `data/memu.db`: memU semantic cache.
+- `data/pupu.db`: also contains rebuildable `semantic_cards` for embedding recall.
 - `data/logs/`: per-instance logs.
 
 NapCat configuration uses the port in `instance.json`:
@@ -117,7 +118,7 @@ SQLite is authoritative:
 - `people` / `event_people`: stable people and event participants.
 - `scheduled_tasks`: scheduled reminders.
 
-memU is a semantic cache. SQLite facts/events/summaries are rendered as natural-language cards and synced into memU for embedding recall. Tidy reconciles cache/source drift; it should not delete SQLite source rows.
+The built-in semantic index is a cache, not a source of truth. SQLite facts/events/summaries are rendered as natural-language cards and synced into `semantic_cards` for embedding recall. Tidy reconciles cache/source drift; it should not delete SQLite source rows.
 
 ## Open Groups
 

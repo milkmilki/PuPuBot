@@ -7,8 +7,7 @@ echo   Deploying pupu...
 echo ========================================
 echo.
 
-:: Pick Python. Python 3.12/3.13 is the normal path because optional memU
-:: dependencies may not support Python 3.14 yet.
+:: Pick Python. Python 3.12/3.13 is the normal tested path.
 set "PY_CMD="
 py -3.13 --version >nul 2>&1
 if not errorlevel 1 set "PY_CMD=py -3.13"
@@ -20,7 +19,7 @@ if "%PY_CMD%"=="" (
     py -3.14 --version >nul 2>&1
     if not errorlevel 1 (
         set "PY_CMD=py -3.14"
-        echo [WARN] Python 3.14 detected. Base PuPuBot can run, but optional memU may require manual install.
+        echo [WARN] Python 3.14 detected. Python 3.12/3.13 is the tested path.
     )
 )
 if "%PY_CMD%"=="" (
@@ -40,8 +39,6 @@ if not exist "ForFun\Scripts\python.exe" (
 :: Install deps
 echo [2/3] Installing dependencies...
 ForFun\Scripts\pip install -r requirements.txt -q
-echo Optional memU semantic cache:
-echo   ForFun\Scripts\pip install -r requirements-memu.txt
 
 :: Check pupu.yaml
 if not exist "pupu.yaml" (

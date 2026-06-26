@@ -20,7 +20,6 @@ class InstanceContext:
     config_path: Path
     persona_path: Path
     db_path: Path
-    memu_db_path: Path
     data_dir: Path
     logs_dir: Path
 
@@ -47,7 +46,6 @@ class InstanceContext:
             config_path=config_path,
             persona_path=inst / "persona.json",
             db_path=data_dir / "pupu.db",
-            memu_db_path=data_dir / "memu.db",
             data_dir=data_dir,
             logs_dir=data_dir / "logs",
         )

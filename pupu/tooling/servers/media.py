@@ -56,20 +56,12 @@ def _vision_retry_delay_seconds(attempt: int) -> float:
 
 
 def _vision_api_key() -> str:
-    for name in (
-        "PUPU_MEMU_EMBED_API_KEY",
-        "PUPU_MEMU_API_KEY",
-    ):
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
-    return ""
+    return os.environ.get("PUPU_SEMANTIC_INDEX_EMBED_API_KEY", "").strip()
 
 
 def _vision_base_url() -> str:
     return (
-        os.environ.get("PUPU_MEMU_EMBED_BASE_URL", "").strip()
-        or os.environ.get("PUPU_MEMU_BASE_URL", "").strip()
+        os.environ.get("PUPU_SEMANTIC_INDEX_EMBED_BASE_URL", "").strip()
         or DEFAULT_VISION_BASE_URL
     ).rstrip("/")
 
@@ -173,8 +165,8 @@ def describe_image_with_qwen(
     api_key = _vision_api_key()
     if not api_key:
         return (
-            "视觉模型 API Key 未配置。请在 pupu.yaml 的 memu.embed_api_key 中填写百炼 API Key，"
-            "视觉工具会直接复用 memU embedding 的百炼配置。"
+            "视觉模型 API Key 未配置。请在 pupu.yaml 的 semantic_index.embed_api_key 中填写百炼 API Key，"
+            "视觉工具会直接复用语义索引的百炼配置。"
         )
 
     url = image_urls[index]

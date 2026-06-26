@@ -145,7 +145,6 @@ def format_event_threads_report(
     session_id: str,
     limit: int | None = None,
     *,
-    sync_memu: bool | None = None,
     query: str = "",
 ) -> str:
     query = _compact(query)

@@ -2,12 +2,19 @@
 
 ## 2026-06-26
 
+### 语义索引内化
+
+- 用 PuPu 内置 SQLite 语义索引替换外部 `memu-py`：新增 `semantic_cards` 和 `semantic_sync_log`，SQLite 继续作为唯一事实源，语义索引只保存可重建 card 与 embedding。
+- `/recall`、`/tidy`、batch review sync、facts 写入前候选召回和自动维护都改走内置 semantic index；调试字段从 `memu_*` 收口为 `semantic_*`。
+- `pupu.yaml.example` 中 `memu:` 改为 `semantic_index:`，视觉工具复用 `semantic_index.embed_api_key` / `semantic_index.embed_base_url`。
+- 删除 `requirements-memu.txt`、`pupu/memory_index/memu_adapter.py`、旧 memU tidy/prompt 代码和第三方 SDK runtime，不再需要手动安装外部 memU。
+- 旧 `data/memu.db` 不迁移也不作为事实源；需要时运行 `/tidy rebuild` 会直接从 `data/pupu.db` 重建 `semantic_cards`。
+
 ### 维护性收敛
 
 - 测试启动时统一把 Python 临时目录指向 `tests/_tmp/runtime`，降低 Windows 用户目录、权限和 sandbox 差异导致的测试不稳定。
 - `tests.helpers` 新增统一测试临时目录 helper，后续测试可逐步迁移到同一套 scratch 目录。
-- 基础依赖和可选 memU 依赖拆分：`requirements.txt` 只保留基础运行依赖，`requirements-memu.txt` 单独安装 memU 语义召回缓存。
-- `deploy.bat` 不再强制 Python 3.14，改为优先 Python 3.13/3.12；Python 3.14 只作为可运行基础功能的 fallback，并提示 memU 兼容风险。
+- `deploy.bat` 不再强制 Python 3.14，改为优先 Python 3.13/3.12；语义索引已经内置，不再有额外记忆库安装步骤。
 - 新增 `requirements.lock.txt` 记录当前验证环境的依赖快照。
 - 从 `agent.py` 拆出 `pupu.review_parser`，集中处理 batch review JSON 清洗、修复和 normalize，并补充独立 parser 单元测试。
 - 修复聊天 prompt 中 `speaker_qq` 单说话人消息没有优先使用固定人物名的问题，避免 raw QQ 昵称污染最近上下文。
@@ -48,7 +55,7 @@
 ### 视觉工具
 
 - 新增 `mcp__media__describe_image`，通过百炼/DashScope OpenAI-compatible 接口调用 `qwen3.6-flash` 识图，给 DeepSeek 等纯文本模型补充图片理解能力。
-- `pupu.yaml.example` 新增 `vision` 配置块，支持 `model` 和 `timeout`；视觉工具直接复用 `memu.embed_api_key` / `memu.embed_base_url` 这套百炼配置，不再要求单独填写视觉 key。
+- `pupu.yaml.example` 新增 `vision` 配置块，支持 `model` 和 `timeout`；视觉工具直接复用语义索引的百炼配置，不再要求单独填写视觉 key。
 - `describe_image` 支持 `query` / `question` / `prompt`，智能体可以带着“这是谁、图片在表达什么、画得怎么样”等具体问题看图，不再只能返回泛泛描述。
 - 每个会话会短期缓存最近图片 URL（默认 30 分钟、最多 8 张），用户后续追问“刚才那张图”时，`describe_image` 可继续复用最近图片；若工具调用未显式传 `query`，会默认使用当前用户文本作为看图问题。
 - 视觉工具会缓存已成功下载的图片 base64 内容，`look_at_image` 成功后 `describe_image` 可直接复用同一张图，避免 QQ/NapCat 临时图片 URL 二次下载失败；调用百炼/Qwen 视觉接口遇到 SSL EOF、连接中断、超时或 5xx/429 等瞬时错误时会自动重试。
@@ -56,16 +63,16 @@
 - 调用百炼/Qwen 视觉接口时会带上 `X-DashScope-OssResourceResolve: enable` 以支持 QQ/NapCat 临时图片 URL；400 错误会输出百炼响应体，方便区分 `InvalidURL`、格式不支持、图片过大等真实原因。
 - `look_at_image` 聊天工具改为返回 Qwen 视觉文字描述，不再只返回 Anthropic 图片 content block，避免 DeepSeek/Codex 等纯文本链路误以为“看不到图”。
 
-### memU
+### 语义召回
 
 - `recall_memories()` 对 `APITimeoutError`、连接失败、网络/限流等瞬时错误恢复 3 次重试日志，避免一次 recall 超时后直接放弃长期记忆检索。
-- memU recall 检索 query 只使用当前轮用户内容，不再拼入 30 条近期上下文；近期上下文只用于最终对话模型生成回复，避免旧话题污染长期记忆召回。
+- 语义召回检索 query 只使用当前轮用户内容，不再拼入 30 条近期上下文；近期上下文只用于最终对话模型生成回复，避免旧话题污染长期记忆召回。
 
 ### 默认记忆窗口
 
 - 默认 batch review 触发批量从 10 条消息调整为 30 条消息，减少过短片段导致的碎片化总结。
 - 默认聊天最近上下文窗口从 10 条消息调整为 30 条消息，让模型能看到更完整的短期对话。
-- 默认 memU 召回 `retrieve_top_k` 从 6 调整为 5，事件线候选召回也同步从 6 调整为 5，降低 prompt 噪声。
+- 默认语义召回 `retrieve_top_k` 从 6 调整为 5，事件线候选召回也同步从 6 调整为 5，降低 prompt 噪声。
 
 ### 分支协作
 
@@ -86,7 +93,7 @@
 - 新增聊天生命周期钩子：`chat.started`、`chat.reply_created`、`chat.error`，供桌宠 UI 显示 thinking/speaking/error 状态。
 - 新增记忆整理钩子：`memory.review_started`、`memory.review_finished`，供 UI 展示 batch review 整理进度。
 - `InstanceActor` 启停和启动失败路径会发出状态事件，并在失败路径清理 transport、后台任务和日志 sink。
-- 补充 hook 生命周期测试的实例上下文与 memU 隔离，单独运行 `tests.test_hooks` 不再误触真实长记忆索引。
+- 补充 hook 生命周期测试的实例上下文与语义索引隔离，单独运行 `tests.test_hooks` 不再误触真实长记忆索引。
 
 ### 本地桌面客户端接入层
 
@@ -143,7 +150,7 @@
 ### 修复
 
 - 修复 proactive 最近上下文丢失 `message.source` 的问题；定时任务、wait-followup 追问、实例主动消息现在会分别标成系统触发或实例主动发出，不再被模型误当成用户亲口发言。
-- 聊天 prompt、memU recall history 和 `/history` 展示统一使用 `message.source` 标注内部消息；定时任务触发记录不会再显示成用户发言。
+- 聊天 prompt、语义召回 history 和 `/history` 展示统一使用 `message.source` 标注内部消息；定时任务触发记录不会再显示成用户发言。
 - 清理 wait-followup 追问提示中的真实问号乱码，系统触发追问会明确告诉模型“这不是用户发言”。
 - 修复 actor CLI 当前路径里的显示文案乱码，并改为使用当前实例名显示回复和思考状态。
 - 修复旧实例库中 `person_facts` 存在重复行时，启动阶段创建唯一索引失败，导致 NapCat 看似一直停在等待连接的问题。
@@ -152,13 +159,13 @@
 
 ### 运行时与实例上下文重构
 
-- 新增显式 `InstanceContext`，实例目录、数据库、persona、日志和 memU 路径统一从当前实例上下文读取。
-- 新增共享 runtime 层，集中管理 MCP 工具 runtime 和 memU runtime，为后续多实例单进程化做准备。
+- 新增显式 `InstanceContext`，实例目录、数据库、persona、日志和旧外部语义缓存路径统一从当前实例上下文读取。
+- 新增共享 runtime 层，集中管理 MCP 工具 runtime 和旧外部语义缓存 runtime，为后续多实例单进程化做准备。
 - 清理旧的实例路径环境变量依赖。
 - 移除 `person_facts.legacy_session_id` 兼容字段，并在数据库初始化时自动迁移旧表结构。
 - 修复只有 facts、没有聊天/摘要/事件线时维护流程不会扫描到该会话的问题。
-- 更新 CLI、实例启动、日志、persona、配置、memU、工具 registry 等模块，使它们优先使用实例上下文。
-- 扩充测试辅助工具和回归测试，覆盖实例上下文隔离、CLI 选实例、memU runtime 隔离、工具 runtime 复用和 facts schema 迁移。
+- 更新 CLI、实例启动、日志、persona、配置、语义召回、工具 registry 等模块，使它们优先使用实例上下文。
+- 扩充测试辅助工具和回归测试，覆盖实例上下文隔离、CLI 选实例、旧外部语义缓存 runtime 隔离、工具 runtime 复用和 facts schema 迁移。
 
 ### 验证
 

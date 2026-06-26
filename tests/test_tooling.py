@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 import unittest
 from tests.helpers import activate_test_instance
@@ -45,10 +45,8 @@ class ToolingRegistryTests(unittest.TestCase):
         os.environ.pop("PUPU_VISION_MODEL", None)
         os.environ.pop("PUPU_VISION_IMAGE_MODE", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
-        os.environ.pop("PUPU_MEMU_EMBED_API_KEY", None)
-        os.environ.pop("PUPU_MEMU_EMBED_BASE_URL", None)
-        os.environ.pop("PUPU_MEMU_API_KEY", None)
-        os.environ.pop("PUPU_MEMU_BASE_URL", None)
+        os.environ.pop("PUPU_SEMANTIC_INDEX_EMBED_API_KEY", None)
+        os.environ.pop("PUPU_SEMANTIC_INDEX_EMBED_BASE_URL", None)
         refresh_tool_definitions()
 
     def tearDown(self):
@@ -57,10 +55,8 @@ class ToolingRegistryTests(unittest.TestCase):
         os.environ.pop("PUPU_VISION_MODEL", None)
         os.environ.pop("PUPU_VISION_IMAGE_MODE", None)
         os.environ.pop("PUPU_VISION_TIMEOUT", None)
-        os.environ.pop("PUPU_MEMU_EMBED_API_KEY", None)
-        os.environ.pop("PUPU_MEMU_EMBED_BASE_URL", None)
-        os.environ.pop("PUPU_MEMU_API_KEY", None)
-        os.environ.pop("PUPU_MEMU_BASE_URL", None)
+        os.environ.pop("PUPU_SEMANTIC_INDEX_EMBED_API_KEY", None)
+        os.environ.pop("PUPU_SEMANTIC_INDEX_EMBED_BASE_URL", None)
         refresh_tool_definitions()
 
     def test_chat_tools_are_namespaced(self):
@@ -307,8 +303,7 @@ class ToolingRegistryTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "PUPU_MEMU_EMBED_API_KEY": "",
-                "PUPU_MEMU_API_KEY": "",
+                "PUPU_SEMANTIC_INDEX_EMBED_API_KEY": "",
             },
             clear=False,
         ):
@@ -321,8 +316,8 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertIn("API Key 未配置", missing_key)
 
     def test_describe_image_calls_openai_compatible_vision_endpoint(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
-        os.environ["PUPU_MEMU_EMBED_BASE_URL"] = "https://dashscope.test/compatible-mode/v1"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_BASE_URL"] = "https://dashscope.test/compatible-mode/v1"
         os.environ["PUPU_VISION_MODEL"] = "qwen3.6-flash"
         os.environ["PUPU_VISION_TIMEOUT"] = "12"
 
@@ -373,7 +368,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(content[1]["image_url"]["url"], "https://example.test/cup.png")
 
     def test_describe_image_returns_text_description(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
             def raise_for_status(self):
@@ -394,7 +389,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(result, "图里是一张上色插画。")
 
     def test_describe_image_prompt_alias_still_works(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
             def raise_for_status(self):
@@ -422,7 +417,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertIn("问题：这张画画得怎么样？", calls["prompt"])
 
     def test_describe_image_reuses_recent_session_image(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
             def raise_for_status(self):
@@ -457,7 +452,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(calls, ["https://example.test/recent.jpg"])
 
     def test_describe_image_reuses_downloaded_image_data(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
             def raise_for_status(self):
@@ -491,7 +486,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(calls, ["https://example.test/cached.jpg"])
 
     def test_describe_image_reuses_cached_vision_text_for_same_query(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
             def raise_for_status(self):
@@ -526,7 +521,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(post_calls, ["https://example.test/person.jpg"])
 
     def test_describe_image_retries_transient_vision_error(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
 
         class FakeResponse:
             def raise_for_status(self):
@@ -557,7 +552,7 @@ class ToolingRegistryTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
 
     def test_describe_image_reports_dashscope_error_body(self):
-        os.environ["PUPU_MEMU_EMBED_API_KEY"] = "embed-key"
+        os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"] = "embed-key"
         os.environ["PUPU_VISION_IMAGE_MODE"] = "url"
 
         def fake_post(url, *, headers, json, timeout):

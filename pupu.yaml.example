@@ -94,27 +94,21 @@ arbiter:
   # Set false only when you do not want arbiter audit records under instances/_shared.
   audit: true
 
-memu:
+semantic_index:
+  # Built-in source-backed semantic recall cache.
+  # SQLite remains the source of truth; semantic_cards can be rebuilt from it.
   enabled: auto
-  api_key: ""
-  base_url: https://api.openai.com/v1
-  method: rag
   retrieve_top_k: 5
-  ranking: salience
-  llm_provider: openai
-  llm_api_key: ""
-  llm_base_url: ""
-  llm_model: gpt-4o-mini
-  embed_provider: openai
   embed_api_key: ""
-  embed_base_url: ""
-  embed_model: text-embedding-3-small
+  embed_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  embed_model: text-embedding-v4
+  timeout: 45
 
 vision:
   # Qwen vision tool for image understanding. Uses Alibaba Cloud Model Studio /
   # DashScope OpenAI-compatible Chat Completions.
-  # The tool reuses memu.embed_api_key and memu.embed_base_url, so Bailian users
-  # only need one API key for embedding + vision.
+  # The tool reuses semantic_index.embed_api_key and semantic_index.embed_base_url,
+  # so Bailian users only need one API key for embedding + vision.
   model: qwen3.6-flash
   timeout: 45
 

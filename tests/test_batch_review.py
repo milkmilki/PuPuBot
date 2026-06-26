@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 import unittest
 from tests.helpers import activate_test_instance
@@ -8,7 +8,7 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
-os.environ["PUPU_MEMU_ENABLED"] = "false"
+os.environ["PUPU_SEMANTIC_INDEX_ENABLED"] = "false"
 
 from pupu.agent import (
     REVIEW_INTERVAL,
@@ -52,6 +52,14 @@ class BatchReviewTests(unittest.TestCase):
         init_db()
 
     def setUp(self):
+        activate_test_instance(
+            TEST_DB_PATH,
+            instance_id=f"batch-review-{self._testMethodName}",
+            fresh=True,
+        )
+        init_db()
+        os.environ["PUPU_SEMANTIC_INDEX_ENABLED"] = "false"
+        os.environ.pop("PUPU_SEMANTIC_INDEX_EMBED_API_KEY", None)
         self.session_id = f"test_batch_review_{self._testMethodName}"
         reset_session(self.session_id)
         conn = get_conn()

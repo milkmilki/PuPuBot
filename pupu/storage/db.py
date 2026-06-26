@@ -315,13 +315,39 @@ def init_db():
     )
     cursor.execute(
         """
-        CREATE TABLE IF NOT EXISTS memu_sync_log (
+        CREATE TABLE IF NOT EXISTS semantic_cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_type TEXT NOT NULL,
+            source_key TEXT NOT NULL,
+            source_id TEXT NOT NULL DEFAULT '',
+            source_version TEXT NOT NULL DEFAULT '',
+            projection_kind TEXT NOT NULL DEFAULT 'rag_card',
+            text TEXT NOT NULL,
+            embedding BLOB,
+            embedding_model TEXT NOT NULL DEFAULT '',
+            embedding_dim INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(source_type, source_key)
+        )
+    """
+    )
+    cursor.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_semantic_cards_source
+        ON semantic_cards(source_type, source_key)
+    """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS semantic_sync_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             context_session TEXT NOT NULL,
             identity_session TEXT NOT NULL,
             start_msg_id INTEGER NOT NULL,
             end_msg_id INTEGER NOT NULL,
-            memu_ids TEXT NOT NULL DEFAULT '',
+            semantic_ids TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL,
             error TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
@@ -330,10 +356,11 @@ def init_db():
     )
     cursor.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_memu_sync_lookup
-        ON memu_sync_log(identity_session, context_session, start_msg_id, end_msg_id, status)
+        CREATE INDEX IF NOT EXISTS idx_semantic_sync_lookup
+        ON semantic_sync_log(identity_session, context_session, start_msg_id, end_msg_id, status)
     """
     )
+    cursor.execute("DROP TABLE IF EXISTS memu_sync_log")
 
     message_columns = table_columns(conn, "messages")
     if "source" not in message_columns:

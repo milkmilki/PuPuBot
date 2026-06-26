@@ -19,7 +19,7 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
-os.environ["PUPU_MEMU_ENABLED"] = "false"
+os.environ["PUPU_SEMANTIC_INDEX_ENABLED"] = "false"
 
 from pupu import cli
 
@@ -67,7 +67,6 @@ class TidyCommandTests(unittest.TestCase):
             self.assertIsNotNone(ctx)
             self.assertEqual(ctx.instance_dir, expected.resolve())
             self.assertEqual(ctx.db_path, expected.resolve() / "data" / "pupu.db")
-            self.assertEqual(ctx.memu_db_path, expected.resolve() / "data" / "memu.db")
             self.assertEqual(ctx.persona_path, expected.resolve() / "persona.json")
 
     def test_cli_instance_selector_skips_when_context_exists(self):
@@ -95,7 +94,7 @@ class TidyCommandTests(unittest.TestCase):
             with self.subTest(command=command):
                 with patch.object(cli.console, "status", return_value=contextlib.nullcontext()) as mock_status:
                     with patch.object(cli.console, "print") as mock_print:
-                        with patch("pupu.cli.run_memu_maintenance", return_value=f"{mode} report") as mock_run:
+                        with patch("pupu.cli.run_semantic_maintenance", return_value=f"{mode} report") as mock_run:
                             handled = cli.handle_command(command)
 
                 self.assertFalse(handled)
@@ -105,7 +104,7 @@ class TidyCommandTests(unittest.TestCase):
 
     def test_cli_tidy_rejects_unknown_mode(self):
         with patch.object(cli.console, "print") as mock_print:
-            with patch("pupu.cli.run_memu_maintenance") as mock_run:
+            with patch("pupu.cli.run_semantic_maintenance") as mock_run:
                 handled = cli.handle_command("/tidy prune")
 
         self.assertFalse(handled)

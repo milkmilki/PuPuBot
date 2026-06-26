@@ -30,7 +30,7 @@ from .messages import (
     save_message,
     save_message_with_speaker,
 )
-from .memu_sync import has_successful_memu_sync, record_memu_sync
+from .semantic_sync import has_successful_semantic_sync, record_semantic_sync
 from .event_threads import (
     append_event_step,
     apply_event_thread_maintenance,
@@ -111,7 +111,7 @@ __all__ = [
     "get_recent_event_threads_from_conn",
     "get_last_message_time",
     "get_last_user_message_time",
-    "has_successful_memu_sync",
+    "has_successful_semantic_sync",
     "get_messages_in_range",
     "get_oldest_unsummarized_msg_id",
     "get_pending_review_last_message_time",
@@ -127,7 +127,7 @@ __all__ = [
     "list_scheduled_tasks",
     "reschedule_matching_scheduled_tasks",
     "reset_session",
-    "record_memu_sync",
+    "record_semantic_sync",
     "save_message",
     "save_message_with_speaker",
     "save_summary",

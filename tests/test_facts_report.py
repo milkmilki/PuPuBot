@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 import unittest
 from tests.helpers import activate_test_instance
@@ -7,7 +7,7 @@ TEST_DB_PATH = Path(__file__).resolve().parent / "_tmp" / "test_pupu.db"
 TEST_BACKUP_DIR = Path(__file__).resolve().parent / "_tmp" / "backups"
 activate_test_instance(TEST_DB_PATH)
 os.environ["PUPU_BACKUP_DIR"] = str(TEST_BACKUP_DIR)
-os.environ["PUPU_MEMU_ENABLED"] = "false"
+os.environ["PUPU_SEMANTIC_INDEX_ENABLED"] = "false"
 
 from pupu.facts_report import format_facts_report
 from pupu.memory import (
@@ -25,13 +25,21 @@ class FactsReportTests(unittest.TestCase):
         init_db()
 
     def setUp(self):
+        activate_test_instance(
+            TEST_DB_PATH,
+            instance_id=f"facts-report-{self._testMethodName}",
+            fresh=True,
+        )
+        init_db()
+        os.environ["PUPU_SEMANTIC_INDEX_ENABLED"] = "false"
+        os.environ.pop("PUPU_SEMANTIC_INDEX_EMBED_API_KEY", None)
         self.session_id = f"test_facts_report_{self._testMethodName}"
         reset_session(self.session_id)
 
     def test_new_session_report_includes_instance_facts(self):
         report = format_facts_report(self.session_id)
 
-        self.assertIn("实例 facts", report)
+        self.assertIn("Test PuPu facts", report)
         self.assertIn("喜欢的音乐", report)
         self.assertNotIn(f"{self.session_id} facts", report)
 
@@ -50,7 +58,7 @@ class FactsReportTests(unittest.TestCase):
 
         self.assertIn(f"{self.session_id} facts 1 条", report)
         self.assertIn("1. 身份: 读研学生", report)
-        self.assertIn("实例 facts", report)
+        self.assertIn("Test PuPu facts", report)
         self.assertIn("自称: 姐姐", report)
 
     def test_person_facts_can_store_relationship_facts(self):
@@ -159,7 +167,7 @@ class FactsReportTests(unittest.TestCase):
         report = format_facts_report(self.session_id, query="search --debug 刘海")
 
         self.assertIn("debug:", report)
-        self.assertIn("used_memu=", report)
+        self.assertIn("used_semantic_index=", report)
 
 
 if __name__ == "__main__":

@@ -30,9 +30,9 @@ from .logging_utils import (
 )
 from .memory import get_familiarity_info, get_recent_messages, init_db, reset_session
 from .memory_index import (
-    clear_memu_session,
-    format_memu_recall_report,
-    run_memu_maintenance,
+    clear_semantic_session,
+    format_semantic_recall_report,
+    run_semantic_maintenance,
 )
 from .message_sources import message_source_label
 from .proactive_control import is_proactive_enabled, set_proactive_enabled
@@ -67,7 +67,7 @@ def print_banner():
     console.print(
         Panel(
             f"[bold]仆仆[/bold] — 好感度: Lv.{score_info['level']}\n"
-            f"输入消息开始聊天 | /help 命令 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /events 事件线 | /facts 长期 facts | /tidy 整理 memU 记忆",
+            f"输入消息开始聊天 | /help 命令 | /quit 退出 | /score 好感度 | /history 最近聊天 | /tasks 定时任务 | /events 事件线 | /facts 长期 facts | /tidy 整理语义索引",
             style="cyan",
         )
     )
@@ -233,9 +233,9 @@ def handle_command(cmd: str) -> bool:
         if tidy_usage:
             console.print(tidy_usage)
             return False
-        status_text = "[cyan]仆仆在检查 memU 长期记忆...[/cyan]" if tidy_mode == "check" else "[cyan]仆仆在整理 memU 长期记忆...[/cyan]"
+        status_text = "[cyan]仆仆在检查语义索引...[/cyan]" if tidy_mode == "check" else "[cyan]仆仆在整理语义索引...[/cyan]"
         with console.status(status_text):
-            report = run_memu_maintenance(OWNER_SESSION, mode=tidy_mode)
+            report = run_semantic_maintenance(OWNER_SESSION, mode=tidy_mode)
         console.print(report)
         return False
     elif spec.command_id == "proactive":
@@ -257,7 +257,7 @@ def handle_command(cmd: str) -> bool:
             console.print("调试日志：" + ("已开启" if is_debug_console_enabled() else "已关闭"))
         elif action in {"on", "enable", "enabled", "open", "start", "1", "true", "yes", "开启", "打开", "开"}:
             set_debug_console_enabled(True)
-            console.print("调试日志已开启。memU、batch review 等详细日志会显示在控制台。")
+            console.print("调试日志已开启。语义索引、batch review 等详细日志会显示在控制台。")
         elif action in {"off", "disable", "disabled", "close", "stop", "0", "false", "no", "关闭", "关"}:
             set_debug_console_enabled(False)
             console.print("调试日志已关闭。详细日志仍会写入日志文件。")
@@ -269,13 +269,13 @@ def handle_command(cmd: str) -> bool:
         if not query:
             console.print("用法：/recall <内容>")
         else:
-            console.print(format_memu_recall_report(query, OWNER_SESSION))
+            console.print(format_semantic_recall_report(query, OWNER_SESSION))
         return False
     elif spec.command_id == "reset":
         confirm = console.input("[bold red]确认重置仆仆？所有记忆、好感度、聊天记录都会清空 (y/N): [/bold red]").strip().lower()
         if confirm == "y":
             reset_session(OWNER_SESSION)
-            clear_memu_session(OWNER_SESSION)
+            clear_semantic_session(OWNER_SESSION)
             console.print("[bold red]已重置。仆仆回到了最初的状态。[/bold red]")
         else:
             console.print("[dim]取消重置。[/dim]")
