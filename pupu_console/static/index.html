@@ -19,6 +19,7 @@
     </div>
     <div class="actions">
       <button type="button" id="btn-new">+ 新建仆仆</button>
+      <button type="button" id="btn-mcp">MCP</button>
       <button type="button" id="btn-souls">灵魂预设库</button>
     </div>
   </header>
@@ -57,6 +58,17 @@
     <h2>灵魂预设库</h2>
     <div id="souls-panel"></div>
     <menu><button type="button" id="btn-souls-close">关闭</button></menu>
+  </dialog>
+
+  <dialog id="dlg-mcp" class="modal wide mcp-modal">
+    <h2>MCP 设置</h2>
+    <p class="hint">管理 PuPu 内置工具和外接 stdio MCP。Secret 保存后不会回显。</p>
+    <div id="mcp-panel" class="mcp-panel"></div>
+    <menu>
+      <button type="button" id="btn-mcp-refresh">刷新工具</button>
+      <button type="button" class="primary" id="btn-mcp-save">保存</button>
+      <button type="button" id="btn-mcp-close">关闭</button>
+    </menu>
   </dialog>
 
   <script src="/static/app.js?v=siri-mode-20260621"></script>

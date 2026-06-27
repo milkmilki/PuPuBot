@@ -23,6 +23,12 @@ from pupu.hooks import HookEvent, register_hook
 from pupu.shared_runtime import async_shutdown_shared_runtime
 
 from . import instance_store, souls_store
+from .mcp_settings import (
+    build_mcp_settings_payload,
+    refresh_mcp_settings,
+    test_mcp_server,
+    update_mcp_settings,
+)
 from .paths import instances_dir
 from .process_manager import DESKTOP_SESSION_ID, ProcessManager
 
@@ -391,6 +397,40 @@ def api_put_desktop_api_key_settings(body: dict[str, Any]) -> dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"save settings failed: {e}") from e
     return api_get_desktop_api_key_settings()
+
+
+@app.get("/api/desktop/settings/mcp")
+def api_get_desktop_mcp_settings(request: Request) -> dict[str, Any]:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="MCP settings are only allowed from localhost")
+    return build_mcp_settings_payload()
+
+
+@app.put("/api/desktop/settings/mcp")
+def api_put_desktop_mcp_settings(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="MCP settings are only allowed from localhost")
+    try:
+        return update_mcp_settings(body)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"save MCP settings failed: {e}") from e
+
+
+@app.post("/api/desktop/settings/mcp/refresh")
+def api_refresh_desktop_mcp_settings(request: Request) -> dict[str, Any]:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="MCP refresh is only allowed from localhost")
+    try:
+        return refresh_mcp_settings()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"refresh MCP settings failed: {e}") from e
+
+
+@app.post("/api/desktop/settings/mcp/test")
+def api_test_desktop_mcp_settings(request: Request, body: dict[str, Any]) -> dict[str, Any]:
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="MCP test is only allowed from localhost")
+    return test_mcp_server(str(body.get("server_id") or body.get("id") or ""))
 
 
 @app.post("/api/desktop/chat")

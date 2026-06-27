@@ -5,6 +5,8 @@ const $ = (sel) => document.querySelector(sel);
 let selectedId = null;
 let logTimer = null;
 let ws = null;
+let mcpState = null;
+let deletedExternalMcp = [];
 
 async function api(path, opts = {}) {
   const r = await fetch(path, {
@@ -480,7 +482,321 @@ async function openSoulsDialog() {
   dlg.showModal();
 }
 
+function fieldInputType(field) {
+  if (field.type === "secret") return "password";
+  if (field.type === "number") return "number";
+  return "text";
+}
+
+function renderField(field) {
+  const key = escapeHtml(field.key || "");
+  const label = escapeHtml(field.label || field.key || "");
+  const placeholder = escapeHtml(field.placeholder || "");
+  const type = fieldInputType(field);
+  const value = escapeHtml(field.value || "");
+  const secret = field.secret && field.secret.has_value
+    ? `<span class="hint">已配置 ${escapeHtml(field.secret.masked || field.secret.preview || "")}</span>`
+    : "";
+  return `
+    <label>${label}
+      <input data-mcp-value-key="${key}" type="${type}" value="${value}" placeholder="${placeholder}" autocomplete="off" />
+      ${secret}
+    </label>
+  `;
+}
+
+function renderToolNames(tools) {
+  if (!Array.isArray(tools) || !tools.length) return "暂无已加载工具";
+  return tools.map((tool) => escapeHtml(tool.name || tool.raw_name || "")).filter(Boolean).join(", ");
+}
+
+function renderBuiltinMcpCard(server) {
+  const statusClass = server.loaded ? "ok" : server.enabled ? "warn" : "";
+  const fields = (server.config_fields || []).map(renderField).join("");
+  return `
+    <article class="mcp-card" data-mcp-kind="builtin" data-mcp-id="${escapeHtml(server.id)}">
+      <header>
+        <div>
+          <h4>${escapeHtml(server.display_name || server.name)}</h4>
+          <div class="mcp-badges">
+            <span class="badge">内置</span>
+            <span class="badge ${statusClass}">${escapeHtml(server.status || "")}</span>
+            <span class="badge">${Number(server.tool_count || 0)} tools</span>
+          </div>
+        </div>
+        <label class="inline"><input type="checkbox" data-mcp-enabled ${server.enabled ? "checked" : ""} />启用</label>
+      </header>
+      <p class="hint">${escapeHtml(server.description || "")}</p>
+      <p class="mcp-tools">${renderToolNames(server.tools)}</p>
+      ${fields ? `<div class="mcp-fields">${fields}</div>` : ""}
+      <div class="mcp-actions">
+        <button type="button" data-mcp-test="${escapeHtml(server.id)}">测试</button>
+      </div>
+      <p class="hint mcp-msg"></p>
+    </article>
+  `;
+}
+
+function renderExternalEnvField(field) {
+  const name = escapeHtml(field.name || "");
+  const type = field.type === "secret" ? "password" : "text";
+  const secret = field.secret && field.secret.has_value
+    ? `<span class="hint">已配置 ${escapeHtml(field.secret.masked || field.secret.preview || "")}</span>`
+    : "";
+  return `
+    <label>${name}
+      <input data-mcp-env-value data-mcp-env-name="${name}" type="${type}" value="${escapeHtml(field.value || "")}" placeholder="${field.type === "secret" ? "留空则保留旧值" : ""}" autocomplete="off" />
+      ${secret}
+    </label>
+  `;
+}
+
+function renderExternalMcpCard(server) {
+  const statusClass = server.loaded ? "ok" : server.enabled ? "warn" : "";
+  const env = Array.isArray(server.env) ? server.env : [];
+  const envFields = env.map(renderExternalEnvField).join("");
+  return `
+    <article class="mcp-card" data-mcp-kind="external" data-mcp-id="${escapeHtml(server.id)}" ${server.preset ? 'data-mcp-preset="1"' : ""}>
+      <header>
+        <div>
+          <h4>${escapeHtml(server.display_name || server.name)}</h4>
+          <div class="mcp-badges">
+            <span class="badge">外接</span>
+            <span class="badge ${statusClass}">${escapeHtml(server.status || "")}</span>
+            <span class="badge">${Number(server.tool_count || 0)} tools</span>
+          </div>
+        </div>
+        <label class="inline"><input type="checkbox" data-mcp-enabled ${server.enabled ? "checked" : ""} />启用</label>
+      </header>
+      <p class="hint">${escapeHtml(server.description || "External stdio MCP server")}</p>
+      <p class="mcp-tools">${renderToolNames(server.tools)}</p>
+      <div class="mcp-fields">
+        <label>名称 <input data-mcp-external-name value="${escapeHtml(server.id || "")}" ${server.preset ? "readonly" : ""} /></label>
+        <label>Exposures <input data-mcp-external-exposures value="${escapeHtml((server.exposures || []).join(","))}" placeholder="chat,proactive" /></label>
+      </div>
+      <details class="mcp-advanced">
+        <summary>高级本机执行配置</summary>
+        <div class="mcp-fields">
+          <label>Command <input data-mcp-external-command value="${escapeHtml(server.command || "")}" placeholder="cmd / npx / uvx" /></label>
+          <label>Args <input data-mcp-external-args value="${escapeHtml((server.args || []).join("\\n"))}" placeholder="每行或逗号分隔" /></label>
+          <label>CWD <input data-mcp-external-cwd value="${escapeHtml(server.cwd || "")}" /></label>
+          <label>Timeout <input data-mcp-external-timeout type="number" value="${escapeHtml(server.timeout || "")}" placeholder="30" /></label>
+          ${envFields || '<label>Env 名称 <input data-mcp-env-key value="API_KEY" /></label><label>Env 值 <input data-mcp-env-value type="password" placeholder="secret 或 token" /></label>'}
+        </div>
+      </details>
+      <div class="mcp-actions">
+        <button type="button" data-mcp-test="${escapeHtml(server.id)}">测试</button>
+        <button type="button" class="danger" data-mcp-delete="${escapeHtml(server.id)}">删除</button>
+      </div>
+      <p class="hint mcp-msg"></p>
+    </article>
+  `;
+}
+
+function renderMcpPanel(data) {
+  mcpState = data;
+  deletedExternalMcp = [];
+  const panel = $("#mcp-panel");
+  const builtin = (data.builtin_servers || []).map(renderBuiltinMcpCard).join("");
+  const external = (data.external_servers || []).map(renderExternalMcpCard).join("");
+  panel.innerHTML = `
+    <section class="mcp-section">
+      <h3>内置工具</h3>
+      <div class="mcp-grid">${builtin || "<p class='hint'>没有内置工具。</p>"}</div>
+    </section>
+    <section class="mcp-section">
+      <h3>外接 MCP</h3>
+      <div class="mcp-grid" id="external-mcp-grid">${external || "<p class='hint'>没有外接 MCP。</p>"}</div>
+      <div class="row">
+        <button type="button" id="btn-mcp-add">新增外接 MCP</button>
+        <button type="button" id="btn-mcp-add-tavily">添加 Tavily 搜索预设</button>
+      </div>
+    </section>
+  `;
+  panel.querySelectorAll("[data-mcp-test]").forEach((btn) => {
+    btn.addEventListener("click", () => testMcpServer(btn.dataset.mcpTest, btn.closest(".mcp-card")));
+  });
+  panel.querySelectorAll("[data-mcp-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteExternalMcp(btn.dataset.mcpDelete, btn.closest(".mcp-card")));
+  });
+  const addBtn = $("#btn-mcp-add");
+  if (addBtn) addBtn.addEventListener("click", addExternalMcpCard);
+  const addTavilyBtn = $("#btn-mcp-add-tavily");
+  if (addTavilyBtn) addTavilyBtn.addEventListener("click", addTavilyPresetCard);
+}
+
+async function openMcpDialog() {
+  const dlg = $("#dlg-mcp");
+  $("#mcp-panel").innerHTML = "<p class='hint'>加载中…</p>";
+  dlg.showModal();
+  const data = await api("/api/desktop/settings/mcp");
+  renderMcpPanel(data);
+}
+
+function splitList(value) {
+  return String(value || "")
+    .split(/[\n,，]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function collectMcpPayload() {
+  const payload = { builtin_servers: [], external_servers: [], values: {}, delete_external: deletedExternalMcp };
+  $("#mcp-panel").querySelectorAll("[data-mcp-kind='builtin']").forEach((card) => {
+    payload.builtin_servers.push({
+      id: card.dataset.mcpId,
+      enabled: !!card.querySelector("[data-mcp-enabled]")?.checked,
+    });
+    card.querySelectorAll("[data-mcp-value-key]").forEach((input) => {
+      const key = input.dataset.mcpValueKey;
+      const value = input.value.trim();
+      if (key && value) payload.values[key] = value;
+      if (key && input.type !== "password" && value === "") payload.values[key] = "";
+    });
+  });
+  $("#mcp-panel").querySelectorAll("[data-mcp-kind='external']").forEach((card) => {
+    if (card.dataset.deleted === "1") return;
+    const nameInput = card.querySelector("[data-mcp-external-name]");
+    const id = (nameInput?.value || card.dataset.mcpId || "").trim();
+    if (!id) return;
+    const env = [];
+    card.querySelectorAll("[data-mcp-env-value]").forEach((input) => {
+      const explicitName = input.dataset.mcpEnvName || "";
+      const name = explicitName || card.querySelector("[data-mcp-env-key]")?.value.trim() || "";
+      const value = input.value.trim();
+      if (name && value) env.push({ name, value });
+    });
+    const isPreset = card.dataset.mcpPreset === "1";
+    payload.external_servers.push({
+      id,
+      preset: isPreset,
+      enabled: !!card.querySelector("[data-mcp-enabled]")?.checked,
+      command: card.querySelector("[data-mcp-external-command]")?.value.trim() || "",
+      args: splitList(card.querySelector("[data-mcp-external-args]")?.value || ""),
+      cwd: card.querySelector("[data-mcp-external-cwd]")?.value.trim() || "",
+      timeout: card.querySelector("[data-mcp-external-timeout]")?.value.trim() || "",
+      exposures: splitList(card.querySelector("[data-mcp-external-exposures]")?.value || "chat"),
+      env,
+    });
+  });
+  return payload;
+}
+
+async function saveMcpSettings() {
+  const btn = $("#btn-mcp-save");
+  btn.disabled = true;
+  try {
+    const data = await api("/api/desktop/settings/mcp", {
+      method: "PUT",
+      body: JSON.stringify(collectMcpPayload()),
+    });
+    renderMcpPanel(data);
+    await api("/api/desktop/settings/mcp/refresh", { method: "POST", body: "{}" });
+    const refreshed = await api("/api/desktop/settings/mcp");
+    renderMcpPanel(refreshed);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function refreshMcpSettings() {
+  const data = await api("/api/desktop/settings/mcp/refresh", { method: "POST", body: "{}" });
+  renderMcpPanel(data);
+}
+
+async function testMcpServer(serverId, card) {
+  const msg = card?.querySelector(".mcp-msg");
+  if (msg) msg.textContent = "测试中…";
+  try {
+    const result = await api("/api/desktop/settings/mcp/test", {
+      method: "POST",
+      body: JSON.stringify({ server_id: serverId }),
+    });
+    if (msg) {
+      msg.textContent = result.ok
+        ? `可用，发现 ${Array.isArray(result.tools) ? result.tools.length : 0} 个工具。`
+        : `失败：${result.error || "unknown error"}`;
+    }
+  } catch (e) {
+    if (msg) msg.textContent = "失败：" + e.message;
+  }
+}
+
+function deleteExternalMcp(serverId, card) {
+  if (!window.confirm(`从配置中删除 MCP ${serverId}？不会删除本机程序。`)) return;
+  deletedExternalMcp.push(serverId);
+  if (card) {
+    card.dataset.deleted = "1";
+    card.style.display = "none";
+  }
+}
+
+function addExternalMcpCard() {
+  const grid = $("#external-mcp-grid");
+  const item = {
+    id: "",
+    display_name: "新的外接 MCP",
+    enabled: false,
+    status: "new",
+    command: "",
+    args: [],
+    env: [],
+    exposures: ["chat"],
+    tools: [],
+  };
+  grid.insertAdjacentHTML("beforeend", renderExternalMcpCard(item));
+  const card = grid.lastElementChild;
+  card.querySelectorAll("[data-mcp-test]").forEach((btn) => {
+    btn.addEventListener("click", () => testMcpServer(card.querySelector("[data-mcp-external-name]")?.value || "", card));
+  });
+  card.querySelectorAll("[data-mcp-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteExternalMcp(btn.dataset.mcpDelete || "new", card));
+  });
+}
+
+function addTavilyPresetCard() {
+  const existing = $("#mcp-panel").querySelector("[data-mcp-kind='external'][data-mcp-id='tavily']");
+  if (existing && existing.dataset.deleted !== "1") return;
+  const preset = (mcpState?.presets || []).find((item) => item.name === "tavily") || {
+    name: "tavily",
+    enabled: false,
+    command: "cmd",
+    args: ["/c", "npx", "-y", "tavily-mcp@latest"],
+    exposures: ["chat", "proactive"],
+    timeout: 30,
+    env: { TAVILY_API_KEY: "" },
+  };
+  const cardData = {
+    id: preset.name,
+    display_name: preset.display_name || "Web Search / Tavily",
+    description: preset.description || "",
+    enabled: !!preset.enabled,
+    status: "preset",
+    preset: true,
+    command: preset.command,
+    args: preset.args || [],
+    timeout: String(preset.timeout || ""),
+    exposures: preset.exposures || ["chat", "proactive"],
+    env: Object.keys(preset.env || {}).map((name) => ({ name, type: name.includes("KEY") ? "secret" : "text", value: "" })),
+    tools: [],
+  };
+  const grid = $("#external-mcp-grid");
+  grid.insertAdjacentHTML("beforeend", renderExternalMcpCard(cardData));
+  const card = grid.lastElementChild;
+  card.dataset.mcpPreset = "1";
+  card.querySelectorAll("[data-mcp-test]").forEach((btn) => {
+    btn.addEventListener("click", () => testMcpServer("tavily", card));
+  });
+  card.querySelectorAll("[data-mcp-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteExternalMcp("tavily", card));
+  });
+}
+
 $("#btn-souls-close").addEventListener("click", () => $("#dlg-souls").close());
+$("#btn-mcp-close").addEventListener("click", () => $("#dlg-mcp").close());
+$("#btn-mcp").addEventListener("click", () => openMcpDialog().catch((e) => alert("MCP 设置加载失败: " + e.message)));
+$("#btn-mcp-save").addEventListener("click", () => saveMcpSettings().catch((e) => alert("MCP 设置保存失败: " + e.message)));
+$("#btn-mcp-refresh").addEventListener("click", () => refreshMcpSettings().catch((e) => alert("MCP 刷新失败: " + e.message)));
 
 $("#btn-new").addEventListener("click", async () => {
   await loadSoulsIntoSelect();

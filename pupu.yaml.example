@@ -32,6 +32,18 @@ llm:
 
 # Extra community MCP servers mounted into PuPu's tool registry.
 # External server names are namespaced as mcp__<server>__<tool>.
+tool_servers:
+  # Builtin MCP-style tool servers. These can also be toggled in PuPu Console
+  # under MCP settings.
+  media:
+    enabled: true
+  scheduler:
+    enabled: true
+  filesystem:
+    enabled: true
+  system:
+    enabled: true
+
 mcp:
   servers:
     # Tavily MCP server: web search + extract + crawl + map + research.

@@ -68,15 +68,27 @@ class ToolRegistry:
         tool = self.resolve(name)
         return tool.handler(tool_input, context or ToolContext())
 
-    def describe_servers(self) -> list[dict[str, str | int]]:
-        out: list[dict[str, str | int]] = []
+    def describe_servers(self) -> list[dict[str, object]]:
+        out: list[dict[str, object]] = []
         for server in self._servers.values():
+            tools = []
+            for tool in server.list_tools():
+                tools.append(
+                    {
+                        "name": tool.qualified_name,
+                        "raw_name": tool.name,
+                        "description": tool.description,
+                        "exposures": sorted(tool.exposures),
+                        "admin_only": bool(tool.admin_only),
+                    }
+                )
             out.append(
                 {
                     "name": server.name,
                     "provider": server.provider,
-                    "tool_count": len(server.list_tools()),
+                    "tool_count": len(tools),
                     "description": server.description,
+                    "tools": tools,
                 }
             )
         return out

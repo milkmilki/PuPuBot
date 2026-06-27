@@ -2,6 +2,14 @@
 
 ## 2026-06-26
 
+### Console MCP 设置
+
+- Console 新增 `MCP` 设置入口，可查看、启停、测试和刷新内置工具与外接 stdio MCP server。
+- 新增本机设置 API：`/api/desktop/settings/mcp`、`/refresh`、`/test`，secret 字段只返回 masked 状态，不回显原文。
+- `tool_servers.<name>.enabled` 现在可从 `pupu.yaml` 控制内置工具开关；禁用 `media` 后 `mcp__media__describe_image` 不再进入工具 registry。
+- MCP 页把图片识别作为内置 `media` 工具展示，支持配置百炼 key/base_url、`vision.model` 和 `vision.timeout`；外接 Tavily/Web Search 作为可添加预设。
+- 外接 MCP 测试和加载失败日志会对配置里的 env secret 做脱敏，避免第三方 MCP 错误输出泄露 token。
+
 ### NapCat 实机冒烟
 
 - 新增本机限定的 `POST /api/debug/smoke/send_text` 调试入口，用于让运行中的 actor 通过真实 OneBot transport 发送私聊或群聊文本，方便不依赖 NapCat WebUI token 做实机冒烟。

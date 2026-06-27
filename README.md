@@ -211,6 +211,16 @@ sequenceDiagram
 
 这个循环会一直持续到模型不再返回 `tool_use`，而是返回普通文本。普通文本才会进入后续的对话输出解析、回复保存和 QQ/CLI 发送。工具调用期间模型附带的解释文字不会直接发送给用户；只有开启深度调试时，才会作为工具调用 reason 写入日志。
 
+### Console MCP 设置
+
+PuPu Console 顶部提供 `MCP` 设置入口，用于管理内置 MCP 风格工具和外接 stdio MCP：
+
+- 内置工具包括图片识别 `mcp__media__describe_image`、定时任务、文件系统和系统命令等，可通过 `tool_servers.<name>.enabled` 启用或禁用。
+- 图片识别配置在 MCP 页的“图片识别”卡片中，复用 `semantic_index.embed_api_key` / `semantic_index.embed_base_url`，并可设置 `vision.model`、`vision.timeout`。
+- 外接 MCP 仍写入 `mcp.servers`，Console 可新增、删除、测试和刷新。删除只移除 `pupu.yaml` 中的配置，不删除本机程序。
+- Secret 字段保存后不会回显；页面只显示是否已配置和末尾 masked 预览。
+- 修改配置后可点“刷新工具”，让 `ToolRegistry` 重新加载外接 MCP server 和内置工具开关。
+
 ## 开放群对话逻辑
 
 PuPuBot 支持多个实例同时待在同一个开放群里。为了避免两个 bot 抢话，每个实例收到群消息后不会立刻回复，而是先把消息放入本地 buffer，并把观察结果交给控制台进程内的内嵌仲裁 runtime。仲裁 runtime 按群上下文判断本轮应该由哪个 bot 接话；只有被选中的实例才会合并 buffer 内容并生成回复。

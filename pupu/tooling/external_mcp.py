@@ -72,6 +72,21 @@ def _mcp_text_from_content(content: Any) -> str:
     return "\n".join(part for part in parts if part.strip())
 
 
+def _redact_config_secrets(text: str, config: dict[str, Any]) -> str:
+    redacted = text
+    env = config.get("env")
+    if isinstance(env, dict):
+        for value in env.values():
+            secret = str(value or "").strip()
+            if secret:
+                redacted = redacted.replace(secret, "[secret]")
+    for key in ("api_key", "token", "secret", "password"):
+        secret = str(config.get(key) or "").strip()
+        if secret:
+            redacted = redacted.replace(secret, "[secret]")
+    return redacted
+
+
 def _json_rpc_error(message: dict[str, Any]) -> RuntimeError:
     return RuntimeError(f"MCP error: {message.get('error')}")
 
@@ -431,7 +446,8 @@ def build_external_mcp_servers() -> list[ExternalMcpToolServer]:
             server = ExternalMcpToolServer(config)
             server.list_tools()
         except Exception as exc:
-            print(f"[pupu][mcp] skip external server {name!r}: {exc}")
+            error = _redact_config_secrets(str(exc), config)
+            print(f"[pupu][mcp] skip external server {name!r}: {error}")
             try:
                 server.close()  # type: ignore[possibly-undefined]
             except Exception:

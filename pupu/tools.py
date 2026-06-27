@@ -123,7 +123,7 @@ def is_admin_tool(tool_name: str) -> bool:
     return is_registered_admin_tool(tool_name)
 
 
-def describe_tool_servers() -> list[dict[str, str | int]]:
+def describe_tool_servers() -> list[dict[str, object]]:
     return get_registry().describe_servers()
 
 

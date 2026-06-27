@@ -31,7 +31,7 @@ from pupu.tools import (
     refresh_tool_definitions,
 )
 from pupu.tooling import refresh_registry
-from pupu.tooling.external_mcp import PersistentMcpStdioSession
+from pupu.tooling.external_mcp import PersistentMcpStdioSession, build_external_mcp_servers
 from pupu.tooling.image_cache import clear_recent_images
 
 
@@ -292,6 +292,37 @@ class ToolingRegistryTests(unittest.TestCase):
         names = {tool["name"] for tool in get_chat_tool_definitions()}
         self.assertIn("mcp__media__describe_image", names)
         self.assertNotIn("mcp__media__look_at_image", names)
+
+    def test_external_mcp_load_error_redacts_env_secret(self):
+        os.environ["PUPU_MCP_SERVERS_JSON"] = json.dumps(
+            [
+                {
+                    "name": "bad",
+                    "command": "fake-command",
+                    "env": {"BAD_API_KEY": "super-secret-token"},
+                }
+            ]
+        )
+
+        class FakeExternalServer:
+            def __init__(self, config):
+                self.config = config
+
+            def list_tools(self):
+                raise RuntimeError(f"loader echoed {self.config['env']['BAD_API_KEY']}")
+
+            def close(self):
+                pass
+
+        captured = io.StringIO()
+        with patch("pupu.tooling.external_mcp.ExternalMcpToolServer", FakeExternalServer):
+            with patch("sys.stdout", captured):
+                servers = build_external_mcp_servers()
+
+        output = captured.getvalue()
+        self.assertEqual(servers, [])
+        self.assertIn("[secret]", output)
+        self.assertNotIn("super-secret-token", output)
 
     def test_describe_image_requires_image_and_key(self):
         no_image = execute_tool(

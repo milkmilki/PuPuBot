@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+import yaml
 from pathlib import Path
 from unittest.mock import patch
 
@@ -172,6 +173,220 @@ class DesktopApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertIn("Bot QQ / self_id", response.json()["detail"])
+
+    def test_mcp_settings_masks_secrets_and_lists_builtin_media(self) -> None:
+        yaml_path = Path(os.environ["PUPU_YAML_PATH"])
+        yaml_path.write_text(
+            yaml.safe_dump(
+                {
+                    "semantic_index": {
+                        "embed_api_key": "dashscope-secret",
+                        "embed_base_url": "https://dashscope.test/compatible-mode/v1",
+                    },
+                    "vision": {"model": "qwen3.6-flash", "timeout": 45},
+                    "mcp": {
+                        "servers": {
+                            "tavily": {
+                                "enabled": True,
+                                "command": "cmd",
+                                "args": ["/c", "npx", "-y", "tavily-mcp@latest"],
+                                "env": {"TAVILY_API_KEY": "tavily-secret"},
+                            }
+                        }
+                    },
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        with self.client:
+            response = self.client.get("/api/desktop/settings/mcp")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        media = next(item for item in body["builtin_servers"] if item["id"] == "media")
+        self.assertTrue(media["enabled"])
+        self.assertTrue(any(tool["name"] == "mcp__media__describe_image" for tool in media["tools"]))
+        key_field = next(field for field in media["config_fields"] if field["key"] == "semantic_index.embed_api_key")
+        self.assertEqual(key_field["value"], "")
+        self.assertTrue(key_field["secret"]["has_value"])
+        self.assertNotIn("dashscope-secret", str(body))
+        tavily = next(item for item in body["external_servers"] if item["id"] == "tavily")
+        self.assertEqual(tavily["env"][0]["value"], "")
+        self.assertTrue(tavily["env"][0]["secret"]["has_value"])
+        self.assertNotIn("tavily-secret", str(body))
+
+    def test_mcp_settings_get_requires_loopback(self) -> None:
+        with TestClient(self.server.app, client=("203.0.113.9", 4321)) as remote_client:
+            response = remote_client.get("/api/desktop/settings/mcp")
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_mcp_settings_put_updates_builtin_and_external_config(self) -> None:
+        with self.client:
+            response = self.client.put(
+                "/api/desktop/settings/mcp",
+                json={
+                    "builtin_servers": [{"id": "media", "enabled": False}],
+                    "values": {
+                        "vision.model": "qwen-test",
+                        "semantic_index.embed_api_key": "new-secret",
+                    },
+                    "external_servers": [
+                        {
+                            "id": "demo-search",
+                            "enabled": True,
+                            "command": "python",
+                            "args": ["-m", "demo"],
+                            "exposures": ["chat"],
+                            "env": [{"name": "DEMO_API_KEY", "value": "demo-secret"}],
+                        },
+                        {
+                            "id": "tavily",
+                            "preset": True,
+                            "enabled": True,
+                            "env": [{"name": "TAVILY_API_KEY", "value": "tavily-secret"}],
+                        }
+                    ],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        cfg = yaml.safe_load(Path(os.environ["PUPU_YAML_PATH"]).read_text(encoding="utf-8"))
+        self.assertFalse(cfg["tool_servers"]["media"]["enabled"])
+        self.assertEqual(cfg["vision"]["model"], "qwen-test")
+        self.assertEqual(cfg["semantic_index"]["embed_api_key"], "new-secret")
+        self.assertEqual(cfg["mcp"]["servers"]["demo-search"]["env"]["DEMO_API_KEY"], "demo-secret")
+        self.assertEqual(cfg["mcp"]["servers"]["tavily"]["env"]["TAVILY_API_KEY"], "tavily-secret")
+        self.assertEqual(cfg["mcp"]["servers"]["tavily"]["command"], "cmd")
+
+    def test_mcp_settings_refresh_applies_builtin_disable_to_registry(self) -> None:
+        yaml_path = Path(os.environ["PUPU_YAML_PATH"])
+        yaml_path.write_text(
+            yaml.safe_dump({"tool_servers": {"media": {"enabled": False}}}, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+        with self.client:
+            response = self.client.post("/api/desktop/settings/mcp/refresh")
+
+        self.assertEqual(response.status_code, 200)
+        from pupu.tools import get_chat_tool_definitions
+
+        names = {tool["name"] for tool in get_chat_tool_definitions()}
+        self.assertNotIn("mcp__media__describe_image", names)
+
+    def test_mcp_settings_test_reports_external_error_without_secret(self) -> None:
+        yaml_path = Path(os.environ["PUPU_YAML_PATH"])
+        yaml_path.write_text(
+            yaml.safe_dump(
+                {
+                    "mcp": {
+                        "servers": {
+                            "bad": {
+                                "enabled": True,
+                                "command": "definitely-not-a-real-mcp-command",
+                                "env": {"BAD_API_KEY": "super-secret-token"},
+                            }
+                        }
+                    }
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        with self.client:
+            response = self.client.post(
+                "/api/desktop/settings/mcp/test",
+                json={"server_id": "bad"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["ok"])
+        self.assertIn("error", body)
+        self.assertNotIn("super-secret-token", str(body))
+
+    def test_mcp_settings_test_redacts_secret_from_loader_error(self) -> None:
+        yaml_path = Path(os.environ["PUPU_YAML_PATH"])
+        yaml_path.write_text(
+            yaml.safe_dump(
+                {
+                    "mcp": {
+                        "servers": {
+                            "bad": {
+                                "enabled": True,
+                                "command": "fake-command",
+                                "env": {"BAD_API_KEY": "super-secret-token"},
+                            }
+                        }
+                    }
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        class FakeMcpServer:
+            def __init__(self, config):
+                self.config = config
+
+            def list_tools(self):
+                raise RuntimeError(f"loader echoed {self.config['env']['BAD_API_KEY']}")
+
+            def close(self):
+                pass
+
+        with self.client:
+            with patch("pupu_console.mcp_settings.ExternalMcpToolServer", FakeMcpServer):
+                response = self.client.post(
+                    "/api/desktop/settings/mcp/test",
+                    json={"server_id": "bad"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertFalse(body["ok"])
+        self.assertIn("[secret]", body["error"])
+        self.assertNotIn("super-secret-token", str(body))
+
+    def test_mcp_settings_delete_external_removes_configured_card(self) -> None:
+        yaml_path = Path(os.environ["PUPU_YAML_PATH"])
+        yaml_path.write_text(
+            yaml.safe_dump(
+                {
+                    "mcp": {
+                        "servers": {
+                            "demo": {
+                                "enabled": True,
+                                "command": "python",
+                                "env": {"DEMO_API_KEY": "demo-secret"},
+                            }
+                        }
+                    }
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        with self.client:
+            response = self.client.put(
+                "/api/desktop/settings/mcp",
+                json={"delete_external": ["demo"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        cfg = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        self.assertNotIn("demo", cfg.get("mcp", {}).get("servers", {}))
+        ids = {item["id"] for item in response.json()["external_servers"]}
+        self.assertNotIn("demo", ids)
 
 
 class DesktopProcessManagerTests(unittest.IsolatedAsyncioTestCase):
