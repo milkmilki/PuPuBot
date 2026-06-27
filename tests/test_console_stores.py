@@ -95,6 +95,15 @@ instance:
         loaded, _ = instance_store.read_instance_files(iid)
         self.assertFalse(loaded["proactive_enabled"])
 
+    def test_siri_qq_mode_roundtrips(self) -> None:
+        iid = instance_store.create_instance("Desk", qq_mode="siri", port=8098)
+        cfg, _ = instance_store.read_instance_files(iid)
+        self.assertEqual(cfg["qq_mode"], "siri")
+
+        instance_store.merge_update(iid, {"qq_mode": "siri"}, None)
+        cfg, _ = instance_store.read_instance_files(iid)
+        self.assertEqual(cfg["qq_mode"], "siri")
+
     def test_apply_soul_keeps_port_and_runtime_fields(self) -> None:
         iid = instance_store.create_instance("B", port=9101, qq_mode="napcat")
         instance_store.merge_update(

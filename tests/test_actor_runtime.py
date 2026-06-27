@@ -13,7 +13,7 @@ from pupu import dialogue_loop
 from pupu.actor import InstanceActor
 from pupu.actor.message_buffer import MessageBuffer, _Buffer
 from pupu.actor.onebot_transport import OneBotTransport, parse_onebot_message_segments
-from pupu.actor.types import ActorInboundMessage
+from pupu.actor.types import ActorInboundMessage, ActorOutboundTarget
 from pupu.instance_context import InstanceContext, activate_instance_context
 from pupu.logging_utils import close_all_log_sinks
 from pupu.memory import init_db
@@ -812,6 +812,34 @@ class ProcessManagerActorModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["runtime"], "actor")
         await asyncio.to_thread(pm.stop, iid)
         self.assertFalse(pm.status(iid)["running"])
+
+    async def test_siri_actor_mode_starts_without_onebot_transport(self) -> None:
+        iid = instance_store.create_instance("Desk", qq_mode="siri", port=18102)
+        pm = ProcessManager()
+        pm.set_event_loop(asyncio.get_running_loop())
+        delivered: list[str] = []
+        with patch("pupu.actor.instance_actor.preflight_model_providers"):
+            original = InstanceActor.from_instance_dir
+            with patch(
+                "pupu_console.process_manager.InstanceActor.from_instance_dir",
+                side_effect=lambda *args, **kwargs: original(
+                    *args,
+                    **{
+                        **kwargs,
+                        "cli_send": delivered.append,
+                        "start_background_tasks": False,
+                    },
+                ),
+            ):
+                pid = await asyncio.to_thread(pm.start, iid)
+
+        self.assertEqual(pid, os.getpid())
+        actor = pm.get_actor(iid)
+        self.assertIsNotNone(actor)
+        self.assertIsNone(actor.transport)
+        await actor.send_text(ActorOutboundTarget(session_id="desktop_owner"), "hello")
+        self.assertEqual(delivered, ["hello"])
+        await asyncio.to_thread(pm.stop, iid)
 
 
 if __name__ == "__main__":

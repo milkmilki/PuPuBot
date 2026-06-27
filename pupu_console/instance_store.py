@@ -47,6 +47,7 @@ DEFAULT_TOOL_SERVERS: dict[str, dict[str, bool]] = {
 }
 
 DEFAULT_OPEN_GROUP_DEBOUNCE_SECONDS = 35.0
+VALID_QQ_MODES = {"siri", "cli", "napcat"}
 _TRUE_VALUES = {"1", "true", "yes", "y", "on", "enable", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "n", "off", "disable", "disabled"}
 
@@ -87,7 +88,7 @@ def _scrub_deprecated_instance_keys(cfg: dict[str, Any]) -> None:
 def _normalize_instance_config(cfg: dict[str, Any]) -> None:
     _scrub_deprecated_instance_keys(cfg)
     qq_mode = str(cfg.get("qq_mode") or "napcat").strip().lower()
-    cfg["qq_mode"] = qq_mode if qq_mode in {"cli", "napcat"} else "napcat"
+    cfg["qq_mode"] = qq_mode if qq_mode in VALID_QQ_MODES else "napcat"
 
     cfg.setdefault("private_reply_mode", "owner_only")
     mode = str(cfg.get("private_reply_mode") or "owner_only").strip().lower()
