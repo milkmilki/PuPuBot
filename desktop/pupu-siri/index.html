@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PuPu Siri</title>
+  </head>
+  <body>
+    <main id="app" class="pet idle">
+      <button id="orb" class="orb" type="button" aria-label="PuPu Siri">
+        <span class="orb-core"></span>
+      </button>
+      <section id="panel" class="panel" aria-label="PuPu chat panel">
+        <header id="panelHead" class="panel-head">
+          <div>
+            <p id="statusText" class="status">Connecting</p>
+            <p id="instanceText" class="instance">PuPu Console</p>
+          </div>
+          <div class="panel-actions">
+            <button id="collapseButton" class="icon-button" type="button" aria-label="Collapse">x</button>
+          </div>
+        </header>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <form id="chatForm" class="chat-form">
+          <input
+            id="chatInput"
+            class="chat-input"
+            type="text"
+            autocomplete="off"
+            placeholder="和 PuPu 说句话"
+          />
+          <button id="sendButton" class="send-button" type="submit">Send</button>
+        </form>
+      </section>
+      <nav id="contextMenu" class="context-menu" role="menu" aria-label="PuPu Siri menu" hidden>
+        <button id="togglePanelButton" type="button" role="menuitem">展开面板</button>
+        <button id="settingsButton" type="button" role="menuitem">设置</button>
+        <button id="mcpSettingsButton" type="button" role="menuitem">MCP 设置</button>
+        <button id="openConsoleButton" type="button" role="menuitem">打开控制页</button>
+        <button id="startConsoleButton" type="button" role="menuitem">启动 Console</button>
+        <button id="shutdownConsoleButton" class="danger-item" type="button" role="menuitem">关闭 Console</button>
+        <button id="exitButton" class="danger-item" type="button" role="menuitem">退出</button>
+      </nav>
+      <section id="settingsPanel" class="settings-panel" aria-label="PuPu settings" hidden>
+        <header class="settings-head">
+          <div>
+            <p class="settings-title">设置</p>
+            <p id="settingsPath" class="settings-subtitle">pupu.yaml</p>
+          </div>
+          <button id="settingsCloseButton" class="icon-button" type="button" aria-label="Close settings">x</button>
+        </header>
+        <div class="settings-tabs" role="tablist" aria-label="设置类别">
+          <button id="settingsModelTab" class="settings-tab active" type="button" role="tab" aria-selected="true">模型</button>
+          <button id="settingsMcpTab" class="settings-tab" type="button" role="tab" aria-selected="false">MCP</button>
+        </div>
+        <form id="settingsForm" class="settings-form" data-settings-view="model">
+          <label class="settings-field">默认模型源
+            <select id="settingProvider" data-setting-key="llm.provider"></select>
+          </label>
+          <div class="settings-grid">
+            <label class="settings-field">聊天
+              <select id="settingChatProvider" data-setting-key="llm.chat_provider"></select>
+            </label>
+            <label class="settings-field">主动消息
+              <select id="settingProactiveProvider" data-setting-key="llm.proactive_provider"></select>
+            </label>
+          </div>
+          <div class="settings-section">
+            <p>DeepSeek</p>
+            <input id="settingDeepseekKey" data-setting-key="llm.deepseek.api_key" type="password" autocomplete="off" placeholder="API key" />
+            <input id="settingDeepseekBaseUrl" data-setting-key="llm.deepseek.base_url" type="text" autocomplete="off" placeholder="Base URL" />
+          </div>
+          <div class="settings-section">
+            <p>Anthropic</p>
+            <input id="settingAnthropicKey" data-setting-key="llm.anthropic.api_key" type="password" autocomplete="off" placeholder="API key" />
+            <input id="settingAnthropicBaseUrl" data-setting-key="llm.anthropic.base_url" type="text" autocomplete="off" placeholder="Base URL" />
+          </div>
+          <div class="settings-section">
+            <p>小说 AI</p>
+            <input id="settingXiaoshuoKey" data-setting-key="llm.xiaoshuoai.api_key" type="password" autocomplete="off" placeholder="API key" />
+            <input id="settingXiaoshuoBaseUrl" data-setting-key="llm.xiaoshuoai.base_url" type="text" autocomplete="off" placeholder="Base URL" />
+          </div>
+          <p id="settingsStatus" class="settings-status">留空的 API key 不会覆盖已有值。</p>
+          <button id="settingsSaveButton" class="settings-save" type="submit">保存设置</button>
+        </form>
+        <section id="mcpSettingsPanel" class="settings-form mcp-settings-view" data-settings-view="mcp" hidden>
+          <div class="mcp-toolbar">
+            <button id="mcpRefreshButton" class="settings-secondary" type="button">刷新工具</button>
+            <button id="mcpAddButton" class="settings-secondary" type="button">新增外接</button>
+            <button id="mcpAddTavilyButton" class="settings-secondary" type="button">添加 Tavily</button>
+          </div>
+          <div id="mcpSettingsList" class="mcp-settings-list" aria-live="polite"></div>
+          <p id="mcpSettingsStatus" class="settings-status">MCP 配置保存后会自动刷新工具。</p>
+          <button id="mcpSaveButton" class="settings-save" type="button">保存 MCP</button>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
