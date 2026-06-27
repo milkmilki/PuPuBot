@@ -2,6 +2,12 @@
 
 ## 2026-06-26
 
+### Console 启动模式
+
+- 修复 Console 实例启动模式选择 `Siri / 桌宠模式` 后会被实例配置归一化回 `NapCat / QQ 模式` 的问题。
+- actor runtime 现在显式支持 `siri` 模式：启动实例但不监听 OneBot/NapCat 端口，供桌宠本地聊天 API 使用。
+- 补充 Console store、desktop API 和 actor runtime 回归测试，覆盖 `siri` 模式保存、启动和本地发送路径。
+
 ### Console MCP 设置
 
 - Console 新增 `MCP` 设置入口，可查看、启停、测试和刷新内置工具与外接 stdio MCP server。

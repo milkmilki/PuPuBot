@@ -174,6 +174,21 @@ class DesktopApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("Bot QQ / self_id", response.json()["detail"])
 
+    def test_start_instance_preserves_siri_launch_mode(self) -> None:
+        iid = instance_store.create_instance("Desk", qq_mode="napcat", port=18153)
+
+        with self.client:
+            with patch.object(self.server.pm, "start", return_value=1234):
+                response = self.client.post(
+                    f"/api/instances/{iid}/start",
+                    json={"qq_mode": "siri"},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["qq_mode"], "siri")
+        cfg, _ = instance_store.read_instance_files(iid)
+        self.assertEqual(cfg["qq_mode"], "siri")
+
     def test_mcp_settings_masks_secrets_and_lists_builtin_media(self) -> None:
         yaml_path = Path(os.environ["PUPU_YAML_PATH"])
         yaml_path.write_text(

@@ -152,9 +152,11 @@ class InstanceActor:
                     self._log("[PuPu QQ] mode: NapCat actor (OneBot v11)")
                 elif self.context.qq_mode == "cli":
                     self._log("[PuPu CLI] mode: actor")
+                elif self.context.qq_mode == "siri":
+                    self._log("[PuPu Siri] mode: desktop actor")
                 else:
                     raise RuntimeError(
-                        f"actor runtime only supports napcat/cli for now, got {self.context.qq_mode!r}"
+                        f"actor runtime only supports napcat/cli/siri for now, got {self.context.qq_mode!r}"
                     )
                 self._started = True
                 await emit_instance_status("running")
@@ -298,7 +300,7 @@ class InstanceActor:
 
     async def _send_by_session(self, session_id: str, text: str) -> None:
         sid = str(session_id or "")
-        if self.context.qq_mode == "cli":
+        if self.context.qq_mode in {"cli", "siri"}:
             await self.send_text(ActorOutboundTarget(session_id=sid), text)
             return
         if sid == OWNER_SESSION:
@@ -322,7 +324,7 @@ class InstanceActor:
                 await self.send_text(ActorOutboundTarget(session_id=sid, group_id=tail), text)
 
     async def send_text(self, target: ActorOutboundTarget, text: str) -> None:
-        if self.context.qq_mode == "cli":
+        if self.context.qq_mode in {"cli", "siri"}:
             line = str(text).rstrip()
             if self._cli_send is not None:
                 self._cli_send(line)
