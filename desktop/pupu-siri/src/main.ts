@@ -1,3 +1,4 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -25,17 +26,42 @@ import {
 import "./styles.css";
 
 type PetState = "idle" | "thinking" | "speaking" | "error" | "reviewing" | "offline";
+type PetAssetState = PetState | "dragging";
+type SettingsView = "model" | "mcp" | "appearance";
+type PetAssetConfig = Record<PetAssetState, string>;
+
+const PET_ASSET_STORAGE_KEY = "pupu-siri.pet-assets.v1";
+const PET_ASSET_STATES: Array<{ key: PetAssetState; label: string; hint: string }> = [
+  { key: "idle", label: "静息", hint: "默认外观；其他状态未设置时也会用它。" },
+  { key: "dragging", label: "拖拽", hint: "拖动小球时短暂显示。" },
+  { key: "thinking", label: "思考", hint: "发给模型、启动 Console 或等待回复时显示。" },
+  { key: "speaking", label: "回复", hint: "模型回复生成后、逐字显示时显示。" },
+  { key: "reviewing", label: "整理记忆", hint: "后台整理记忆时显示。" },
+  { key: "error", label: "出错", hint: "聊天或连接失败时显示。" },
+  { key: "offline", label: "离线", hint: "Console 或实例未连接时显示。" }
+];
+const EMPTY_ASSET_CONFIG: PetAssetConfig = {
+  idle: "",
+  dragging: "",
+  thinking: "",
+  speaking: "",
+  error: "",
+  reviewing: "",
+  offline: ""
+};
+
 const COLLAPSED_SIZE = new LogicalSize(112, 112);
 const EXPANDED_SIZE = new LogicalSize(384, 520);
 const MENU_SIZE = new LogicalSize(220, 315);
 const STREAM_CHUNK_DELAY_MS = 58;
-const SIZE_DELTA = {
-  width: EXPANDED_SIZE.width - COLLAPSED_SIZE.width,
-  height: EXPANDED_SIZE.height - COLLAPSED_SIZE.height
-};
+const LOCAL_PATH_PATTERN = /^(?:[a-zA-Z]:[\\/]|\\\\|\/)/;
+const URL_PATTERN = /^(?:https?:|data:|blob:|asset:|file:)/i;
+const VIDEO_ASSET_PATTERN = /\.(?:mp4|webm|ogg|mov)(?:[?#].*)?$/i;
 
 const app = document.querySelector<HTMLElement>("#app")!;
 const orb = document.querySelector<HTMLButtonElement>("#orb")!;
+const orbAsset = document.querySelector<HTMLElement>("#orbAsset")!;
+const orbVideo = document.querySelector<HTMLVideoElement>("#orbVideo")!;
 const panel = document.querySelector<HTMLElement>("#panel")!;
 const panelHead = document.querySelector<HTMLElement>("#panelHead")!;
 const contextMenu = document.querySelector<HTMLElement>("#contextMenu")!;
@@ -50,6 +76,7 @@ const settingsPanel = document.querySelector<HTMLElement>("#settingsPanel")!;
 const settingsCloseButton = document.querySelector<HTMLButtonElement>("#settingsCloseButton")!;
 const settingsModelTab = document.querySelector<HTMLButtonElement>("#settingsModelTab")!;
 const settingsMcpTab = document.querySelector<HTMLButtonElement>("#settingsMcpTab")!;
+const settingsAppearanceTab = document.querySelector<HTMLButtonElement>("#settingsAppearanceTab")!;
 const settingsForm = document.querySelector<HTMLFormElement>("#settingsForm")!;
 const settingsPath = document.querySelector<HTMLElement>("#settingsPath")!;
 const settingsStatus = document.querySelector<HTMLElement>("#settingsStatus")!;
@@ -61,6 +88,11 @@ const mcpSaveButton = document.querySelector<HTMLButtonElement>("#mcpSaveButton"
 const mcpRefreshButton = document.querySelector<HTMLButtonElement>("#mcpRefreshButton")!;
 const mcpAddButton = document.querySelector<HTMLButtonElement>("#mcpAddButton")!;
 const mcpAddTavilyButton = document.querySelector<HTMLButtonElement>("#mcpAddTavilyButton")!;
+const appearanceSettingsPanel = document.querySelector<HTMLElement>("#appearanceSettingsPanel")!;
+const appearanceAssetList = document.querySelector<HTMLElement>("#appearanceAssetList")!;
+const appearanceSettingsStatus = document.querySelector<HTMLElement>("#appearanceSettingsStatus")!;
+const appearanceSaveButton = document.querySelector<HTMLButtonElement>("#appearanceSaveButton")!;
+const appearanceResetButton = document.querySelector<HTMLButtonElement>("#appearanceResetButton")!;
 const statusText = document.querySelector<HTMLElement>("#statusText")!;
 const instanceText = document.querySelector<HTMLElement>("#instanceText")!;
 const messages = document.querySelector<HTMLElement>("#messages")!;
@@ -94,14 +126,90 @@ let streamRunId = 0;
 let consoleShutdownRequested = false;
 let shutdownConfirmArmed = false;
 let shutdownConfirmTimer = 0;
-let settingsView: "model" | "mcp" = "model";
+let settingsView: SettingsView = "model";
 let mcpState: McpSettings | null = null;
 let deletedExternalMcp: string[] = [];
+let petAssetConfig = loadPetAssetConfig();
+let activeAssetState: PetAssetState = "offline";
 
 function setState(state: PetState, label?: string) {
   lastState = state;
-  app.className = `pet ${state}${expanded || settingsOpen ? " expanded" : ""}`;
+  activeAssetState = state;
+  refreshPetClass();
+  applyPetAsset();
   statusText.textContent = label ?? statusLabel(state);
+}
+
+function refreshPetClass() {
+  const classes = ["pet", lastState];
+  if (activeAssetState === "dragging") classes.push("dragging");
+  if (expanded || settingsOpen) classes.push("expanded");
+  app.className = classes.join(" ");
+}
+
+function loadPetAssetConfig(): PetAssetConfig {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(PET_ASSET_STORAGE_KEY) || "{}") as Partial<PetAssetConfig>;
+    return normalizePetAssetConfig(saved);
+  } catch {
+    return { ...EMPTY_ASSET_CONFIG };
+  }
+}
+
+function normalizePetAssetConfig(input: Partial<PetAssetConfig>): PetAssetConfig {
+  const next = { ...EMPTY_ASSET_CONFIG };
+  for (const { key } of PET_ASSET_STATES) {
+    next[key] = String(input[key] ?? "").trim();
+  }
+  return next;
+}
+
+function savePetAssetConfig() {
+  window.localStorage.setItem(PET_ASSET_STORAGE_KEY, JSON.stringify(petAssetConfig));
+}
+
+function resolvePetAssetValue(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (LOCAL_PATH_PATTERN.test(trimmed) && !URL_PATTERN.test(trimmed)) {
+    try {
+      return convertFileSrc(trimmed);
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+function selectedAssetValue(state: PetAssetState): string {
+  return petAssetConfig[state] || petAssetConfig.idle || "";
+}
+
+function applyPetAsset() {
+  const value = selectedAssetValue(activeAssetState);
+  const resolved = resolvePetAssetValue(value);
+  orb.classList.toggle("has-custom-asset", !!resolved);
+  const isVideo = VIDEO_ASSET_PATTERN.test(value);
+  orb.classList.toggle("has-video-asset", !!resolved && isVideo);
+  if (resolved && isVideo) {
+    orbAsset.style.backgroundImage = "";
+    if (orbVideo.src !== resolved) orbVideo.src = resolved;
+    void orbVideo.play().catch(() => undefined);
+  } else if (resolved) {
+    orbVideo.removeAttribute("src");
+    orbVideo.load();
+    orbAsset.style.backgroundImage = `url("${resolved.replace(/"/g, '\\"')}")`;
+  } else {
+    orbVideo.removeAttribute("src");
+    orbVideo.load();
+    orbAsset.style.backgroundImage = "";
+  }
+}
+
+function setDragAssetActive(active: boolean) {
+  activeAssetState = active ? "dragging" : lastState;
+  refreshPetClass();
+  applyPetAsset();
 }
 
 function statusLabel(state: PetState): string {
@@ -140,18 +248,21 @@ function armShutdownConfirmation() {
 async function resizeWindow(value: boolean, currentExpanded = expanded) {
   if (!appWindow) return;
   try {
+    const targetSize = value ? EXPANDED_SIZE : COLLAPSED_SIZE;
     if (value === currentExpanded) {
-      await appWindow.setSize(value ? EXPANDED_SIZE : COLLAPSED_SIZE);
+      await appWindow.setSize(targetSize);
       return;
     }
     const currentPosition = await appWindow.outerPosition();
+    const currentSize = await appWindow.outerSize();
     const scaleFactor = await appWindow.scaleFactor();
-    const direction = value ? -1 : 1;
-    await appWindow.setSize(value ? EXPANDED_SIZE : COLLAPSED_SIZE);
+    const currentLogicalHeight = currentSize.height / scaleFactor;
+    const heightDelta = targetSize.height - currentLogicalHeight;
+    await appWindow.setSize(targetSize);
     await appWindow.setPosition(
       new LogicalPosition(
         currentPosition.x / scaleFactor,
-        currentPosition.y / scaleFactor + (SIZE_DELTA.height * direction)
+        currentPosition.y / scaleFactor - heightDelta
       )
     );
   } catch {
@@ -163,15 +274,17 @@ async function resizeForContextMenu(open: boolean) {
   if (!appWindow) return;
   if (expanded) return;
   try {
+    const targetSize = open ? MENU_SIZE : COLLAPSED_SIZE;
     const currentPosition = await appWindow.outerPosition();
+    const currentSize = await appWindow.outerSize();
     const scaleFactor = await appWindow.scaleFactor();
-    const direction = open ? -1 : 1;
-    const heightDelta = MENU_SIZE.height - COLLAPSED_SIZE.height;
-    await appWindow.setSize(open ? MENU_SIZE : COLLAPSED_SIZE);
+    const currentLogicalHeight = currentSize.height / scaleFactor;
+    const heightDelta = targetSize.height - currentLogicalHeight;
+    await appWindow.setSize(targetSize);
     await appWindow.setPosition(
       new LogicalPosition(
         currentPosition.x / scaleFactor,
-        currentPosition.y / scaleFactor + heightDelta * direction
+        currentPosition.y / scaleFactor - heightDelta
       )
     );
   } catch {
@@ -268,14 +381,17 @@ async function saveSettings() {
   }
 }
 
-function setSettingsView(view: "model" | "mcp") {
+function setSettingsView(view: SettingsView) {
   settingsView = view;
   settingsModelTab.classList.toggle("active", view === "model");
   settingsMcpTab.classList.toggle("active", view === "mcp");
+  settingsAppearanceTab.classList.toggle("active", view === "appearance");
   settingsModelTab.setAttribute("aria-selected", view === "model" ? "true" : "false");
   settingsMcpTab.setAttribute("aria-selected", view === "mcp" ? "true" : "false");
+  settingsAppearanceTab.setAttribute("aria-selected", view === "appearance" ? "true" : "false");
   settingsForm.hidden = view !== "model";
   mcpSettingsPanel.hidden = view !== "mcp";
+  appearanceSettingsPanel.hidden = view !== "appearance";
 }
 
 function splitList(value: string) {
@@ -317,6 +433,42 @@ function appendField(
     label.appendChild(makeElement("span", "field-hint", hint));
   }
   parent.appendChild(label);
+}
+
+function renderAppearanceSettings() {
+  appearanceAssetList.textContent = "";
+  for (const { key, label, hint } of PET_ASSET_STATES) {
+    const input = makeTextInput(petAssetConfig[key], "例如 D:\\\\PuPuAssets\\\\idle.gif 或 ./assets/idle.webp");
+    input.dataset.petAssetState = key;
+    appendField(appearanceAssetList, label, input, hint);
+  }
+  appearanceSettingsStatus.textContent = "支持 http(s)、data、相对路径和本机绝对路径。";
+}
+
+function collectAppearanceSettings(): PetAssetConfig {
+  const next = { ...EMPTY_ASSET_CONFIG };
+  appearanceAssetList.querySelectorAll<HTMLInputElement>("[data-pet-asset-state]").forEach((input) => {
+    const key = input.dataset.petAssetState as PetAssetState | undefined;
+    if (!key) return;
+    next[key] = input.value.trim();
+  });
+  return next;
+}
+
+function saveAppearanceSettings() {
+  petAssetConfig = normalizePetAssetConfig(collectAppearanceSettings());
+  savePetAssetConfig();
+  applyPetAsset();
+  renderAppearanceSettings();
+  appearanceSettingsStatus.textContent = "外观资源已保存。";
+}
+
+function resetAppearanceSettings() {
+  petAssetConfig = { ...EMPTY_ASSET_CONFIG };
+  savePetAssetConfig();
+  applyPetAsset();
+  renderAppearanceSettings();
+  appearanceSettingsStatus.textContent = "已恢复内置小球。";
 }
 
 function secretHint(secret?: { configured?: boolean; has_value?: boolean; preview?: string; masked?: string }) {
@@ -700,7 +852,7 @@ async function setExpanded(value: boolean) {
     await resizeWindow(true, wasExpanded);
   }
   expanded = value;
-  app.classList.toggle("expanded", expanded || settingsOpen);
+  refreshPetClass();
   panel.toggleAttribute("hidden", !expanded);
   if (expanded) {
     window.setTimeout(() => {
@@ -713,7 +865,7 @@ async function setExpanded(value: boolean) {
   }
 }
 
-async function setSettingsOpen(value: boolean, initialView: "model" | "mcp" = "model") {
+async function setSettingsOpen(value: boolean, initialView: SettingsView = "model") {
   closeContextMenu(false);
   const wasExpanded = expanded || settingsOpen;
   if (value) {
@@ -726,11 +878,14 @@ async function setSettingsOpen(value: boolean, initialView: "model" | "mcp" = "m
     panel.hidden = true;
   }
   settingsPanel.toggleAttribute("hidden", !settingsOpen);
-  app.classList.toggle("expanded", expanded || settingsOpen);
+  refreshPetClass();
   if (settingsOpen) {
     if (settingsView === "mcp") {
       await loadMcpSettings();
       mcpSaveButton.focus();
+    } else if (settingsView === "appearance") {
+      renderAppearanceSettings();
+      appearanceSaveButton.focus();
     } else {
       await loadSettings();
       settingsSaveButton.focus();
@@ -1022,6 +1177,7 @@ function canStartWindowDrag(event: MouseEvent) {
 function beginWindowDrag(event: MouseEvent) {
   if (!canStartWindowDrag(event)) return;
   dragStart = { x: event.screenX, y: event.screenY };
+  setDragAssetActive(true);
 }
 
 orb.addEventListener("click", () => {
@@ -1053,10 +1209,12 @@ window.addEventListener("mousemove", async (event) => {
   if (Math.hypot(dx, dy) < 4) return;
   didDrag = true;
   dragStart = null;
+  setDragAssetActive(true);
   await appWindow.startDragging();
 });
 window.addEventListener("mouseup", () => {
   dragStart = null;
+  setDragAssetActive(false);
   if (didDrag) {
     window.setTimeout(() => {
       didDrag = false;
@@ -1070,6 +1228,7 @@ window.addEventListener("click", (event) => {
 });
 window.addEventListener("blur", () => {
   dragStart = null;
+  setDragAssetActive(false);
   closeContextMenu();
 });
 window.addEventListener("keydown", (event) => {
@@ -1099,6 +1258,10 @@ settingsModelTab.addEventListener("click", () => {
 settingsMcpTab.addEventListener("click", () => {
   setSettingsView("mcp");
   if (!mcpState) void loadMcpSettings();
+});
+settingsAppearanceTab.addEventListener("click", () => {
+  setSettingsView("appearance");
+  renderAppearanceSettings();
 });
 openConsoleButton.addEventListener("click", () => {
   closeContextMenu();
@@ -1134,6 +1297,12 @@ mcpAddButton.addEventListener("click", () => {
 });
 mcpAddTavilyButton.addEventListener("click", () => {
   addTavilyPresetCard();
+});
+appearanceSaveButton.addEventListener("click", () => {
+  saveAppearanceSettings();
+});
+appearanceResetButton.addEventListener("click", () => {
+  resetAppearanceSettings();
 });
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();

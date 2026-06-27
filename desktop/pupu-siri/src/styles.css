@@ -54,6 +54,7 @@ select {
     transform 180ms ease,
     box-shadow 180ms ease,
     filter 180ms ease;
+  overflow: hidden;
 }
 
 .orb:active {
@@ -69,6 +70,48 @@ select {
     radial-gradient(circle at 42% 38%, rgba(255, 255, 255, 0.95), rgba(246, 253, 255, 0.34) 24%, rgba(34, 41, 62, 0.18) 60%),
     rgba(255, 255, 255, 0.2);
   backdrop-filter: blur(4px);
+}
+
+.orb-asset,
+.orb-video {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.orb-asset {
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+}
+
+.orb-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.orb.has-custom-asset {
+  background: transparent;
+}
+
+.orb.has-custom-asset .orb-asset {
+  opacity: 1;
+}
+
+.orb.has-custom-asset.has-video-asset .orb-asset {
+  opacity: 0;
+}
+
+.orb.has-custom-asset.has-video-asset .orb-video {
+  opacity: 1;
+}
+
+.orb.has-custom-asset .orb-core {
+  display: none;
 }
 
 .pet.thinking .orb {
@@ -322,7 +365,7 @@ select {
 .settings-tabs {
   padding: 8px 10px 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -459,10 +502,16 @@ select {
 .mcp-card,
 .mcp-fields,
 .mcp-env-section,
-.mcp-env-list {
+.mcp-env-list,
+.appearance-asset-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.appearance-actions {
+  display: flex;
+  justify-content: flex-start;
 }
 
 .mcp-section h3,

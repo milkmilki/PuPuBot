@@ -30,8 +30,32 @@ The panel has two tabs:
 
 - `模型`: model providers and API keys.
 - `MCP`: builtin tools such as media/vision and external stdio MCP servers such as Tavily.
+- `外观`: local desktop-pet state resources.
 
 The MCP tab reuses PuPu Console's MCP settings API. It can toggle builtin tools, edit Vision settings, add/remove external MCP servers, test one server, and refresh the tool registry. Empty secret inputs preserve the existing value.
+
+The `外观` tab is local to PuPu Siri. It lets you point each desktop-pet state at a replaceable image or animation resource:
+
+- `静息`: the default resource.
+- `拖拽`: shown while dragging the orb.
+- `思考`: shown while PuPu is thinking or starting Console.
+- `回复`: shown while a reply is being displayed.
+- `整理记忆`, `出错`, `离线`: optional state-specific resources.
+
+Any blank state falls back to `静息`; if `静息` is also blank, PuPu Siri uses the built-in orb. Resource values can be `http(s)`, `data:`, relative paths, or local absolute paths such as `D:\PuPuAssets\idle.gif`. Image formats render as the orb skin; `mp4`, `webm`, `ogg`, and `mov` render as muted looping video.
+
+Supported resource formats:
+
+| Type | Formats / values | Behavior |
+| --- | --- | --- |
+| Static image | `png`, `jpg`, `jpeg`, `webp`, `bmp`, `ico` | Rendered as the orb skin with `cover` sizing. |
+| Animated image | `gif`, animated `webp`, animated `png` when supported by WebView2 | Rendered as the orb skin with `cover` sizing. |
+| Video | `mp4`, `webm`, `ogg`, `mov` | Rendered as muted, autoplaying, looping video. |
+| URL / data | `https://...`, `http://...`, `data:image/...`, `data:video/...` | Used directly by the desktop view. |
+| Local absolute path | `D:\PuPuAssets\idle.gif`, `C:\...\thinking.mp4`, `\\server\share\idle.png` | Converted through Tauri's asset protocol. |
+| Relative path | `./assets/idle.webp`, `/assets/idle.webp` | Resolved by the frontend runtime. |
+
+The current renderer is a circular 76px orb, so square assets work best. Non-square assets are center-cropped. Audio tracks are ignored because video resources are always muted.
 
 ## Development
 

@@ -8,6 +8,8 @@
   <body>
     <main id="app" class="pet idle">
       <button id="orb" class="orb" type="button" aria-label="PuPu Siri">
+        <span id="orbAsset" class="orb-asset" aria-hidden="true"></span>
+        <video id="orbVideo" class="orb-video" muted loop playsinline aria-hidden="true"></video>
         <span class="orb-core"></span>
       </button>
       <section id="panel" class="panel" aria-label="PuPu chat panel">
@@ -51,6 +53,7 @@
         <div class="settings-tabs" role="tablist" aria-label="设置类别">
           <button id="settingsModelTab" class="settings-tab active" type="button" role="tab" aria-selected="true">模型</button>
           <button id="settingsMcpTab" class="settings-tab" type="button" role="tab" aria-selected="false">MCP</button>
+          <button id="settingsAppearanceTab" class="settings-tab" type="button" role="tab" aria-selected="false">外观</button>
         </div>
         <form id="settingsForm" class="settings-form" data-settings-view="model">
           <label class="settings-field">默认模型源
@@ -91,6 +94,15 @@
           <div id="mcpSettingsList" class="mcp-settings-list" aria-live="polite"></div>
           <p id="mcpSettingsStatus" class="settings-status">MCP 配置保存后会自动刷新工具。</p>
           <button id="mcpSaveButton" class="settings-save" type="button">保存 MCP</button>
+        </section>
+        <section id="appearanceSettingsPanel" class="settings-form appearance-settings-view" data-settings-view="appearance" hidden>
+          <p class="settings-status">为桌宠状态指定图片或动画资源。拖拽、思考、回复等状态留空时会使用静息资源；静息也留空时使用内置小球。</p>
+          <div id="appearanceAssetList" class="appearance-asset-list"></div>
+          <div class="appearance-actions">
+            <button id="appearanceResetButton" class="settings-secondary" type="button">恢复默认</button>
+          </div>
+          <p id="appearanceSettingsStatus" class="settings-status">支持 http(s)、data、相对路径和本机绝对路径。</p>
+          <button id="appearanceSaveButton" class="settings-save" type="button">保存外观</button>
         </section>
       </section>
     </main>
