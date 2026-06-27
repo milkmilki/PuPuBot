@@ -25,7 +25,7 @@ The TypeScript client contract is kept in `src/api.ts`. Keep new backend fields 
 
 ## Settings UI
 
-Right-click the Siri orb and choose `设置` to open the local settings panel, or choose `MCP 设置` to jump straight to the MCP tab.
+Right-click the Siri orb and choose `设置` to open the local settings panel.
 The panel has two tabs:
 
 - `模型`: model providers and API keys.
@@ -38,7 +38,7 @@ The MCP tab reuses PuPu Console's MCP settings API. It can toggle builtin tools,
 On Windows, you can start both PuPu Console and PuPu Siri from the repository root:
 
 ```powershell
-.\启动仆仆Siri.bat
+.\启动pupu_siri.bat
 ```
 
 The launcher checks backend dependencies, installs desktop dependencies when `node_modules` is missing, then starts PuPu Console and Tauri dev mode in the background.

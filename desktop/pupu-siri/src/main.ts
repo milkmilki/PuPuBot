@@ -27,7 +27,7 @@ import "./styles.css";
 type PetState = "idle" | "thinking" | "speaking" | "error" | "reviewing" | "offline";
 const COLLAPSED_SIZE = new LogicalSize(112, 112);
 const EXPANDED_SIZE = new LogicalSize(384, 520);
-const MENU_SIZE = new LogicalSize(220, 352);
+const MENU_SIZE = new LogicalSize(220, 315);
 const STREAM_CHUNK_DELAY_MS = 58;
 const SIZE_DELTA = {
   width: EXPANDED_SIZE.width - COLLAPSED_SIZE.width,
@@ -41,7 +41,6 @@ const panelHead = document.querySelector<HTMLElement>("#panelHead")!;
 const contextMenu = document.querySelector<HTMLElement>("#contextMenu")!;
 const togglePanelButton = document.querySelector<HTMLButtonElement>("#togglePanelButton")!;
 const settingsButton = document.querySelector<HTMLButtonElement>("#settingsButton")!;
-const mcpSettingsButton = document.querySelector<HTMLButtonElement>("#mcpSettingsButton")!;
 const openConsoleButton = document.querySelector<HTMLButtonElement>("#openConsoleButton")!;
 const startConsoleButton = document.querySelector<HTMLButtonElement>("#startConsoleButton")!;
 const shutdownConsoleButton = document.querySelector<HTMLButtonElement>("#shutdownConsoleButton")!;
@@ -1092,9 +1091,6 @@ togglePanelButton.addEventListener("click", () => {
 });
 settingsButton.addEventListener("click", () => {
   void setSettingsOpen(true, "model");
-});
-mcpSettingsButton.addEventListener("click", () => {
-  void setSettingsOpen(true, "mcp");
 });
 settingsModelTab.addEventListener("click", () => {
   setSettingsView("model");
