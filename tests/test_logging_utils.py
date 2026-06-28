@@ -172,6 +172,24 @@ class RuntimeLoggingTests(unittest.TestCase):
 
         original_print.assert_called_once()
 
+    def test_unicode_console_encode_error_does_not_skip_log_sink(self):
+        sink = StringIO()
+        console_lines: list[str] = []
+
+        def gbk_console_print(*args, **kwargs):
+            sep = kwargs.get("sep", " ")
+            end = kwargs.get("end", "\n")
+            text = sep.join(str(arg) for arg in args) + end
+            text.encode("gbk")
+            console_lines.append(text)
+
+        with patch.object(logging_utils, "_original_print", side_effect=gbk_console_print):
+            with patch.object(logging_utils, "_get_sink", return_value=sink):
+                logging_utils._patched_print("[23:19:51] <<< recv | private | owner | 🤫")
+
+        self.assertEqual(sink.getvalue(), "[23:19:51] <<< recv | private | owner | 🤫\n")
+        self.assertEqual(console_lines, ["[23:19:51] <<< recv | private | owner | \\U0001f92b\n"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -288,6 +288,8 @@ class MessageBuffer:
             return
         try:
             await self._process_buffer(buf, persist_user=True)
+        except Exception as exc:
+            self._log(f"[pupu] debounce flush error session={sid}: {type(exc).__name__}: {exc}")
         finally:
             self._session_phase.pop(sid, None)
             if sid in self._buffers and sid not in self._debounce_tasks:
