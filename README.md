@@ -424,6 +424,14 @@ python -m unittest discover tests
 
 不要直接使用裸的 `unittest discover`，某些工作区里历史临时文件可能会被误收集。
 
+必选回归测试包含 Unicode 表情消息链路：
+
+```powershell
+.\ForFun\Scripts\python.exe -m unittest tests.test_required_unicode_messages
+```
+
+它会模拟 Windows GBK 控制台收到 `🤫` 这类 QQ 文本表情，确认接收日志不会打断 debounce，消息原文仍会进入聊天模型。`python -m unittest discover tests` 默认也会运行这一项。
+
 可选的真实 NapCat/QQ 冒烟测试默认会跳过，避免普通回归误发 QQ 消息。确认 Console、NapCat 和测试群都已准备好后，可以显式开启：
 
 ```powershell

@@ -8,6 +8,7 @@
 - OneBot 表情、贴纸和表情图片现在会转成 `[emoji ...]` / `[sticker ...]` 文本占位，保证“文字 + 表情 + 文字”能组成同一轮输入。
 - 修复 Windows 控制台编码不支持 `🤫` 等 Unicode 表情时，接收日志打印抛 `UnicodeEncodeError` 并中断 debounce 处理的问题；日志文件仍保留 UTF-8 原文，控制台不支持的字符会安全转义。
 - debounce 后台任务现在会记录处理异常并清理会话状态，避免一次日志或聊天异常变成“收不到消息”的静默失败。
+- 新增必选回归测试 `tests.test_required_unicode_messages`，以后全量 `unittest discover tests` 会默认覆盖带 `🤫` 的 QQ 文本消息接收链路。
 - 补充 actor runtime 回归测试，覆盖独立表情解析和连续消息 buffer 拼接。
 
 ## 2026-06-26
