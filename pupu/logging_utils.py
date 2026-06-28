@@ -53,20 +53,35 @@ class _TeeStderr:
 
     def write(self, data):
         text = str(data)
-        self._original.write(text)
+        try:
+            self._original.write(text)
+        except UnicodeEncodeError:
+            try:
+                self._original.write(_console_safe_text(text, self._original))
+            except Exception:
+                pass
         sink = self._sink_getter()
         if sink is not None and text:
-            with _print_lock:
-                sink.write(text)
-                sink.flush()
+            try:
+                with _print_lock:
+                    sink.write(text)
+                    sink.flush()
+            except Exception:
+                pass
         return len(text)
 
     def flush(self):
-        self._original.flush()
+        try:
+            self._original.flush()
+        except Exception:
+            pass
         sink = self._sink_getter()
         if sink is not None:
-            with _print_lock:
-                sink.flush()
+            try:
+                with _print_lock:
+                    sink.flush()
+            except Exception:
+                pass
 
     def isatty(self):
         return bool(getattr(self._original, "isatty", lambda: False)())
@@ -166,30 +181,66 @@ def _get_sink():
     return _ensure_current_log_file()
 
 
-def _patched_print(*args, **kwargs):
+def _console_safe_text(text: str, stream=None) -> str:
+    encoding = getattr(stream, "encoding", None) or getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        return str(text).encode(encoding, errors="backslashreplace").decode(encoding, errors="replace")
+    except Exception:
+        return str(text).encode("ascii", errors="backslashreplace").decode("ascii", errors="replace")
+
+
+def _safe_echo_to_console(args, kwargs) -> None:
+    try:
+        _original_print(*args, **kwargs)
+        return
+    except UnicodeEncodeError:
+        pass
+
     file_target = kwargs.get("file")
     sep = kwargs.get("sep", " ")
     end = kwargs.get("end", "\n")
     text = sep.join(str(arg) for arg in args) + end
+    fallback_kwargs = {}
+    if file_target is not None:
+        fallback_kwargs["file"] = file_target
+    if kwargs.get("flush", False):
+        fallback_kwargs["flush"] = True
+    try:
+        _original_print(_console_safe_text(text, file_target), end="", **fallback_kwargs)
+    except Exception:
+        pass
 
-    should_echo = True
-    if file_target in (None, sys.stdout, sys.stderr, _original_stderr):
-        should_echo = is_debug_console_enabled() or not _is_verbose_console_line(text)
 
-    if should_echo:
-        _original_print(*args, **kwargs)
-
-    if file_target not in (None, sys.stdout, sys.stderr, _original_stderr):
-        return
-
+def _write_log_sink(text: str, *, flush: bool = False) -> None:
     sink = _get_sink()
     if sink is None or not text:
         return
 
-    with _print_lock:
-        sink.write(text)
-        if kwargs.get("flush", False) or text.endswith("\n"):
-            sink.flush()
+    try:
+        with _print_lock:
+            sink.write(text)
+            if flush or text.endswith("\n"):
+                sink.flush()
+    except Exception:
+        pass
+
+
+def _patched_print(*args, **kwargs):
+    file_target = kwargs.get("file")
+    if file_target not in (None, sys.stdout, sys.stderr, _original_stderr):
+        _original_print(*args, **kwargs)
+        return
+
+    sep = kwargs.get("sep", " ")
+    end = kwargs.get("end", "\n")
+    text = sep.join(str(arg) for arg in args) + end
+
+    should_echo = is_debug_console_enabled() or not _is_verbose_console_line(text)
+
+    if should_echo:
+        _safe_echo_to_console(args, kwargs)
+
+    _write_log_sink(text, flush=kwargs.get("flush", False))
 
 
 def get_log_file_path() -> str | None:

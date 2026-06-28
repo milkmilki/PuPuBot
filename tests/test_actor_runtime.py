@@ -225,6 +225,32 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
             )
             await actor.buffer.stop()
 
+    async def test_debounce_flush_logs_processing_errors_without_leaking_task_exception(self) -> None:
+        logs: list[str] = []
+        buffer = MessageBuffer(
+            send_text=AsyncMock(),
+            handle_command=AsyncMock(return_value=False),
+            log=logs.append,
+            debounce_seconds=0,
+        )
+        message = ActorInboundMessage(
+            session_id="owner",
+            identity_session=OWNER_SESSION,
+            user_id="111",
+            user_name="Owner",
+            text="🤫",
+            message_id="emoji-msg",
+        )
+        buffer._buffers["owner"] = _Buffer(message=message, texts=["🤫"])
+
+        error = UnicodeEncodeError("gbk", "🤫", 0, 1, "illegal multibyte sequence")
+        with patch.object(buffer, "_process_buffer", side_effect=error):
+            await buffer._debounce_flush("owner")
+
+        self.assertTrue(any("debounce flush error session=owner" in line for line in logs))
+        self.assertNotIn("owner", buffer._session_phase)
+        self.assertNotIn("owner", buffer._debounce_tasks)
+
     async def test_two_actor_buffers_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
