@@ -29,12 +29,25 @@ class OneBotParsingTests(unittest.TestCase):
                 {"type": "text", "data": {"text": "hi "}},
                 {"type": "at", "data": {"qq": "123"}},
                 {"type": "image", "data": {"url": "http://img"}},
-                {"type": "mface", "data": {"url": "http://sticker"}},
+                {"type": "mface", "data": {"url": "http://sticker", "summary": "🤫"}},
             ]
         )
-        self.assertEqual(text, "hi @123")
+        self.assertEqual(text, "hi @123[sticker: 🤫]")
         self.assertEqual(images, ["http://img"])
         self.assertEqual(ats, ["123"])
+
+    def test_parse_standalone_stickers_as_text(self) -> None:
+        text, images, ats = parse_onebot_message_segments(
+            [
+                {"type": "mface", "data": {"summary": "🤫"}},
+                {"type": "image", "data": {"subType": 1, "summary": "表情"}},
+                {"type": "face", "data": {"id": 178}},
+            ]
+        )
+
+        self.assertEqual(text, "[sticker: 🤫][sticker: 表情][emoji 178]")
+        self.assertEqual(images, [])
+        self.assertEqual(ats, [])
 
 
 class OneBotTransportTests(unittest.IsolatedAsyncioTestCase):
@@ -170,6 +183,47 @@ class ActorMessageTests(unittest.IsolatedAsyncioTestCase):
 
             mock_chat.assert_called_once()
             actor.buffer._send_text.assert_awaited_once()
+
+    async def test_standalone_sticker_message_stays_in_buffer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = self._make_ctx(Path(tmp), "actor-a")
+            actor = InstanceActor(ctx, preflight=False)
+            with activate_instance_context(ctx):
+                init_db()
+            await actor.handle_onebot_event(
+                {
+                    "post_type": "message",
+                    "message_type": "private",
+                    "user_id": 111,
+                    "message_id": 1,
+                    "message": [{"type": "text", "data": {"text": "不是分镜啦"}}],
+                }
+            )
+            await actor.handle_onebot_event(
+                {
+                    "post_type": "message",
+                    "message_type": "private",
+                    "user_id": 111,
+                    "message_id": 2,
+                    "message": [{"type": "mface", "data": {"summary": "🤫"}}],
+                }
+            )
+            await actor.handle_onebot_event(
+                {
+                    "post_type": "message",
+                    "message_type": "private",
+                    "user_id": 111,
+                    "message_id": 3,
+                    "message": [{"type": "text", "data": {"text": "姐姐先让我安静画一会"}}],
+                }
+            )
+
+            buf = actor.buffer._buffers["owner"]
+            self.assertEqual(
+                buf.texts,
+                ["不是分镜啦", "[sticker: 🤫]", "姐姐先让我安静画一会"],
+            )
+            await actor.buffer.stop()
 
     async def test_two_actor_buffers_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

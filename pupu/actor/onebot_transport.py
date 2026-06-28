@@ -252,6 +252,19 @@ class OneBotTransport:
         return data if isinstance(data, dict) else {}
 
 
+def _sticker_placeholder(data: dict, *, label: str = "sticker") -> str:
+    summary = str(
+        data.get("summary")
+        or data.get("text")
+        or data.get("name")
+        or data.get("emojiName")
+        or ""
+    ).strip()
+    if summary:
+        return f"[{label}: {summary}]"
+    return f"[{label}]"
+
+
 def parse_onebot_message_segments(message) -> tuple[str, list[str], list[str]]:
     """Return text, image URLs, at-target QQs from OneBot v11 message payload."""
     text_parts: list[str] = []
@@ -270,23 +283,25 @@ def parse_onebot_message_segments(message) -> tuple[str, list[str], list[str]]:
             text_parts.append(str(data.get("text") or ""))
         elif seg_type == "face":
             face_id = str(data.get("id") or "")
-            text_parts.append(f"[表情{face_id}]" if face_id else "[表情]")
+            text_parts.append(f"[emoji {face_id}]" if face_id else "[emoji]")
         elif seg_type == "at":
             qq = str(data.get("qq") or "").strip()
             if qq:
                 at_targets.append(qq)
-                text_parts.append("@全体成员" if qq == "all" else f"@{qq}")
-        elif seg_type in {"image", "mface"}:
-            if seg_type == "mface":
-                continue
+                text_parts.append("@all" if qq == "all" else f"@{qq}")
+        elif seg_type == "mface":
+            text_parts.append(_sticker_placeholder(data))
+        elif seg_type == "image":
             subtype = data.get("subType", data.get("sub_type"))
             try:
                 if subtype is not None and int(subtype) != 0:
+                    text_parts.append(_sticker_placeholder(data))
                     continue
             except Exception:
                 pass
             summary = str(data.get("summary") or "")
             if "表情" in summary:
+                text_parts.append(_sticker_placeholder(data))
                 continue
             url = str(data.get("url") or data.get("file") or "").strip()
             if url:
