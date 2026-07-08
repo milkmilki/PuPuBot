@@ -1,0 +1,28 @@
+tests/test_required_unicode_messages.py
+  s_437effe61372b1::t_8207949cacec52 10,35
+tests/helpers.py
+  s_437effe61372b1::t_0f82173613096a 35-36,45
+  s_437effe61372b1::t_4143ab828820cf 1,4,7,14-34,37-44,46
+  s_437effe61372b1::t_2096b64e7ecbaa 47-48
+tests/test_logging_utils.py
+  s_437effe61372b1::t_583c4dbe3a5f83 1,179
+  s_437effe61372b1::t_0e158a0e1049cb 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a44a7514ded762042297b550ae29df26ff579880",
+  "prompts": {},
+  "sessions": {
+    "s_437effe61372b1": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a4dc8b0666857aacdba1eb0",
+        "model": "openrouter-3o__dev"
+      },
+      "human_author": "MilkMili <milkmili@outlook.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
