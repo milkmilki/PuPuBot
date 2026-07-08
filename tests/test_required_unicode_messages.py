@@ -7,6 +7,7 @@ import pupu.logging_utils as logging_utils
 from pupu.actor.message_buffer import MessageBuffer, _Buffer
 from pupu.actor.types import ActorInboundMessage
 from pupu.sessions import OWNER_SESSION
+from tests.helpers import simulate_narrow_console
 
 
 class RequiredUnicodeMessageRegressionTests(unittest.IsolatedAsyncioTestCase):
@@ -14,14 +15,6 @@ class RequiredUnicodeMessageRegressionTests(unittest.IsolatedAsyncioTestCase):
         """Required regression: QQ text containing U+1F92B must reach chat."""
         emoji = chr(0x1F92B)
         sink = StringIO()
-        console_lines: list[str] = []
-
-        def gbk_console_print(*args, **kwargs):
-            sep = kwargs.get("sep", " ")
-            end = kwargs.get("end", "\n")
-            text = sep.join(str(arg) for arg in args) + end
-            text.encode("gbk")
-            console_lines.append(text)
 
         send_text = AsyncMock()
         buffer = MessageBuffer(
@@ -39,7 +32,7 @@ class RequiredUnicodeMessageRegressionTests(unittest.IsolatedAsyncioTestCase):
         )
         buf = _Buffer(message=message, texts=[emoji])
 
-        with patch.object(logging_utils, "_original_print", side_effect=gbk_console_print):
+        with simulate_narrow_console() as console_lines:
             with patch.object(logging_utils, "_get_sink", return_value=sink):
                 with patch.object(builtins, "print", logging_utils._patched_print):
                     with patch("pupu.actor.message_buffer.chat", return_value="ok") as mock_chat:

@@ -1,4 +1,4 @@
-﻿import tempfile
+import tempfile
 import unittest
 from datetime import datetime
 from io import StringIO
@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pupu.logging_utils as logging_utils
 from pupu.instance_context import InstanceContext, activate_instance_context
+from tests.helpers import simulate_narrow_console
 
 
 class _FakeDatetime:
@@ -174,16 +175,8 @@ class RuntimeLoggingTests(unittest.TestCase):
 
     def test_unicode_console_encode_error_does_not_skip_log_sink(self):
         sink = StringIO()
-        console_lines: list[str] = []
 
-        def gbk_console_print(*args, **kwargs):
-            sep = kwargs.get("sep", " ")
-            end = kwargs.get("end", "\n")
-            text = sep.join(str(arg) for arg in args) + end
-            text.encode("gbk")
-            console_lines.append(text)
-
-        with patch.object(logging_utils, "_original_print", side_effect=gbk_console_print):
+        with simulate_narrow_console() as console_lines:
             with patch.object(logging_utils, "_get_sink", return_value=sink):
                 logging_utils._patched_print("[23:19:51] <<< recv | private | owner | 🤫")
 
