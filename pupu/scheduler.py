@@ -47,7 +47,7 @@ def _is_wait_followup_task(task: dict) -> bool:
     return str(task.get("title") or "").strip().lower().startswith(WAIT_FOLLOWUP)
 
 
-def _finalize_due_task(task: dict) -> None:
+def _finalize_due_task(task: dict) -> bool:
     tid = task["id"]
     old_run = task["run_at"]
     rk = task.get("repeat_kind") or "once"
@@ -59,6 +59,7 @@ def _finalize_due_task(task: dict) -> None:
         ok = finalize_scheduled_task(tid, old_run, rk, task.get("interval_seconds"))
     if not ok:
         print(f"[pupu] scheduled task #{tid}: finalize skipped (stale run_at?)")
+    return bool(ok)
 
 
 async def _run_due_tasks_with_sender(send_func) -> None:
@@ -117,16 +118,21 @@ async def _run_due_tasks_with_sender(send_func) -> None:
             )
             continue
         text = str(reply).strip()
+        if not _finalize_due_task(task):
+            print(
+                "[pupu][scheduled-debug] scheduler_task_end "
+                f"task_id={tid} session={sid} result=finalize_failed"
+            )
+            continue
         try:
             await send_func(sid, text)
         except Exception as e:
             print(f"[pupu] scheduled task #{tid} send failed: {e}")
             print(
                 "[pupu][scheduled-debug] scheduler_task_end "
-                f"task_id={tid} session={sid} result=send_failed"
+                f"task_id={tid} session={sid} result=send_failed_after_finalize"
             )
             continue
-        _finalize_due_task(task)
         print(
             "[pupu][scheduled-debug] scheduler_task_end "
             f"task_id={tid} session={sid} result=sent_and_finalized"
