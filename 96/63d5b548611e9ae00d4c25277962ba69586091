@@ -1,0 +1,65 @@
+.gitignore
+  s_fc091473e7bdeb::t_351d4be88cf03e 37 gitai:{"mixed_line_ranges":[],"operations":[{"operation_id":"6a5df30d2f616ab3063b4dd8","tool_type":"agent","tool_id":"apply_patch","line_ranges":[{"Single":37}]}]}
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "9663d5b548611e9ae00d4c25277962ba69586091",
+  "prompts": {},
+  "humans": {
+    "h_9ef76d2876fd79": {
+      "author": "MilkMili <milkmili@outlook.com>"
+    }
+  },
+  "sessions": {
+    "s_fc091473e7bdeb": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5df2e52f616ab3063b4dc1",
+        "model": "gpt-5.5__dev"
+      },
+      "human_author": "MilkMili <milkmili@outlook.com>"
+    }
+  },
+  "attestation_metadata": {
+    ".gitignore": [
+      {
+        "hash": "s_fc091473e7bdeb::t_351d4be88cf03e",
+        "line_ranges": [
+          {
+            "Single": 37
+          }
+        ],
+        "mixed_line_ranges": [],
+        "operations": [
+          {
+            "operation_id": "6a5df30d2f616ab3063b4dd8",
+            "tool_type": "agent",
+            "tool_id": "apply_patch",
+            "line_ranges": [
+              {
+                "Single": 37
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "remote_transcripts": {
+    "s_fc091473e7bdeb": {
+      "tool": "trae",
+      "conversation_id": "6a5df2e52f616ab3063b4dc1",
+      "session_id": "6a5df2e52f616ab3063b4dc1",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    },
+    "s_fc091473e7bdeb::t_351d4be88cf03e": {
+      "tool": "trae",
+      "conversation_id": "6a5df2e52f616ab3063b4dc1",
+      "session_id": "6a5df2e52f616ab3063b4dc1",
+      "status": "remote_only",
+      "message": "Remote transcript resolution is not implemented yet for TRAE prompts."
+    }
+  }
+}
