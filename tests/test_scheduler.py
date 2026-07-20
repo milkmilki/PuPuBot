@@ -104,6 +104,37 @@ class SchedulerSendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mock_chat.call_args.kwargs["identity_session"], OWNER_SESSION)
         mock_finalize.assert_called_once()
 
+    async def test_send_failure_does_not_generate_same_task_again(self):
+        task = {
+            "id": 100,
+            "session_id": OWNER_SESSION,
+            "title": "near due",
+            "instruction": "say hi",
+            "run_at": "2026-05-01T09:00:00",
+            "repeat_kind": "once",
+            "interval_seconds": None,
+        }
+        active = True
+
+        def get_due_tasks(_before_iso, _limit):
+            return [task] if active else []
+
+        def finalize_task(*_args, **_kwargs):
+            nonlocal active
+            active = False
+            return True
+
+        async def disconnected_sender(_session_id, _text):
+            raise ConnectionError("NapCat is not connected")
+
+        with patch("pupu.scheduler.get_due_scheduled_tasks", side_effect=get_due_tasks):
+            with patch("pupu.scheduler.finalize_scheduled_task", side_effect=finalize_task):
+                with patch("pupu.agent.chat", return_value="reply") as mock_chat:
+                    await _run_due_tasks_with_sender(disconnected_sender)
+                    await _run_due_tasks_with_sender(disconnected_sender)
+
+        mock_chat.assert_called_once()
+
 
 class SchedulerGuardTests(unittest.TestCase):
     def test_is_wait_followup_task_detects_prefix(self):
