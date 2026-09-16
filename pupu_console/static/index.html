@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>PuPu 控制台</title>
+  <link rel="stylesheet" href="/static/style.css?v=siri-mode-20260621" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>PuPu 控制台</h1>
+    <div class="arbiter-bar" title="开放群仲裁已内嵌在控制台 actor runtime 中">
+      <span class="arbiter-title">仲裁</span>
+      <span id="arbiter-dot" class="dot off"></span>
+      <span id="arbiter-detail" class="arbiter-detail"></span>
+    </div>
+    <div class="actions">
+      <button type="button" id="btn-new">+ 新建仆仆</button>
+      <button type="button" id="btn-mcp">MCP</button>
+      <button type="button" id="btn-souls">灵魂预设库</button>
+    </div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" id="instance-list"></aside>
+    <main class="main" id="main-panel">
+      <p class="hint">左侧选择一个仆仆实例。</p>
+    </main>
+  </div>
+
+  <dialog id="dlg-new" class="modal">
+    <form id="form-new">
+      <h2>新建仆仆</h2>
+      <label>显示名称 <input name="display_name" value="仆仆" required /></label>
+      <label>端口 <input name="port" type="number" placeholder="自动" /></label>
+      <label>QQ 模式
+        <select name="qq_mode">
+          <option value="siri">Siri / 桌宠模式</option>
+          <option value="onebot">OneBot / SnowLuma</option>
+          <option value="cli">终端 CLI</option>
+        </select>
+      </label>
+      <label>基于灵魂预设
+        <select name="soul_slug" id="new-soul-select">
+          <option value="">（空白）</option>
+        </select>
+      </label>
+      <menu>
+        <button type="button" id="btn-new-cancel">取消</button>
+        <button type="submit" class="primary" id="btn-create-submit">创建</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-souls" class="modal wide">
+    <h2>灵魂预设库</h2>
+    <div id="souls-panel"></div>
+    <menu><button type="button" id="btn-souls-close">关闭</button></menu>
+  </dialog>
+
+  <dialog id="dlg-mcp" class="modal wide mcp-modal">
+    <h2>MCP 设置</h2>
+    <p class="hint">管理 PuPu 内置工具和外接 stdio MCP。Secret 保存后不会回显。</p>
+    <div id="mcp-panel" class="mcp-panel"></div>
+    <menu>
+      <button type="button" id="btn-mcp-refresh">刷新工具</button>
+      <button type="button" class="primary" id="btn-mcp-save">保存</button>
+      <button type="button" id="btn-mcp-close">关闭</button>
+    </menu>
+  </dialog>
+
+  <script src="/static/app.js?v=siri-mode-20260621"></script>
+</body>
+</html>

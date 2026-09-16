@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main, siri]
+  pull_request:
+    branches: [main, siri]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Byte-compile sources
+        run: python -m compileall -q pupu pupu_console tests
+
+      - name: Run unit tests
+        run: python -m unittest discover tests
+
+      - name: Check whitespace errors
+        run: git diff --check HEAD

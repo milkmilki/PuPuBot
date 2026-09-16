@@ -1,0 +1,7 @@
+"""Shared maintenance constants."""
+
+MAINTENANCE_HOUR = 3
+KEEP_RECENT_CHAT_TURNS = 12
+KEEP_RECENT_INTERNAL_MESSAGES = 20
+
+BUSY_REPORT_PREFIX = "记忆整理已经在运行了"

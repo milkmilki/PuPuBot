@@ -1,0 +1,187 @@
+import importlib
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+
+class AppConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_env = {
+            key: os.environ.get(key)
+            for key in (
+                "PUPU_REPO_ROOT",
+                "PUPU_YAML_PATH",
+                "PUPU_CHAT_PROVIDER",
+                "PUPU_JUDGE_PROVIDER",
+                "PUPU_DEEPSEEK_API_KEY",
+                "PUPU_DEEPSEEK_BASE_URL",
+                "PUPU_CONSOLE_PORT",
+                "PUPU_SEMANTIC_INDEX_ENABLED",
+                "PUPU_SEMANTIC_INDEX_EMBED_API_KEY",
+                "PUPU_SEMANTIC_INDEX_EMBED_BASE_URL",
+                "PUPU_TTS_ENABLED",
+                "PUPU_MCP_SERVERS_JSON",
+                "PUPU_TOOL_MAX_ROUNDS",
+                "PUPU_TOOL_MAX_CALLS",
+                "PUPU_TOOL_MAX_REPEATED_CALL",
+                "PUPU_TOOL_MAX_RESULT_CHARS",
+                "PUPU_TOOL_LOOP_TIMEOUT",
+                "PUPU_MEMORY_MAINTENANCE_ENABLED",
+                "PUPU_MEMORY_MAINTENANCE_HOUR",
+            )
+        }
+
+    def tearDown(self) -> None:
+        for key, value in self._old_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    def _write_yaml(self, text: str) -> Path:
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8")
+        self.addCleanup(lambda: Path(tmp.name).unlink(missing_ok=True))
+        with tmp:
+            tmp.write(text)
+        os.environ["PUPU_YAML_PATH"] = tmp.name
+        return Path(tmp.name)
+
+    def test_apply_app_config_env_maps_common_fields(self) -> None:
+        self._write_yaml(
+            """
+llm:
+  provider: deepseek
+  deepseek:
+    api_key: test-key
+    base_url: https://deepseek.test/anthropic
+console:
+  port: 8999
+semantic_index:
+  enabled: false
+  embed_api_key: embed-key
+  embed_base_url: https://dashscope.test/compatible-mode/v1
+tts:
+  enabled: true
+runtime:
+  tool_max_rounds: 6
+  tool_max_calls: 12
+  tool_max_repeated_call: 3
+  tool_max_result_chars: 16000
+  tool_loop_timeout: 90
+  memory_maintenance_enabled: true
+  memory_maintenance_hour: 4
+mcp:
+  servers:
+    brave-search:
+      enabled: true
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-brave-search"]
+      exposures: ["chat", "proactive"]
+      timeout: 30
+      env:
+        BRAVE_API_KEY: test-brave-key
+    disabled-demo:
+      enabled: false
+      command: npx
+"""
+        )
+        from pupu import app_config
+
+        app_config.apply_app_config_env(override=True)
+
+        self.assertEqual(os.environ["PUPU_CHAT_PROVIDER"], "deepseek")
+        self.assertEqual(os.environ["PUPU_JUDGE_PROVIDER"], "deepseek")
+        self.assertEqual(os.environ["PUPU_DEEPSEEK_API_KEY"], "test-key")
+        self.assertEqual(os.environ["PUPU_DEEPSEEK_BASE_URL"], "https://deepseek.test/anthropic")
+        self.assertEqual(os.environ["PUPU_CONSOLE_PORT"], "8999")
+        self.assertEqual(os.environ["PUPU_SEMANTIC_INDEX_ENABLED"], "false")
+        self.assertEqual(os.environ["PUPU_SEMANTIC_INDEX_EMBED_API_KEY"], "embed-key")
+        self.assertEqual(os.environ["PUPU_SEMANTIC_INDEX_EMBED_BASE_URL"], "https://dashscope.test/compatible-mode/v1")
+        self.assertEqual(os.environ["PUPU_TTS_ENABLED"], "true")
+        self.assertEqual(os.environ["PUPU_TOOL_MAX_ROUNDS"], "6")
+        self.assertEqual(os.environ["PUPU_TOOL_MAX_CALLS"], "12")
+        self.assertEqual(os.environ["PUPU_TOOL_MAX_REPEATED_CALL"], "3")
+        self.assertEqual(os.environ["PUPU_TOOL_MAX_RESULT_CHARS"], "16000")
+        self.assertEqual(os.environ["PUPU_TOOL_LOOP_TIMEOUT"], "90")
+        self.assertEqual(os.environ["PUPU_MEMORY_MAINTENANCE_ENABLED"], "true")
+        self.assertEqual(os.environ["PUPU_MEMORY_MAINTENANCE_HOUR"], "4")
+        self.assertIn("brave-search", os.environ["PUPU_MCP_SERVERS_JSON"])
+        self.assertIn("test-brave-key", os.environ["PUPU_MCP_SERVERS_JSON"])
+        self.assertNotIn("disabled-demo", os.environ["PUPU_MCP_SERVERS_JSON"])
+        self.assertIn('"exposures": ["chat", "proactive"]', os.environ["PUPU_MCP_SERVERS_JSON"])
+        self.assertIn('"timeout": "30"', os.environ["PUPU_MCP_SERVERS_JSON"])
+
+    def test_ensure_app_config_file_creates_from_template_without_overwriting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "pupu.yaml.example").write_text(
+                "llm:\n  provider: deepseek\n",
+                encoding="utf-8",
+            )
+            os.environ["PUPU_REPO_ROOT"] = str(root)
+            os.environ.pop("PUPU_YAML_PATH", None)
+
+            from pupu import app_config
+
+            path, created = app_config.ensure_app_config_file()
+            self.assertTrue(created)
+            self.assertEqual(path, root / "pupu.yaml")
+            self.assertEqual(
+                path.read_text(encoding="utf-8"),
+                "llm:\n  provider: deepseek\n",
+            )
+
+            path.write_text("custom: true\n", encoding="utf-8")
+            second_path, second_created = app_config.ensure_app_config_file()
+            self.assertFalse(second_created)
+            self.assertEqual(second_path, path)
+            self.assertEqual(path.read_text(encoding="utf-8"), "custom: true\n")
+
+    def test_default_instance_settings_use_yaml(self) -> None:
+        self._write_yaml(
+            """
+user:
+  owner_ids: [12345, "67890"]
+instance:
+  display_name: Lulu
+  qq_mode: onebot
+onebot:
+  host: 127.0.0.1
+  port: 8123
+  command_start: ["!", "/"]
+  command_sep: ["."]
+"""
+        )
+        from pupu import app_config
+
+        defaults = app_config.default_instance_settings()
+        self.assertEqual(defaults["display_name"], "Lulu")
+        self.assertEqual(defaults["qq_mode"], "onebot")
+        self.assertEqual(defaults["owner_ids"], ["12345", "67890"])
+        self.assertEqual(defaults["port"], 8123)
+
+    def test_onebot_defaults_to_loopback_but_allows_explicit_host(self) -> None:
+        from pupu import app_config
+
+        self.assertEqual(app_config.default_onebot_settings({})["host"], "127.0.0.1")
+        self.assertEqual(
+            app_config.default_onebot_settings({"onebot": {"host": "0.0.0.0"}})["host"],
+            "0.0.0.0",
+        )
+
+    def test_config_owner_defaults_fall_back_to_yaml(self) -> None:
+        self._write_yaml(
+            """
+user:
+  owner_ids: ["2468"]
+"""
+        )
+        import pupu.config as cfg
+
+        importlib.reload(cfg)
+        self.assertEqual(cfg.load_owner_ids(), ["2468"])
+
+
+if __name__ == "__main__":
+    unittest.main()

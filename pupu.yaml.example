@@ -1,0 +1,142 @@
+# PuPuBot global configuration.
+# Copy this file to pupu.yaml, then fill only the values you need.
+
+llm:
+  # Supported: anthropic, deepseek, xiaoshuoai
+  provider: deepseek
+  chat_provider: deepseek
+  judge_provider: deepseek
+  maintenance_provider: deepseek
+  proactive_provider: deepseek
+
+  anthropic:
+    api_key: ""
+    base_url: ""
+    model: claude-opus-4-6
+    judge_model: claude-haiku-4-5-20251001
+
+  deepseek:
+    api_key: ""
+    base_url: https://api.deepseek.com/anthropic
+    model: deepseek-v4-flash-vision-exp
+    effort: high
+    timeout: 90
+    temperature: 0.7
+
+  xiaoshuoai:
+    api_key: ""
+    base_url: https://www.gpt4novel.com/api/xiaoshuoai/ext/v1/chat/completions
+    model: ""
+    timeout: 60
+    temperature: 0.7
+
+# Extra community MCP servers mounted into PuPu's tool registry.
+# External server names are namespaced as mcp__<server>__<tool>.
+tool_servers:
+  # Builtin MCP-style tool servers. These can also be toggled in PuPu Console
+  # under MCP settings.
+  scheduler:
+    enabled: true
+  filesystem:
+    enabled: true
+  system:
+    enabled: true
+
+mcp:
+  servers:
+    # Tavily MCP server: web search + extract + crawl + map + research.
+    # Source: https://github.com/tavily-ai/tavily-mcp
+    # Windows users can keep command=cmd; on macOS/Linux use command=npx and
+    # args: ["-y", "tavily-mcp@latest"].
+    tavily:
+      enabled: false
+      command: cmd
+      args: ["/c", "npx", "-y", "tavily-mcp@latest"]
+      exposures: ["chat", "proactive"]
+      timeout: 30
+      env:
+        TAVILY_API_KEY: ""
+        # Optional Tavily defaults, for example:
+        # DEFAULT_PARAMETERS: '{"search_depth":"basic","max_results":5}'
+
+    # Example: enable after installing/configuring the community server you want.
+    # brave-search:
+    #   enabled: true
+    #   command: npx
+    #   args: ["-y", "@modelcontextprotocol/server-brave-search"]
+    #   env:
+    #     BRAVE_API_KEY: ""
+    #
+    # filesystem-extra:
+    #   enabled: false
+    #   command: uvx
+    #   args: ["some-community-mcp-server"]
+    #   cwd: ""
+
+user:
+  # Your QQ number(s). Leave empty for CLI-only testing.
+  owner_ids:
+    - ""
+  # owner_only | allowlist | all
+  private_reply_mode: owner_only
+  # Extra QQ numbers allowed to chat when private_reply_mode is allowlist.
+  private_allowed_ids: []
+
+instance:
+  display_name: 仆仆
+  # cli | onebot
+  qq_mode: cli
+  debounce_seconds_open_group: 35
+
+onebot:
+  # Keep the reverse WebSocket local unless remote OneBot clients are required.
+  host: 127.0.0.1
+  port: 8081
+  command_start: ["/"]
+  command_sep: ["."]
+  access_token: ""
+
+console:
+  host: 127.0.0.1
+  port: 8770
+
+arbiter:
+  # Open-group arbitration is embedded in the console actor runtime.
+  # Set false only when you do not want arbiter audit records under instances/_shared.
+  audit: true
+
+semantic_index:
+  # Built-in source-backed semantic recall cache.
+  # SQLite remains the source of truth; semantic_cards can be rebuilt from it.
+  enabled: auto
+  retrieve_top_k: 5
+  embed_api_key: ""
+  embed_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  embed_model: text-embedding-v4
+  timeout: 45
+
+tts:
+  enabled: false
+  reply_default: false
+  provider: ""
+  base_url: ""
+  voice: ""
+  max_chars: 120
+  timeout: 60
+  audio_format: wav
+  normalize_audio: false
+  ffmpeg: ""
+
+runtime:
+  proactive_enabled: true
+  debug_scheduled_tasks: false
+  # Shared safety budget for every model tool loop.
+  tool_max_rounds: 8
+  tool_max_calls: 16
+  tool_max_repeated_call: 2
+  tool_max_result_chars: 20000
+  tool_loop_timeout: 120
+  # Daily source-memory consolidation. Runs once after the configured hour.
+  memory_maintenance_enabled: true
+  memory_maintenance_hour: 3
+  backup_dir: ""
